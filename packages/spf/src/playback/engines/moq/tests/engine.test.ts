@@ -219,7 +219,9 @@ describe('createMoqEngine', () => {
     signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
     signals.state.loadActivated.set(true);
 
-    await vi.waitFor(() => expect(relay.subscriptions).toHaveLength(1), { timeout: 5000 });
+    // The catalog subscription comes first (the video-track subscription
+    // may follow immediately once the catalog resolves).
+    await vi.waitFor(() => expect(relay.subscriptions.length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
     expect(relay.subscriptions[0]!.message).toMatchObject({
       trackNamespace: ['live'],
       trackName: 'catalog',
