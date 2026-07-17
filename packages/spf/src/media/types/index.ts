@@ -64,6 +64,16 @@ export interface TimeSpan {
  */
 export type TrackType = 'video' | 'audio' | 'text';
 
+/**
+ * How a track's media arrives.
+ *
+ * - `'pull'` — the player computes what it needs and fetches it (segmented
+ *   HTTP delivery: HLS/DASH). The default when absent.
+ * - `'push'` — the player subscribes and media objects arrive as the
+ *   publisher produces them (MoQ). No segment list ever exists.
+ */
+export type TrackDeliveryMode = 'pull' | 'push';
+
 // =============================================================================
 // Frame Rate
 // =============================================================================
@@ -129,6 +139,8 @@ export type Track = Ham &
     mimeType: string;
     language?: string | undefined;
     bandwidth: number;
+    /** Absent means `'pull'` (segmented HTTP delivery). See `TrackDeliveryMode`. */
+    deliveryMode?: TrackDeliveryMode;
     initialization?: AddressableObject;
     segments: Segment[];
     /**
@@ -287,6 +299,48 @@ export type PartiallyResolvedTrack =
   | PartiallyResolvedTextTrack;
 
 // =============================================================================
+// Live (push-delivered) Tracks
+// =============================================================================
+
+/**
+ * A push-delivered live track: full selection metadata (codecs, bandwidth,
+ * dimensions, language) but no segment list — media arrives via subscription
+ * (e.g. MoQ), so a segment list never exists and the track never becomes a
+ * `ResolvedTrack`.
+ *
+ * Structurally a `PartiallyResolved<T>` narrowed to `deliveryMode: 'push'`,
+ * which makes it storable in switching sets and consumable by track selection
+ * as-is — selection reads only metadata. The difference is semantic, carried
+ * by the discriminant: a partially resolved pull track is *waiting* to be
+ * resolved (media playlist not fetched yet), while a live track is terminal —
+ * there is nothing further to resolve from a manifest. Use `isLiveTrack` to
+ * tell them apart.
+ */
+export type LiveOf<T extends Track = Track> = PartiallyResolved<T> & {
+  deliveryMode: 'push';
+};
+
+/**
+ * Push-delivered live video track.
+ */
+export type LiveVideoTrack = LiveOf<VideoTrack>;
+
+/**
+ * Push-delivered live audio track.
+ */
+export type LiveAudioTrack = LiveOf<AudioTrack>;
+
+/**
+ * Push-delivered live text track.
+ */
+export type LiveTextTrack = LiveOf<TextTrack>;
+
+/**
+ * Union of all live track types.
+ */
+export type LiveTrack = LiveVideoTrack | LiveAudioTrack | LiveTextTrack;
+
+// =============================================================================
 // Switching and Selection Sets
 // =============================================================================
 
@@ -434,6 +488,18 @@ export function isResolvedTrack(track: PartiallyResolvedTextTrack | TextTrack): 
 export function isResolvedTrack(track: PartiallyResolvedTrack | ResolvedTrack): track is ResolvedTrack;
 export function isResolvedTrack(track: PartiallyResolvedTrack | ResolvedTrack): track is ResolvedTrack {
   return 'segments' in track;
+}
+
+/**
+ * Check if a track is push-delivered (live, no segment list — see `LiveOf`).
+ * Works for all track types with overloaded signatures for type narrowing.
+ */
+export function isLiveTrack(track: PartiallyResolvedVideoTrack | VideoTrack): track is LiveVideoTrack;
+export function isLiveTrack(track: PartiallyResolvedAudioTrack | AudioTrack): track is LiveAudioTrack;
+export function isLiveTrack(track: PartiallyResolvedTextTrack | TextTrack): track is LiveTextTrack;
+export function isLiveTrack(track: PartiallyResolvedTrack | ResolvedTrack): track is LiveTrack;
+export function isLiveTrack(track: PartiallyResolvedTrack | ResolvedTrack): track is LiveTrack {
+  return track.deliveryMode === 'push';
 }
 
 /**
