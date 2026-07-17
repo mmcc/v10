@@ -33,6 +33,11 @@
       "development": "./dist/dev/hls.js",
       "default": "./dist/default/hls.js"
     },
+    "./moq": {
+      "types": "./dist/dev/moq.d.ts",
+      "development": "./dist/dev/moq.js",
+      "default": "./dist/default/moq.js"
+    },
     "./background-video": {
       "types": "./dist/dev/background-video.d.ts",
       "development": "./dist/dev/background-video.js",
