@@ -107,4 +107,37 @@ describe('createVideoRendererActor', () => {
     expect(renderer.snapshot.get().context.status).toBe('idle');
     renderer.destroy();
   });
+
+  it('self-clock applies rate changes forward-only', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let playbackRate = 1;
+    // No master clock: the renderer self-anchors to its first decoded frame.
+    const renderer = createVideoRendererActor({ canvas, getPlaybackRate: () => playbackRate });
+    const lastPresented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(lastPresented()).toBe(0), { timeout: 5000 });
+
+      // Run the self-clock ~500ms into the stream.
+      now += 500;
+      await vi.waitFor(() => expect(lastPresented()).toBeGreaterThanOrEqual(14 * FRAME_DURATION_US), {
+        timeout: 5000,
+      });
+      const before = lastPresented()!;
+
+      // Halving the rate must scale time from here on, not rescale the
+      // whole elapsed interval (which would throw the clock ~250ms into
+      // the past and freeze presentation).
+      playbackRate = 0.5;
+      now += 100; // 50ms of media time at the new rate → at least one more frame is due
+      await vi.waitFor(() => expect(lastPresented()).toBeGreaterThan(before), { timeout: 5000 });
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
 });

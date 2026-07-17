@@ -3,9 +3,13 @@
  *
  * Pulls LOC frames from a frame source (the track-subscriber jitter
  * buffer), decodes ahead of the playout clock, and presents decoded
- * `VideoFrame`s against the **master clock** by timestamp — a timer-driven
- * loop with hold-early / drop-late policy. Not `requestVideoFrameCallback`:
- * rVFC only exists on `HTMLVideoElement`, and there is none here.
+ * `VideoFrame`s against the **master clock** by timestamp with a
+ * hold-early / drop-late policy. Presentation runs on
+ * `requestAnimationFrame` (vsync-aligned) when available, falling back to
+ * the decode interval; decode always runs on the interval so the jitter
+ * buffer keeps draining while rAF is throttled (hidden tab). Not
+ * `requestVideoFrameCallback`: rVFC only exists on `HTMLVideoElement`,
+ * and there is none here.
  *
  * The clock is injected (`getClockTimeUs`): the audio renderer owns the
  * master clock when audio plays; without one the renderer self-anchors to
@@ -111,8 +115,9 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
   /** Decoded frames awaiting presentation, in timestamp order. */
   const decoded: VideoFrame[] = [];
 
-  // Self-clock anchor (used only without a master clock).
-  let selfAnchor: { timestampUs: number; wallMs: number } | null = null;
+  // Self-clock anchor (used only without a master clock). Rate is folded
+  // into the anchor whenever it changes so nudges apply forward-only.
+  let selfAnchor: { timestampUs: number; wallMs: number; rate: number } | null = null;
 
   const closeDecoder = (): void => {
     if (decoder && decoder.state !== 'closed') decoder.close();
@@ -174,13 +179,22 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
   const clockTimeUs = (): number | undefined => {
     const master = options.getClockTimeUs?.();
     if (master !== undefined) return master;
+    const rate = options.getPlaybackRate?.() ?? 1;
     if (!selfAnchor) {
       const first = decoded[0];
       if (!first) return undefined;
-      selfAnchor = { timestampUs: first.timestamp, wallMs: performance.now() };
+      selfAnchor = { timestampUs: first.timestamp, wallMs: performance.now(), rate };
+    } else if (rate !== selfAnchor.rate) {
+      // Re-anchor at the current clock value: the new rate scales time
+      // from now on, not the whole interval since the original anchor.
+      const now = performance.now();
+      selfAnchor = {
+        timestampUs: selfAnchor.timestampUs + (now - selfAnchor.wallMs) * 1000 * selfAnchor.rate,
+        wallMs: now,
+        rate,
+      };
     }
-    const rate = options.getPlaybackRate?.() ?? 1;
-    return selfAnchor.timestampUs + (performance.now() - selfAnchor.wallMs) * 1000 * rate;
+    return selfAnchor.timestampUs + (performance.now() - selfAnchor.wallMs) * 1000 * selfAnchor.rate;
   };
 
   const present = (): void => {
@@ -211,16 +225,32 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     inner.send({ type: 'presented', timestampUs, dropped: dropped.length });
   };
 
+  const supportsRaf = typeof requestAnimationFrame === 'function';
+  let rafHandle: number | undefined;
+
   const tick = (): void => {
     if (destroyed) return;
     try {
       pullAndDecode();
-      present();
+      if (!supportsRaf) present();
     } catch (error) {
       inner.send({ type: 'status', status: 'error', error });
     }
   };
   const timer = setInterval(tick, options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS);
+
+  if (supportsRaf) {
+    const presentFrame = (): void => {
+      if (destroyed) return;
+      try {
+        present();
+      } catch (error) {
+        inner.send({ type: 'status', status: 'error', error });
+      }
+      rafHandle = requestAnimationFrame(presentFrame);
+    };
+    rafHandle = requestAnimationFrame(presentFrame);
+  }
 
   return {
     get snapshot() {
@@ -240,6 +270,7 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
       if (destroyed) return;
       destroyed = true;
       clearInterval(timer);
+      if (rafHandle !== undefined) cancelAnimationFrame(rafHandle);
       closeDecoder();
       inner.destroy();
     },

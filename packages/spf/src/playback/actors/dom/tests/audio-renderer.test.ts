@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { JitterFrame } from '../../track-subscriber';
-import { type AudioFrameSource, createAudioRendererActor } from '../audio-renderer';
+import { type AudioContextLike, type AudioFrameSource, createAudioRendererActor } from '../audio-renderer';
 
 const SAMPLE_RATE = 48_000;
 const FRAME_SAMPLES = 960; // 20ms opus frames
@@ -54,6 +54,28 @@ function arraySource(frames: JitterFrame[]): AudioFrameSource {
   };
 }
 
+/**
+ * `AudioContextLike` with a hand-cranked clock: scheduling is a no-op, so
+ * tests can place `currentTime` anywhere and read the media clock back.
+ */
+function createFakeAudioContext(): AudioContextLike & { currentTime: number } {
+  return {
+    currentTime: 0,
+    destination: {} as AudioNode,
+    createBuffer: (_channels, length, sampleRate) =>
+      ({ copyToChannel: () => {}, duration: length / sampleRate }) as unknown as AudioBuffer,
+    createBufferSource: () =>
+      ({
+        buffer: null,
+        playbackRate: { value: 1 },
+        connect: () => {},
+        start: () => {},
+        stop: () => {},
+        onended: null,
+      }) as unknown as AudioBufferSourceNode,
+  };
+}
+
 describe('createAudioRendererActor', () => {
   it('decodes and schedules audio, exposing the master clock', async () => {
     const frames = await encodeTestFrames(5);
@@ -93,6 +115,106 @@ describe('createAudioRendererActor', () => {
     renderer.setTrack(null, null);
     expect(renderer.snapshot.get().context.status).toBe('idle');
     expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    renderer.destroy();
+  });
+
+  it('applies rate changes forward-only: already-scheduled audio keeps its clock mapping', async () => {
+    const frames = await encodeTestFrames(5);
+    const audioContext = createFakeAudioContext();
+    let playbackRate = 1;
+    const renderer = createAudioRendererActor({
+      audioContext,
+      scheduleMargin: 0.05,
+      getPlaybackRate: () => playbackRate,
+    });
+
+    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    // The decoder may split outputs, so wait on scheduled media time (the
+    // last input chunk spans 80–100ms) rather than an output count.
+    await vi.waitFor(
+      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(4.5 * FRAME_DURATION_US),
+      { timeout: 5000 }
+    );
+
+    // 30ms into playback (the timeline starts at the 50ms schedule margin).
+    audioContext.currentTime = 0.08;
+    const before = renderer.getClockTimeUs()!;
+    expect(before).toBeGreaterThan(0);
+    expect(before).toBeLessThan(5 * FRAME_DURATION_US);
+
+    // A rate nudge must not rescale time already scheduled at the old
+    // rate — the regression here was `clock = anchor + elapsed * newRate`,
+    // which jumped by 5% of the total elapsed interval on every nudge.
+    playbackRate = 1.5;
+    expect(renderer.getClockTimeUs()).toBe(before);
+
+    // The clock advances with the context clock through the scheduled
+    // segments regardless of the current rate setting.
+    audioContext.currentTime = 0.09;
+    const later = renderer.getClockTimeUs()!;
+    expect(later).toBeGreaterThan(before);
+    expect(later).toBeLessThanOrEqual(before + 10_001);
+
+    renderer.destroy();
+  });
+
+  it('holds on underrun and resumes from late-scheduled audio, not the ideal timeline', async () => {
+    const frames = await encodeTestFrames(3);
+    const audioContext = createFakeAudioContext();
+    const queue = [...frames.slice(0, 2)];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(
+      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(1.5 * FRAME_DURATION_US),
+      { timeout: 5000 }
+    );
+
+    // Context clock runs past everything scheduled: the media clock holds
+    // at the end of scheduled audio instead of drifting ahead.
+    audioContext.currentTime = 0.5;
+    const held = renderer.getClockTimeUs()!;
+    audioContext.currentTime = 0.6;
+    expect(renderer.getClockTimeUs()).toBe(held);
+    expect(held).toBeGreaterThanOrEqual(FRAME_DURATION_US);
+    expect(held).toBeLessThanOrEqual(2 * FRAME_DURATION_US);
+
+    // The late frame schedules at the context clock; the media clock
+    // resumes seamlessly from where it held — not from where the original
+    // anchor says it "should" be (~550ms in).
+    queue.push(frames[2]!);
+    await vi.waitFor(
+      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(2.5 * FRAME_DURATION_US),
+      { timeout: 5000 }
+    );
+    audioContext.currentTime = 0.61;
+    const resumed = renderer.getClockTimeUs()!;
+    expect(resumed).toBeGreaterThanOrEqual(held);
+    expect(resumed).toBeLessThan(held + FRAME_DURATION_US);
+
+    renderer.destroy();
+  });
+
+  it('schedules only up to the horizon instead of draining a backlog in one tick', async () => {
+    const frames = await encodeTestFrames(50); // 1s of audio, all buffered up-front
+    const audioContext = createFakeAudioContext(); // context clock frozen at 0
+    const queue = [...frames];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(
+      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(7 * FRAME_DURATION_US),
+      { timeout: 5000 }
+    );
+    // Let a few more ticks run: with the clock frozen, scheduling must
+    // stop at the horizon (margin * 4 plus in-flight decodes), leaving
+    // the rest of the backlog in the source's jitter buffer.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(renderer.snapshot.get().context.scheduledUntilUs).toBeLessThan(20 * FRAME_DURATION_US);
+    expect(queue.length).toBeGreaterThan(30);
 
     renderer.destroy();
   });
