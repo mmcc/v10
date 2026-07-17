@@ -5,10 +5,13 @@
  * derivation) follow it.
  *
  * Decoded `AudioData` is copied into `AudioBuffer`s and scheduled
- * gaplessly with `AudioBufferSourceNode`s against a media-time ↔
- * context-time anchor. Rate nudges from the latency controller apply as
- * `playbackRate` on the scheduled sources (a ±5% nudge is a barely
- * audible pitch shift).
+ * gaplessly with `AudioBufferSourceNode`s. Each scheduled buffer records a
+ * clock segment (context-time span ↔ media time × rate), and the clock
+ * reads the segment containing `currentTime` — so it reports what was
+ * *actually* scheduled: late arrivals and rate nudges shift the timeline
+ * forward from where they happen instead of rescaling elapsed time.
+ * Rate nudges from the latency controller apply as `playbackRate` on the
+ * scheduled sources (a ±5% nudge is a barely audible pitch shift).
  *
  * TODO(audio-worklet): replace source-node scheduling with an
  * AudioWorklet ring buffer for tighter jitter control and clean rate
@@ -81,6 +84,14 @@ export interface AudioRendererActor extends Pick<TransitionActor<AudioRendererCo
 
 const DEFAULT_SCHEDULE_MARGIN_S = 0.05;
 const DEFAULT_TICK_INTERVAL_MS = 10;
+/**
+ * Max chunks in flight inside the decoder. The schedule horizon only
+ * moves when decoder *outputs* arrive (async), so without this bound a
+ * single tick would dequeue an entire backlog — scheduling seconds of
+ * audio at once and sawtoothing the jitter-buffer depth the latency
+ * controller measures.
+ */
+const MAX_PENDING_DECODES = 4;
 
 export function createAudioRendererActor(options: CreateAudioRendererOptions): AudioRendererActor {
   const { audioContext } = options;
@@ -109,15 +120,35 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   let destroyed = false;
 
   /**
-   * Media-time ↔ context-time anchor, established by the first scheduled
-   * frame. `contextTime = anchor.contextTime + (mediaUs - anchor.mediaUs) / 1e6 / rate`.
+   * One scheduled buffer's context-time span mapped to media time. The
+   * media time at context time `t` inside the span is
+   * `mediaUs + (t - startCtx) * 1e6 * rate`.
    */
-  let anchor: { mediaUs: number; contextTime: number } | null = null;
-  /** Context time up to which audio is already scheduled (gapless append). */
-  let scheduledUntilContextTime = 0;
+  interface ClockSegment {
+    startCtx: number;
+    endCtx: number;
+    mediaUs: number;
+    rate: number;
+  }
+
+  /**
+   * The scheduled timeline, in start order. Bounded by the schedule
+   * horizon (`scheduleMargin * 4` of audio ≈ a dozen 20ms buffers) plus
+   * whatever `pruneSegments` hasn't collected yet.
+   */
+  const segments: ClockSegment[] = [];
   const activeSources = new Set<AudioBufferSourceNode>();
 
   const rate = (): number => options.getPlaybackRate?.() ?? 1;
+
+  const segmentEndMediaUs = (segment: ClockSegment): number =>
+    segment.mediaUs + (segment.endCtx - segment.startCtx) * 1_000_000 * segment.rate;
+
+  /** Drop segments that finished playing; keep the current/newest one so the clock can hold on underrun. */
+  const pruneSegments = (): void => {
+    const now = audioContext.currentTime;
+    while (segments.length > 1 && now >= segments[1]!.startCtx) segments.shift();
+  };
 
   const stopAll = (): void => {
     for (const node of activeSources) {
@@ -128,8 +159,7 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       }
     }
     activeSources.clear();
-    anchor = null;
-    scheduledUntilContextTime = 0;
+    segments.length = 0;
   };
 
   const closeDecoder = (): void => {
@@ -148,25 +178,28 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
         buffer.copyToChannel(channelData, channel);
       }
 
-      if (!anchor) {
-        anchor = { mediaUs: data.timestamp, contextTime: audioContext.currentTime + scheduleMargin };
-        scheduledUntilContextTime = anchor.contextTime;
-      }
-      const idealStart = anchor.contextTime + (data.timestamp - anchor.mediaUs) / 1_000_000 / rate();
-      // Gapless: never start behind already-scheduled audio; small early
-      // arrivals butt-join, late ones re-anchor forward.
-      const startAt = Math.max(idealStart, scheduledUntilContextTime, audioContext.currentTime);
+      const currentRate = rate();
+      const last = segments[segments.length - 1];
+      // Continue the scheduled timeline: media-contiguous data butt-joins
+      // the previous buffer; a media gap inserts a matching stretch of
+      // context-time silence. Late arrivals (and the first buffer) start
+      // no earlier than the context clock — the timeline shifts forward
+      // from there rather than trying to make up lost time.
+      const idealStart = last
+        ? last.endCtx + Math.max(0, data.timestamp - segmentEndMediaUs(last)) / 1_000_000 / currentRate
+        : audioContext.currentTime + scheduleMargin;
+      const startAt = Math.max(idealStart, audioContext.currentTime);
 
       const node = audioContext.createBufferSource();
       node.buffer = buffer;
-      node.playbackRate.value = rate();
+      node.playbackRate.value = currentRate;
       node.connect(audioContext.destination);
       node.onended = () => activeSources.delete(node);
       node.start(startAt);
       activeSources.add(node);
 
-      const durationS = data.numberOfFrames / data.sampleRate / rate();
-      scheduledUntilContextTime = startAt + durationS;
+      const durationS = data.numberOfFrames / data.sampleRate / currentRate;
+      segments.push({ startCtx: startAt, endCtx: startAt + durationS, mediaUs: data.timestamp, rate: currentRate });
       inner.send({ type: 'scheduled', untilUs: data.timestamp + data.duration });
     } finally {
       data.close();
@@ -186,9 +219,13 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   const tick = (): void => {
     if (destroyed || !source) return;
     try {
+      pruneSegments();
       // Keep the schedule topped up to the margin horizon; every audio
       // frame is independently decodable, so no keyframe gating.
-      while (scheduledUntilContextTime - audioContext.currentTime < scheduleMargin * 4) {
+      while (
+        (decoder?.decodeQueueSize ?? 0) < MAX_PENDING_DECODES &&
+        (segments[segments.length - 1]?.endCtx ?? 0) - audioContext.currentTime < scheduleMargin * 4
+      ) {
         const next = source.peek();
         if (!next) return;
         const active = ensureDecoder();
@@ -221,10 +258,17 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     },
 
     getClockTimeUs(): number | undefined {
-      if (!anchor) return undefined;
-      const elapsed = audioContext.currentTime - anchor.contextTime;
-      // Before the first sample actually plays, the clock holds at the anchor.
-      return anchor.mediaUs + Math.max(0, elapsed) * 1_000_000 * rate();
+      pruneSegments();
+      const segment = segments[0];
+      if (!segment) return undefined;
+      // Clamp into the segment: before the first sample plays the clock
+      // holds at its start; past the last scheduled sample (underrun) it
+      // holds at the end and resumes seamlessly when audio is scheduled.
+      const elapsed = Math.min(
+        Math.max(0, audioContext.currentTime - segment.startCtx),
+        segment.endCtx - segment.startCtx
+      );
+      return segment.mediaUs + elapsed * 1_000_000 * segment.rate;
     },
 
     destroy(): void {
