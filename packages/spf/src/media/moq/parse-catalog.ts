@@ -1,0 +1,507 @@
+/**
+ * MSF catalog parsing (draft-ietf-moq-msf-01 §5) — the MoQ analog of
+ * `parse-multivariant`.
+ *
+ * The catalog is a JSON document delivered as its own MoQ track. Parsing
+ * is two-staged:
+ *
+ * 1. `applyMoqCatalogUpdate` — maintain the current `MoqCatalog` track
+ *    list across independent catalogs and delta updates (§5.1.6/§5.3).
+ * 2. `moqCatalogToPresentation` — project the catalog onto the shared
+ *    CMAF-HAM model (`Presentation` → `SelectionSet` → `SwitchingSet` →
+ *    live tracks), which the reused track-selection machinery consumes
+ *    unchanged.
+ *
+ * Track ids are derived from full track names (namespace + name), NOT
+ * `generateId()` like the HLS parser: live catalog updates re-parse into
+ * a fresh `Presentation`, and stable ids are what let track-switching's
+ * candidate-set equality treat an unchanged track list as unchanged.
+ */
+import { isPlainObject, isString } from '@videojs/utils/predicate';
+import type {
+  AudioSelectionSet,
+  LiveAudioTrack,
+  LiveTextTrack,
+  LiveVideoTrack,
+  MaybeResolvedPresentation,
+  Presentation,
+  SelectionSet,
+  TextSelectionSet,
+  VideoSelectionSet,
+} from '../types';
+import { encodeNamespaceName, parseMoqSource } from './parse-source';
+
+// ============================================================================
+// Catalog model
+// ============================================================================
+
+/** Parsed MSF track-object fields the engine consumes (§5.2). */
+export interface MoqCatalogTrack {
+  namespace: string[];
+  name: string;
+  packaging: string;
+  isLive: boolean;
+  role?: string;
+  label?: string;
+  language?: string;
+  codec?: string;
+  mimeType?: string;
+  bitrate?: number;
+  avgBitrate?: number;
+  width?: number;
+  height?: number;
+  framerate?: number;
+  timescale?: number;
+  samplerate?: number;
+  channelConfig?: string;
+  renderGroup?: number;
+  altGroup?: number;
+  targetLatency?: number;
+  buffers?: { target?: number; min?: number; max?: number };
+  maxGopDuration?: number;
+  maxGroupDuration?: number;
+  temporalId?: number;
+  spatialId?: number;
+  dependencies?: string[];
+  /** Decoder init data (`description`), resolved from initRef/initDataList. */
+  initData?: Uint8Array;
+  authInfo?: Record<string, unknown>;
+}
+
+export interface MoqCatalog {
+  version: string;
+  generatedAt?: number;
+  isComplete?: boolean;
+  tracks: MoqCatalogTrack[];
+}
+
+/** Fields of the moq-specific side-channel carried on each live track. */
+export interface MoqTrackFields {
+  namespace: string[];
+  name: string;
+  packaging: string;
+  isLive: boolean;
+  timescale?: number;
+  framerate?: number;
+  renderGroup?: number;
+  altGroup?: number;
+  targetLatency?: number;
+  buffers?: { target?: number; min?: number; max?: number };
+  maxGopDuration?: number;
+  maxGroupDuration?: number;
+  dependencies?: string[];
+  initData?: Uint8Array;
+  authInfo?: Record<string, unknown>;
+}
+
+export type MoqVideoTrack = LiveVideoTrack & { moq: MoqTrackFields };
+export type MoqAudioTrack = LiveAudioTrack & { moq: MoqTrackFields };
+export type MoqTextTrack = LiveTextTrack & { moq: MoqTrackFields };
+export type MoqTrack = MoqVideoTrack | MoqAudioTrack | MoqTextTrack;
+
+/** Serialized full track name — the stable track id within a presentation. */
+export function moqTrackId(namespace: readonly string[], name: string): string {
+  return [...namespace, name].join('/');
+}
+
+// ============================================================================
+// Variable substitution (§5.4)
+// ============================================================================
+
+const VARIABLE_PATTERN = /%([a-zA-Z0-9_-]+)%/g;
+const SAFE_VARIABLE_VALUE = /^[a-zA-Z0-9_\-@]*$/;
+
+/**
+ * Substitute `%name%` references in every string value of a parsed catalog
+ * with fragment-parameter values. Values outside the safe charset are
+ * rejected (injection guard, §5.4.1). Unknown variables are left in place.
+ */
+function substituteVariables(value: unknown, variables: Record<string, string>): unknown {
+  if (isString(value)) {
+    return value.replace(VARIABLE_PATTERN, (match, name: string) => {
+      const substitution = variables[name];
+      if (substitution === undefined) return match;
+      if (!SAFE_VARIABLE_VALUE.test(substitution)) {
+        throw new Error(`unsafe MSF variable value for ${name}`);
+      }
+      return substitution;
+    });
+  }
+  if (Array.isArray(value)) return value.map((entry) => substituteVariables(entry, variables));
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, substituteVariables(entry, variables)])
+    );
+  }
+  return value;
+}
+
+// ============================================================================
+// Raw JSON → MoqCatalogTrack
+// ============================================================================
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Split a catalog namespace string into its tuple fields. */
+function parseNamespaceString(namespace: string): string[] {
+  // The MSF catalog examples carry namespaces as path-like strings
+  // ("conference.example.com/conference123/alice"); the tuple fields are
+  // the path segments. (Interop check pending — the encoding of tuple
+  // boundaries inside catalog JSON is not spelled out by msf-01.)
+  return namespace.split('/').filter((field) => field.length > 0);
+}
+
+interface RawCatalog {
+  version?: unknown;
+  generatedAt?: unknown;
+  isComplete?: unknown;
+  tracks?: unknown;
+  publishTracks?: unknown;
+  deltaUpdate?: unknown;
+  initDataList?: unknown;
+}
+
+function parseInitDataList(raw: unknown): Map<string, Uint8Array> {
+  const initData = new Map<string, Uint8Array>();
+  if (!Array.isArray(raw)) return initData;
+  for (const entry of raw) {
+    if (!isPlainObject(entry)) continue;
+    const { id, type, data } = entry;
+    if (!isString(id) || !isString(data)) continue;
+    if (type !== undefined && type !== 'inline') continue;
+    initData.set(id, base64ToBytes(data));
+  }
+  return initData;
+}
+
+function parseCatalogTrack(
+  raw: Record<string, unknown>,
+  fallbackNamespace: string[],
+  initDataList: Map<string, Uint8Array>
+): MoqCatalogTrack | null {
+  const name = raw.name;
+  if (!isString(name)) return null;
+
+  const namespace = isString(raw.namespace) ? parseNamespaceString(raw.namespace) : fallbackNamespace;
+  const number = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
+  const initRef = isString(raw.initRef) ? raw.initRef : undefined;
+
+  const track: MoqCatalogTrack = {
+    namespace,
+    name,
+    packaging: isString(raw.packaging) ? raw.packaging : '',
+    isLive: raw.isLive === true,
+  };
+  if (isString(raw.role)) track.role = raw.role;
+  if (isString(raw.label)) track.label = raw.label;
+  if (isString(raw.lang)) track.language = raw.lang;
+  if (isString(raw.codec)) track.codec = raw.codec;
+  if (isString(raw.mimeType)) track.mimeType = raw.mimeType;
+  if (isString(raw.channelConfig)) track.channelConfig = raw.channelConfig;
+  track.bitrate = number(raw.bitrate);
+  track.avgBitrate = number(raw.avgBitrate);
+  track.width = number(raw.width);
+  track.height = number(raw.height);
+  track.framerate = number(raw.framerate);
+  track.timescale = number(raw.timescale);
+  track.samplerate = number(raw.samplerate);
+  track.renderGroup = number(raw.renderGroup);
+  track.altGroup = number(raw.altGroup);
+  track.targetLatency = number(raw.targetLatency);
+  track.maxGopDuration = number(raw.maxGopDuration);
+  track.maxGroupDuration = number(raw.maxGroupDuration);
+  track.temporalId = number(raw.temporalId);
+  track.spatialId = number(raw.spatialId);
+  if (isPlainObject(raw.buffers)) {
+    track.buffers = {
+      target: number(raw.buffers.target),
+      min: number(raw.buffers.min),
+      max: number(raw.buffers.max),
+    };
+  }
+  if (Array.isArray(raw.depends)) track.dependencies = raw.depends.filter(isString);
+  if (initRef) track.initData = initDataList.get(initRef);
+  if (isPlainObject(raw.authInfo)) track.authInfo = raw.authInfo;
+  return track;
+}
+
+// ============================================================================
+// Catalog updates (independent + delta)
+// ============================================================================
+
+export interface MoqCatalogUpdateOptions {
+  /** Namespace of the catalog track itself — inherited by tracks that omit one (§5.2.2). */
+  catalogNamespace: string[];
+  /** Fragment parameters for variable substitution (§5.4). */
+  variables?: Record<string, string>;
+}
+
+/**
+ * Apply one catalog object to the current catalog state. An independent
+ * catalog (no `deltaUpdate`) replaces the state; a delta update requires
+ * a current catalog and applies its `add`/`remove`/`clone` operations in
+ * order (§5.1.6). Returns the new catalog.
+ */
+export function applyMoqCatalogUpdate(
+  current: MoqCatalog | undefined,
+  text: string,
+  options: MoqCatalogUpdateOptions
+): MoqCatalog {
+  const substituted = substituteVariables(JSON.parse(text), options.variables ?? {});
+  if (!isPlainObject(substituted)) throw new Error('MSF catalog is not a JSON object');
+  const raw = substituted as RawCatalog;
+
+  if (raw.deltaUpdate !== undefined) {
+    if (!current) throw new Error('MSF delta update received with no prior catalog');
+    if (!Array.isArray(raw.deltaUpdate)) throw new Error('MSF deltaUpdate is not an array');
+    return applyDelta(current, raw.deltaUpdate, options);
+  }
+
+  if (!isString(raw.version)) throw new Error('MSF catalog is missing its version');
+  if (!Array.isArray(raw.tracks)) throw new Error('MSF catalog is missing its tracks array');
+
+  const initDataList = parseInitDataList(raw.initDataList);
+  const tracks = raw.tracks
+    .filter(isPlainObject)
+    .map((entry) => parseCatalogTrack(entry, options.catalogNamespace, initDataList))
+    .filter((track): track is MoqCatalogTrack => track !== null);
+
+  const catalog: MoqCatalog = { version: raw.version, tracks };
+  if (typeof raw.generatedAt === 'number') catalog.generatedAt = raw.generatedAt;
+  if (raw.isComplete === true) catalog.isComplete = true;
+  return catalog;
+}
+
+function applyDelta(current: MoqCatalog, operations: unknown[], options: MoqCatalogUpdateOptions): MoqCatalog {
+  let tracks = [...current.tracks];
+  const keyOf = (namespace: readonly string[], name: string) => moqTrackId(namespace, name);
+
+  for (const operation of operations) {
+    if (!isPlainObject(operation) || !isString(operation.op) || !Array.isArray(operation.tracks)) {
+      throw new Error('malformed MSF delta operation');
+    }
+    const entries = operation.tracks.filter(isPlainObject);
+    switch (operation.op) {
+      case 'add': {
+        for (const entry of entries) {
+          const track = parseCatalogTrack(entry, options.catalogNamespace, new Map());
+          if (track) tracks.push(track);
+        }
+        break;
+      }
+      case 'remove': {
+        const removed = new Set(
+          entries
+            .filter((entry) => isString(entry.name))
+            .map((entry) =>
+              keyOf(
+                isString(entry.namespace) ? parseNamespaceString(entry.namespace) : options.catalogNamespace,
+                entry.name as string
+              )
+            )
+        );
+        tracks = tracks.filter((track) => !removed.has(keyOf(track.namespace, track.name)));
+        break;
+      }
+      case 'clone': {
+        for (const entry of entries) {
+          if (!isString(entry.parentName)) throw new Error('MSF clone operation is missing parentName');
+          const parentNamespace = isString(entry.parentNamespace)
+            ? parseNamespaceString(entry.parentNamespace)
+            : options.catalogNamespace;
+          const parent = tracks.find(
+            (track) => keyOf(track.namespace, track.name) === keyOf(parentNamespace, entry.parentName as string)
+          );
+          if (!parent) throw new Error(`MSF clone operation references unknown parent ${entry.parentName}`);
+          const overrides = parseCatalogTrack(entry, options.catalogNamespace, new Map());
+          if (!overrides || overrides.name === parent.name) {
+            throw new Error('MSF clone operation requires a new track name');
+          }
+          tracks.push({ ...parent, ...pruneUndefined(overrides) });
+        }
+        break;
+      }
+      default:
+        throw new Error(`unknown MSF delta operation ${operation.op}`);
+    }
+  }
+  return { ...current, tracks };
+}
+
+function pruneUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
+}
+
+// ============================================================================
+// Catalog → Presentation
+// ============================================================================
+
+const TEXT_ROLES = new Set(['caption', 'subtitle']);
+const AUDIO_ROLES = new Set(['audio', 'audiodescription']);
+const VIDEO_ROLES = new Set(['video', 'signlanguage']);
+
+type MediaKind = 'video' | 'audio' | 'text';
+
+function mediaKindOf(track: MoqCatalogTrack): MediaKind | null {
+  // Only LOC-packaged tracks are directly renderable media; timeline,
+  // event, log, and metrics tracks are engine plumbing.
+  if (track.packaging !== 'loc') return null;
+  if (track.role !== undefined) {
+    if (VIDEO_ROLES.has(track.role)) return 'video';
+    if (AUDIO_ROLES.has(track.role)) return 'audio';
+    if (TEXT_ROLES.has(track.role)) return 'text';
+    return null;
+  }
+  // Role is optional — fall back to intrinsic fields.
+  if (track.width !== undefined || track.height !== undefined || track.framerate !== undefined) return 'video';
+  if (track.samplerate !== undefined || track.channelConfig !== undefined) return 'audio';
+  return null;
+}
+
+function moqFieldsOf(track: MoqCatalogTrack): MoqTrackFields {
+  const fields: MoqTrackFields = {
+    namespace: track.namespace,
+    name: track.name,
+    packaging: track.packaging,
+    isLive: track.isLive,
+  };
+  if (track.timescale !== undefined) fields.timescale = track.timescale;
+  if (track.framerate !== undefined) fields.framerate = track.framerate;
+  if (track.renderGroup !== undefined) fields.renderGroup = track.renderGroup;
+  if (track.altGroup !== undefined) fields.altGroup = track.altGroup;
+  if (track.targetLatency !== undefined) fields.targetLatency = track.targetLatency;
+  if (track.buffers !== undefined) fields.buffers = track.buffers;
+  if (track.maxGopDuration !== undefined) fields.maxGopDuration = track.maxGopDuration;
+  if (track.maxGroupDuration !== undefined) fields.maxGroupDuration = track.maxGroupDuration;
+  if (track.dependencies !== undefined) fields.dependencies = track.dependencies;
+  if (track.initData !== undefined) fields.initData = track.initData;
+  if (track.authInfo !== undefined) fields.authInfo = track.authInfo;
+  return fields;
+}
+
+function trackUrl(sessionUri: string, track: MoqCatalogTrack): string {
+  return `${sessionUri}#msf:${encodeNamespaceName(track.namespace, track.name)}`;
+}
+
+function parseChannels(channelConfig: string | undefined): number {
+  if (!channelConfig) return 2;
+  const leading = Number.parseInt(channelConfig, 10);
+  return Number.isFinite(leading) && leading > 0 ? leading : 2;
+}
+
+/**
+ * Project the current catalog onto the shared media model. The result is
+ * a fully resolved `Presentation` whose tracks are `LiveOf` shapes
+ * (`deliveryMode: 'push'`) — selection consumes them as-is; nothing else
+ * ever needs "resolving" for a push source.
+ */
+export function moqCatalogToPresentation(
+  catalog: MoqCatalog,
+  presentation: MaybeResolvedPresentation,
+  sessionUri: string
+): Presentation {
+  const video: MoqVideoTrack[] = [];
+  const audio: MoqAudioTrack[] = [];
+  const text: MoqTextTrack[] = [];
+
+  for (const track of catalog.tracks) {
+    const kind = mediaKindOf(track);
+    if (!kind) continue;
+    const id = moqTrackId(track.namespace, track.name);
+    const shared = {
+      id,
+      url: trackUrl(sessionUri, track),
+      bandwidth: track.bitrate ?? track.avgBitrate ?? 0,
+      language: track.language,
+      deliveryMode: 'push' as const,
+      moq: moqFieldsOf(track),
+    };
+
+    if (kind === 'video') {
+      video.push({
+        ...shared,
+        type: 'video',
+        mimeType: track.mimeType ?? 'video/loc',
+        codecs: track.codec ? [track.codec] : [],
+        width: track.width,
+        height: track.height,
+        frameRate: track.framerate !== undefined ? { frameRateNumerator: track.framerate } : undefined,
+      });
+    } else if (kind === 'audio') {
+      audio.push({
+        ...shared,
+        type: 'audio',
+        mimeType: track.mimeType ?? 'audio/loc',
+        codecs: track.codec ? [track.codec] : [],
+        groupId: track.altGroup !== undefined ? `alt-${track.altGroup}` : 'audio',
+        name: track.label ?? track.name,
+        // Decoder-facing values come from codec-mapping; these are
+        // selection metadata with conventional defaults when absent.
+        sampleRate: track.samplerate ?? 48_000,
+        channels: parseChannels(track.channelConfig),
+      });
+    } else {
+      text.push({
+        ...shared,
+        type: 'text',
+        mimeType: track.mimeType ?? 'text/vtt',
+        groupId: track.altGroup !== undefined ? `alt-${track.altGroup}` : 'text',
+        label: track.label ?? track.name,
+        kind: track.role === 'caption' ? 'captions' : 'subtitles',
+      });
+    }
+  }
+
+  const selectionSets: SelectionSet[] = [];
+  if (video.length) {
+    const set: VideoSelectionSet = {
+      id: 'moq-video',
+      type: 'video',
+      switchingSets: [{ id: 'moq-video-main', type: 'video', tracks: video }],
+    };
+    selectionSets.push(set);
+  }
+  if (audio.length) {
+    const set: AudioSelectionSet = {
+      id: 'moq-audio',
+      type: 'audio',
+      switchingSets: [{ id: 'moq-audio-main', type: 'audio', tracks: audio }],
+    };
+    selectionSets.push(set);
+  }
+  if (text.length) {
+    const set: TextSelectionSet = {
+      id: 'moq-text',
+      type: 'text',
+      switchingSets: [{ id: 'moq-text-main', type: 'text', tracks: text }],
+    };
+    selectionSets.push(set);
+  }
+
+  return {
+    id: `moq:${sessionUri}`,
+    url: presentation.url,
+    startTime: 0,
+    selectionSets,
+  };
+}
+
+/**
+ * One-shot parse of an independent catalog object into a `Presentation`
+ * — the `config.parseCatalog` default, mirroring `ParsePresentation`'s
+ * shape. Live delta updates go through `applyMoqCatalogUpdate` +
+ * `moqCatalogToPresentation` with retained catalog state.
+ */
+export function parseMoqCatalog(text: string, presentation: MaybeResolvedPresentation): Presentation {
+  const source = parseMoqSource(presentation.url);
+  const catalog = applyMoqCatalogUpdate(undefined, text, {
+    catalogNamespace: source.namespace,
+    variables: source.fragmentParams,
+  });
+  return moqCatalogToPresentation(catalog, presentation, source.sessionUri);
+}
