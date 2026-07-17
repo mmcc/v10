@@ -1,0 +1,196 @@
+/**
+ * **Resolve a MoQ presentation from its MSF catalog track.** The MoQ
+ * analog of `resolve-presentation`: when the session is ready, subscribes
+ * to the source's catalog track — per msf-01 §5, SUBSCRIBE plus a joining
+ * FETCH (offset 0) to obtain the latest complete catalog and every
+ * subsequent update — parses catalog objects (independent and delta), and
+ * writes the projected `Presentation` to `state.presentation`.
+ *
+ * ```
+ * 'preconditions-unmet' → 'awaiting-session' → 'catalog-active'
+ * ```
+ *
+ * Unlike `resolvePresentation`'s fetch-once `'resolving' → 'resolved'`,
+ * the positive state here spans resolution *and* live updates: the
+ * catalog subscription stays open, and every new catalog object re-parses
+ * and re-writes `state.presentation` (delta re-parse). Stable track ids
+ * (`parse-catalog`) keep unchanged track lists from re-firing selection.
+ *
+ * Ordering: live delta objects can arrive while the joining fetch is
+ * still replaying the current group, so live objects buffer until the
+ * fetch settles, then apply in (group, object) order. A delta that lands
+ * with no prior catalog (fetch unavailable, e.g. nothing published) is
+ * dropped — the next independent object (object 0 of a group) recovers.
+ *
+ * Multi-writer on `state.presentation` with the engine adapter (initial
+ * `{ url }` input) — same legitimate split as `resolvePresentation`.
+ */
+import { defineBehavior } from '../../core/composition/create-composition';
+import type { Reactor } from '../../core/reactors/create-machine-reactor';
+import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
+import { computed, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
+import {
+  applyMoqCatalogUpdate,
+  type MoqCatalog,
+  type MoqCatalogUpdateOptions,
+  moqCatalogToPresentation,
+} from '../../media/moq/parse-catalog';
+import { isMoqSourceUrl, parseMoqSource } from '../../media/moq/parse-source';
+import type { MaybeResolvedPresentation } from '../../media/types';
+import { utf8Decode } from '../../network/moqt/bytes';
+import type { MoqSessionActor } from '../actors/moq-session';
+
+export interface ResolveCatalogState {
+  presentation?: MaybeResolvedPresentation;
+}
+
+export interface ResolveCatalogContext {
+  moqSessionActor?: MoqSessionActor;
+}
+
+/** Catalog-update parser — pluggable like `parsePresentation`. */
+export type ApplyCatalogUpdate = (
+  current: MoqCatalog | undefined,
+  text: string,
+  options: MoqCatalogUpdateOptions
+) => MoqCatalog;
+
+export interface ResolveCatalogConfig {
+  /** Override MSF catalog parsing (alternate catalog formats/versions). */
+  applyCatalogUpdate?: ApplyCatalogUpdate;
+}
+
+type ResolveCatalogFsmState = 'preconditions-unmet' | 'awaiting-session' | 'catalog-active';
+
+function setupResolveCatalog({
+  state,
+  context,
+  config,
+}: {
+  state: {
+    presentation: Signal<ResolveCatalogState['presentation']>;
+  };
+  context: {
+    moqSessionActor: ReadonlySignal<ResolveCatalogContext['moqSessionActor']>;
+  };
+  config?: ResolveCatalogConfig;
+}): Reactor<ResolveCatalogFsmState | 'destroying' | 'destroyed'> {
+  const applyUpdate = config?.applyCatalogUpdate ?? applyMoqCatalogUpdate;
+
+  const derivedStateSignal = computed<ResolveCatalogFsmState>(() => {
+    const presentation = state.presentation.get();
+    if (!presentation?.url || !isMoqSourceUrl(presentation.url)) return 'preconditions-unmet';
+    const actor = context.moqSessionActor.get();
+    if (!actor || actor.snapshot.get().context.status !== 'ready') return 'awaiting-session';
+    return 'catalog-active';
+  });
+
+  return createMachineReactor<ResolveCatalogFsmState>({
+    initial: 'preconditions-unmet',
+    monitor: () => derivedStateSignal.get(),
+    states: {
+      'preconditions-unmet': {},
+      'awaiting-session': {},
+      'catalog-active': {
+        entry: () => {
+          const presentation = state.presentation.get()!;
+          const actor = context.moqSessionActor.get()!;
+          const session = actor.snapshot.get().context.session!;
+
+          let source: ReturnType<typeof parseMoqSource>;
+          try {
+            source = parseMoqSource(presentation.url);
+          } catch (error) {
+            // TODO(error-management): route to a state-error slot once one exists.
+            console.error('[resolveCatalog] invalid MSF source URL:', error);
+            return;
+          }
+          const updateOptions: MoqCatalogUpdateOptions = {
+            catalogNamespace: source.namespace,
+            variables: source.fragmentParams,
+          };
+
+          let catalog: MoqCatalog | undefined;
+          let fetchSettled = false;
+          const bufferedLive: { groupId: number; objectId: number; text: string }[] = [];
+
+          const apply = (text: string, objectId: number): void => {
+            // A delta with no prior catalog can't be interpreted (§5.1.6);
+            // drop it and recover on the next independent object.
+            if (catalog === undefined && objectId > 0) return;
+            try {
+              catalog = applyUpdate(catalog, text, updateOptions);
+              state.presentation.set(moqCatalogToPresentation(catalog, presentation, source.sessionUri));
+            } catch (error) {
+              // TODO(error-management): route to a state-error slot once one exists.
+              console.error('[resolveCatalog] catalog parse failed:', error);
+            }
+          };
+
+          const settleFetch = (): void => {
+            if (fetchSettled) return;
+            fetchSettled = true;
+            bufferedLive.sort((a, b) => a.groupId - b.groupId || a.objectId - b.objectId);
+            for (const { text, objectId } of bufferedLive) apply(text, objectId);
+            bufferedLive.length = 0;
+          };
+
+          const subscription = session.subscribe(
+            {
+              trackNamespace: source.namespace,
+              trackName: source.trackName,
+              parameters: { ...actor.getAuthParameters(), locationFilter: { type: 'largest-object' } },
+            },
+            {
+              onObject: (object) => {
+                if (object.status !== 'normal' || object.payload.length === 0) return;
+                const text = utf8Decode(object.payload);
+                if (!fetchSettled) {
+                  bufferedLive.push({ groupId: object.groupId, objectId: object.objectId, text });
+                  return;
+                }
+                apply(text, object.objectId);
+              },
+              onError: (error) => {
+                // TODO(error-management): route to a state-error slot once one exists.
+                console.error('[resolveCatalog] catalog subscribe failed:', error);
+              },
+            }
+          );
+
+          // Joining fetch (offset 0) replays the current group from its
+          // independent catalog object up to the subscription's start.
+          const fetchHandle = session.fetch(
+            {
+              type: 'relative-joining',
+              joiningRequestId: subscription.requestId,
+              joiningStart: 0,
+              parameters: actor.getAuthParameters(),
+            },
+            {
+              onEntry: (entry) => {
+                if (entry.kind !== 'object' || entry.payload.length === 0) return;
+                apply(utf8Decode(entry.payload), entry.objectId);
+              },
+              onEnd: settleFetch,
+              // No history to replay (e.g. nothing published yet) — fall
+              // back to live-only: the next independent object resolves.
+              onError: settleFetch,
+            }
+          );
+
+          return () => {
+            fetchHandle.cancel();
+            subscription.cancel();
+          };
+        },
+      },
+    },
+  });
+}
+
+export const resolveCatalog = defineBehavior({
+  stateKeys: ['presentation'],
+  contextKeys: ['moqSessionActor'],
+  setup: setupResolveCatalog,
+});

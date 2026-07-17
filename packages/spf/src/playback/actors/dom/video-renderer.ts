@@ -1,0 +1,247 @@
+/**
+ * VideoDecoder → canvas renderer actor.
+ *
+ * Pulls LOC frames from a frame source (the track-subscriber jitter
+ * buffer), decodes ahead of the playout clock, and presents decoded
+ * `VideoFrame`s against the **master clock** by timestamp — a timer-driven
+ * loop with hold-early / drop-late policy. Not `requestVideoFrameCallback`:
+ * rVFC only exists on `HTMLVideoElement`, and there is none here.
+ *
+ * The clock is injected (`getClockTimeUs`): the audio renderer owns the
+ * master clock when audio plays; without one the renderer self-anchors to
+ * its first decoded frame and advances by wall time × `getPlaybackRate()`.
+ *
+ * Track switches are keyframe-gated: `setTrack` swaps the frame source and
+ * decoder config, and decode resumes only from the next keyframe-led
+ * frame (make-before-break handoffs guarantee one is already buffered).
+ */
+import { createTransitionActor, type TransitionActor } from '../../../core/actors/create-transition-actor';
+import type { JitterFrame } from '../track-subscriber';
+
+// =============================================================================
+// Types
+// =============================================================================
+
+/** Pull seam onto a jitter buffer — `TrackSubscriberActor` satisfies this. */
+export interface VideoFrameSource {
+  peek(): JitterFrame | undefined;
+  dequeue(): JitterFrame | undefined;
+}
+
+export type VideoRendererStatus = 'idle' | 'waiting-keyframe' | 'rendering' | 'error';
+
+export interface VideoRendererContext {
+  status: VideoRendererStatus;
+  framesDecoded: number;
+  /** Frames discarded for arriving behind the clock (drop-late). */
+  framesDropped: number;
+  lastPresentedTimestampUs?: number;
+  error?: unknown;
+}
+
+export interface VideoRendererConfig {
+  /** Frames decoded ahead of presentation. Default 8. */
+  decodeAhead?: number;
+  /** Presentation-loop cadence in ms. Default 8 (~120Hz sampling). */
+  tickIntervalMs?: number;
+}
+
+export interface CreateVideoRendererOptions extends VideoRendererConfig {
+  canvas: HTMLCanvasElement | OffscreenCanvas;
+  /** Master playout clock in media microseconds; `undefined` → self-clock. */
+  getClockTimeUs?: () => number | undefined;
+  /** Playout rate for the self-clock (latency nudges). Default 1. */
+  getPlaybackRate?: () => number;
+}
+
+type RendererMessage =
+  | { type: 'status'; status: VideoRendererStatus; error?: unknown }
+  | { type: 'decoded' }
+  | { type: 'presented'; timestampUs: number; dropped: number };
+
+export interface VideoRendererActor extends Pick<TransitionActor<VideoRendererContext, RendererMessage>, 'snapshot'> {
+  /**
+   * Point the renderer at a (new) frame source. Decode restarts at the
+   * next keyframe with the given decoder config. `null` source stops
+   * rendering (status `'idle'`).
+   */
+  setTrack(source: VideoFrameSource | null, config: VideoDecoderConfig | null): void;
+  destroy(): void;
+}
+
+// =============================================================================
+// Implementation
+// =============================================================================
+
+const DEFAULT_DECODE_AHEAD = 8;
+const DEFAULT_TICK_INTERVAL_MS = 8;
+
+export function createVideoRendererActor(options: CreateVideoRendererOptions): VideoRendererActor {
+  const decodeAhead = options.decodeAhead ?? DEFAULT_DECODE_AHEAD;
+  const context2d = options.canvas.getContext('2d') as
+    | CanvasRenderingContext2D
+    | OffscreenCanvasRenderingContext2D
+    | null;
+
+  const inner = createTransitionActor<VideoRendererContext, RendererMessage>(
+    { status: 'idle', framesDecoded: 0, framesDropped: 0 },
+    (context, message) => {
+      switch (message.type) {
+        case 'status':
+          return { ...context, status: message.status, error: message.error };
+        case 'decoded':
+          return { ...context, framesDecoded: context.framesDecoded + 1 };
+        case 'presented':
+          return {
+            ...context,
+            status: 'rendering',
+            lastPresentedTimestampUs: message.timestampUs,
+            framesDropped: context.framesDropped + message.dropped,
+          };
+      }
+    }
+  );
+
+  let source: VideoFrameSource | null = null;
+  let decoderConfig: VideoDecoderConfig | null = null;
+  let decoder: VideoDecoder | null = null;
+  let awaitingKeyframe = true;
+  let destroyed = false;
+
+  /** Decoded frames awaiting presentation, in timestamp order. */
+  const decoded: VideoFrame[] = [];
+
+  // Self-clock anchor (used only without a master clock).
+  let selfAnchor: { timestampUs: number; wallMs: number } | null = null;
+
+  const closeDecoder = (): void => {
+    if (decoder && decoder.state !== 'closed') decoder.close();
+    decoder = null;
+    for (const frame of decoded) frame.close();
+    decoded.length = 0;
+  };
+
+  const handleDecoded = (frame: VideoFrame): void => {
+    if (destroyed) {
+      frame.close();
+      return;
+    }
+    // Outputs arrive in presentation order for LOC (no B-frame reorder in
+    // the containers this targets); insert defensively anyway.
+    let index = decoded.length;
+    while (index > 0 && decoded[index - 1]!.timestamp > frame.timestamp) index--;
+    decoded.splice(index, 0, frame);
+    inner.send({ type: 'decoded' });
+  };
+
+  const ensureDecoder = (): VideoDecoder | null => {
+    if (decoder || !decoderConfig) return decoder;
+    decoder = new VideoDecoder({
+      output: handleDecoded,
+      error: (error) => inner.send({ type: 'status', status: 'error', error }),
+    });
+    decoder.configure(decoderConfig);
+    return decoder;
+  };
+
+  const pullAndDecode = (): void => {
+    if (!source) return;
+    while (true) {
+      const queued = (decoder?.decodeQueueSize ?? 0) + decoded.length;
+      if (queued >= decodeAhead) return;
+      const next = source.peek();
+      if (!next) return;
+
+      if (awaitingKeyframe && !next.isKey) {
+        source.dequeue();
+        continue;
+      }
+
+      const active = ensureDecoder();
+      if (!active) return;
+      source.dequeue();
+      awaitingKeyframe = false;
+      active.decode(
+        new EncodedVideoChunk({
+          type: next.isKey ? 'key' : 'delta',
+          timestamp: next.timestampUs,
+          data: next.payload,
+        })
+      );
+    }
+  };
+
+  const clockTimeUs = (): number | undefined => {
+    const master = options.getClockTimeUs?.();
+    if (master !== undefined) return master;
+    if (!selfAnchor) {
+      const first = decoded[0];
+      if (!first) return undefined;
+      selfAnchor = { timestampUs: first.timestamp, wallMs: performance.now() };
+    }
+    const rate = options.getPlaybackRate?.() ?? 1;
+    return selfAnchor.timestampUs + (performance.now() - selfAnchor.wallMs) * 1000 * rate;
+  };
+
+  const present = (): void => {
+    if (decoded.length === 0) return;
+    const clock = clockTimeUs();
+    if (clock === undefined) return;
+
+    // Everything at/behind the clock is due: present the newest due frame,
+    // drop the rest (drop-late). Frames ahead of the clock hold.
+    let dueCount = 0;
+    while (dueCount < decoded.length && decoded[dueCount]!.timestamp <= clock) dueCount++;
+    if (dueCount === 0) return;
+
+    const frame = decoded[dueCount - 1]!;
+    const dropped = decoded.splice(0, dueCount);
+    dropped.pop();
+    for (const stale of dropped) stale.close();
+
+    if (context2d) {
+      const width = frame.displayWidth || frame.codedWidth;
+      const height = frame.displayHeight || frame.codedHeight;
+      if (options.canvas.width !== width) options.canvas.width = width;
+      if (options.canvas.height !== height) options.canvas.height = height;
+      context2d.drawImage(frame, 0, 0, width, height);
+    }
+    const timestampUs = frame.timestamp;
+    frame.close();
+    inner.send({ type: 'presented', timestampUs, dropped: dropped.length });
+  };
+
+  const tick = (): void => {
+    if (destroyed) return;
+    try {
+      pullAndDecode();
+      present();
+    } catch (error) {
+      inner.send({ type: 'status', status: 'error', error });
+    }
+  };
+  const timer = setInterval(tick, options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS);
+
+  return {
+    get snapshot() {
+      return inner.snapshot;
+    },
+
+    setTrack(nextSource, nextConfig): void {
+      source = nextSource;
+      decoderConfig = nextConfig;
+      awaitingKeyframe = true;
+      selfAnchor = null;
+      closeDecoder();
+      inner.send({ type: 'status', status: nextSource ? 'waiting-keyframe' : 'idle' });
+    },
+
+    destroy(): void {
+      if (destroyed) return;
+      destroyed = true;
+      clearInterval(timer);
+      closeDecoder();
+      inner.destroy();
+    },
+  };
+}
