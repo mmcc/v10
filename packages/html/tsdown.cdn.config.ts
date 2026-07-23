@@ -37,6 +37,7 @@ const media = [
   'native-hls-video',
   'simple-hls-audio-only',
   'simple-hls-video',
+  'simple-moq-video',
   'dash-video',
 ];
 

@@ -106,6 +106,35 @@ Implemented against the actual spec texts (fetched 2026-07-17):
   corruption. Revisit with the interop phase if a real publisher uses
   binary names.
 
+## Player-shell event bridge (2026-07-23)
+
+The `SimpleMoqVideo` wrapper now satisfies core's capability-probed
+`Media` contract so store features attach and sync — the key insight
+being that core features probe capabilities (`isMediaPauseCapable`,
+`isMediaLiveCapable`, …) and listen to plain events, so the
+signals→events translation lives entirely in `packages/html` (the
+google-cast provider precedent), not in SPF:
+
+- Wrapper (`packages/html/src/media/simple-moq-video/`): capability
+  properties (`ended`/`seeking`/`readyState`/`currentSrc`/`load`/
+  `streamType`/`liveEdgeStart`/`targetLiveWindow`/`error`/video
+  dimensions) plus an event bridge — `effect()` on the `paused` slot
+  (`play`/`pause`), `effect()` on presentation resolution
+  (`loadedmetadata`), a 250ms poll of the audio master clock
+  (`timeupdate`, stall→`waiting`, resume→`playing`/`canplay`), and
+  native load-cycle events from the `src` setter.
+- Deliberately unclaimed capabilities: `buffered`/`seekable` (no buffer
+  model surfaced yet), `playbackRate` (live-only), `textTracks` (no
+  text renderer — engine TODO).
+- Seeks resolve immediately via a deferred `seeked` (live-only, no
+  seekable window) so `timeFeature.seek()` flows don't hang.
+- SPF adapter grew only engine-legit surface: `volume`/`muted` backed
+  by a `GainNode` spliced in by handing the renderer an
+  `AudioContextLike` view whose `destination` is the gain node
+  (`MoqAudioContext` gained `createGain`). No renderer changes.
+- Engine error slot still missing → wrapper claims the error capability
+  with a constant `null`; wire it once the engine surfaces errors.
+
 ## Owed to Phase 0/5 (cannot be done in-repo)
 
 - Interop matrix + evidence-based draft pin (plan §7 Phase 0). All wire

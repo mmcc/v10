@@ -6,11 +6,21 @@ import { type MoqAudioContext, MoqMediaElement } from '../adapter';
  * resume/suspend spies so tests can assert the adapter's paused-flag
  * alignment without a live audio device.
  */
+function createFakeGain() {
+  return {
+    connect: vi.fn(),
+    gain: { value: 1 },
+  } as unknown as GainNode & { connect: ReturnType<typeof vi.fn>; gain: { value: number } };
+}
+
 function createFakeAudioContext(initialState: AudioContextState) {
+  const gain = createFakeGain();
   const fake = {
     state: initialState,
     currentTime: 0,
     destination: {} as AudioNode,
+    gain,
+    createGain: vi.fn(() => gain),
     createBuffer: (() => {
       throw new Error('unused in adapter tests');
     }) as MoqAudioContext['createBuffer'],
@@ -43,7 +53,12 @@ describe('MoqMediaMixin', () => {
 
     media.attach(document.createElement('canvas'));
     expect(audioContext.resume).toHaveBeenCalledTimes(1);
-    expect(media.engine.context.audioContext.get()).toBe(audioContext);
+    // The engine sees a render-facing view whose destination is the gain
+    // node (volume path), delegating the clock to the real context.
+    const renderContext = media.engine.context.audioContext.get();
+    expect(renderContext?.destination).toBe(audioContext.gain);
+    expect(audioContext.gain.connect).toHaveBeenCalledWith(audioContext.destination);
+    expect(renderContext?.currentTime).toBe(audioContext.currentTime);
 
     media.destroy();
   });
@@ -76,6 +91,31 @@ describe('MoqMediaMixin', () => {
     media.pause();
     expect(media.engine.state.paused.get()).toBe(true);
     expect(media.paused).toBe(true);
+
+    media.destroy();
+  });
+
+  it('applies volume and muted to the render gain, including values set before attach()', () => {
+    const audioContext = createFakeAudioContext('running');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
+    expect(media.volume).toBe(1);
+    expect(media.muted).toBe(false);
+
+    // Pre-attach: no gain node exists yet — values must apply on attach.
+    media.volume = 0.5;
+    media.attach(document.createElement('canvas'));
+    expect(audioContext.gain.gain.value).toBe(0.5);
+
+    media.muted = true;
+    expect(audioContext.gain.gain.value).toBe(0);
+
+    media.muted = false;
+    expect(audioContext.gain.gain.value).toBe(0.5);
+
+    media.volume = 2;
+    expect(media.volume).toBe(1);
+    expect(audioContext.gain.gain.value).toBe(1);
 
     media.destroy();
   });

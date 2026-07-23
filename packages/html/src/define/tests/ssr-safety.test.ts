@@ -18,4 +18,11 @@ describe('SSR-safe define imports', () => {
 
     await expect(import('../media/simple-hls-video')).resolves.toBeDefined();
   });
+
+  it('imports simple-moq-video without customElements or HTMLElement', async () => {
+    vi.stubGlobal('customElements', undefined);
+    vi.stubGlobal('HTMLElement', undefined);
+
+    await expect(import('../media/simple-moq-video')).resolves.toBeDefined();
+  });
 });
