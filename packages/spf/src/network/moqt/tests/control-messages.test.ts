@@ -7,6 +7,7 @@ import {
   decodeLocationFilter,
   decodeMessageParameters,
   encodeFetch,
+  encodeFetchOk,
   encodeGoaway,
   encodeKeyValuePairs,
   encodeLocationFilter,
@@ -235,6 +236,28 @@ describe('encodeLocationFilter', () => {
     for (const filter of filters) {
       expect(decodeLocationFilter(encodeLocationFilter(filter))).toEqual(filter);
     }
+  });
+
+  it('rejects trailing bytes after the filter', () => {
+    const encoded = encodeLocationFilter({ type: 'next-group-start' });
+    const padded = new Uint8Array(encoded.length + 1);
+    padded.set(encoded);
+    expect(() => decodeLocationFilter(padded)).toThrow(MoqtProtocolError);
+  });
+});
+
+describe('encodeFetchOk', () => {
+  it('round-trips and rejects end-of-track values other than 0 and 1', () => {
+    const notEnded = encodeFetchOk(false, { group: 3, object: 9 });
+    const ended = encodeFetchOk(true, { group: 3, object: 9 });
+    expect(decodeAll(notEnded)[0]).toMatchObject({ kind: 'fetch-ok', endOfTrack: false });
+    expect(decodeAll(ended)[0]).toMatchObject({ kind: 'fetch-ok', endOfTrack: true });
+
+    // The end-of-track byte is the single position where the two differ.
+    const offset = notEnded.findIndex((byte, index) => byte !== ended[index]);
+    const invalid = notEnded.slice();
+    invalid[offset] = 2;
+    expect(() => decodeAll(invalid)).toThrow(MoqtProtocolError);
   });
 });
 

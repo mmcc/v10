@@ -14,6 +14,7 @@
  * bookkeeping; SPF actors bind signals at the `playback/` layer.
  */
 import { type ControlMessage, ControlMessageDeframer, decodeControlMessage } from './control-messages';
+import { MoqtProtocolError } from './errors';
 
 /** Structural subset of `WebTransportBidirectionalStream`. */
 export interface BidirectionalStreamLike {
@@ -76,7 +77,16 @@ export function openRequestStream(
           handlers.onMessage(decodeControlMessage(frame));
         }
       }
-      if (!cancelled) handlers.onFin?.();
+      if (!cancelled) {
+        // A FIN that lands mid-frame is a truncated response, not a clean
+        // completion — surfacing it as FIN would leave the request pending
+        // with neither response nor error.
+        if (deframer.pendingBytes > 0) {
+          handlers.onError?.(new MoqtProtocolError('request stream ended mid-control-message'));
+        } else {
+          handlers.onFin?.();
+        }
+      }
     } catch (error) {
       if (!cancelled) handlers.onError?.(error);
     } finally {

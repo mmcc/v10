@@ -16,6 +16,7 @@
 import { ByteReader, type StreamReader } from './bytes';
 import { decodeKeyValuePairs, type KeyValuePair } from './control-messages';
 import { MoqtProtocolError } from './errors';
+import { MAX_VARINT_VALUE } from './varint';
 
 // ============================================================================
 // Stream types
@@ -146,6 +147,12 @@ export async function* readSubgroupObjects(reader: StreamReader, header: Subgrou
   while (!(await reader.atEnd())) {
     const objectIdDelta = await reader.readVarint();
     const objectId = previousObjectId === undefined ? objectIdDelta : previousObjectId + objectIdDelta + 1;
+    // Each operand fits the varint range, but the delta sum can round past
+    // 2^53-1 and silently collide subsequent IDs — the exact corruption the
+    // varint layer rejects loudly.
+    if (objectId > MAX_VARINT_VALUE) {
+      throw new MoqtProtocolError('subgroup object ID exceeds supported range');
+    }
     if (previousObjectId === undefined && header.subgroupIdMode === 'first-object-id') {
       subgroupId = objectId;
     }
@@ -278,6 +285,11 @@ export async function* readFetchEntries(
           : objectIdDelta !== undefined
             ? prior.objectId + objectIdDelta
             : prior.objectId + 1;
+    // Mirror of the underflow check above: delta sums can round past 2^53-1
+    // and silently collapse later locations.
+    if (groupId > MAX_VARINT_VALUE || objectId > MAX_VARINT_VALUE) {
+      throw new MoqtProtocolError('fetch location exceeds supported range');
+    }
 
     let priority: number;
     if ((flags & FETCH_FLAG.PRIORITY_PRESENT) !== 0) {
