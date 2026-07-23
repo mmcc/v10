@@ -342,12 +342,13 @@ class MoqtSessionImpl implements MoqtSession {
     this.#handleClosed(error);
   }
 
-  #handleClosed(error: unknown): void {
+  #handleClosed(error: unknown, { expected = false }: { expected?: boolean } = {}): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
-    if (!this.#receivedServerSetup) {
-      this.#rejectReady(error ?? new MoqtProtocolError('session closed before server SETUP'));
-    }
+    const setupError = this.#receivedServerSetup
+      ? undefined
+      : (error ?? new MoqtProtocolError('session closed before server SETUP'));
+    if (setupError !== undefined) this.#rejectReady(setupError);
     for (const waiters of this.#aliasWaiters.values()) {
       for (const waiter of waiters) {
         clearTimeout(waiter.timer);
@@ -355,7 +356,12 @@ class MoqtSessionImpl implements MoqtSession {
       }
     }
     this.#aliasWaiters.clear();
-    this.#callbacks.onClosed?.(error === undefined ? {} : { error });
+    // A transport that drops before server SETUP is a session failure even
+    // when the close itself was clean — callback-only consumers observing
+    // `onClosed` alone must see the error too. A deliberate local `close()`
+    // stays a clean close.
+    const closeError = error ?? (expected ? undefined : setupError);
+    this.#callbacks.onClosed?.(closeError === undefined ? {} : { error: closeError });
   }
 
   close(closeCode = SESSION_ERROR.NO_ERROR, reason = ''): void {
@@ -367,7 +373,7 @@ class MoqtSessionImpl implements MoqtSession {
     } catch {
       // transport already gone
     }
-    this.#handleClosed(undefined);
+    this.#handleClosed(undefined, { expected: true });
   }
 
   destroy(): void {

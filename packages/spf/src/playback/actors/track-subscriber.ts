@@ -187,10 +187,14 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     insertFrame(frame);
 
     const now = performance.now();
-    const durationMs = lastArrivalMs === undefined ? 0 : now - lastArrivalMs;
+    // The first arrival only establishes the measurement baseline: its
+    // bytes have no arrival interval, so counting them would overstate
+    // the first throughput estimate.
+    if (lastArrivalMs !== undefined) {
+      totalBytes += object.payload.byteLength;
+      totalDurationMs += now - lastArrivalMs;
+    }
     lastArrivalMs = now;
-    totalBytes += object.payload.byteLength;
-    totalDurationMs += durationMs;
     inner.send({ type: 'frame-buffered', frame, totalBytes, totalDurationMs });
   };
 

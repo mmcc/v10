@@ -231,8 +231,10 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     // A frame far ahead of the clock is a timeline reset (latency catch-up
     // skipped groups) — waiting the jump out in real time would freeze
     // presentation. Re-anchor at the jumped-to frame instead.
+    // While paused (rate 0) the clock holds — a re-anchor onto newly
+    // arriving live frames would present them mid-pause.
     const next = decoded[0];
-    if (next && next.timestamp - clock > DISCONTINUITY_THRESHOLD_US) {
+    if (rate !== 0 && next && next.timestamp - clock > DISCONTINUITY_THRESHOLD_US) {
       selfAnchor = { timestampUs: next.timestamp, wallMs: performance.now(), rate };
       return next.timestamp;
     }
@@ -240,9 +242,13 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
   };
 
   const present = (): void => {
-    if (decoded.length === 0) return;
+    // Read the clock even with nothing to present: rate changes fold into
+    // the self-clock anchor inside `clockTimeUs`, and a pause (rate → 0)
+    // that lands while the decoded queue is empty must freeze the anchor
+    // now — not when the next frame decodes, after the clock has silently
+    // advanced through the pause.
     const clock = clockTimeUs();
-    if (clock === undefined) return;
+    if (clock === undefined || decoded.length === 0) return;
 
     // Everything at/behind the clock is due: present the newest due frame,
     // drop the rest (drop-late). Frames ahead of the clock hold.

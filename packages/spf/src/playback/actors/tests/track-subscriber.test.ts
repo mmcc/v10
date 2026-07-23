@@ -153,10 +153,12 @@ describe('createTrackSubscriberActor', () => {
     handlers.onObject?.(locObject(41, 1, 2_000));
 
     // Totals are cumulative (not per-object) so a batched observer that
-    // only sees the latest snapshot still accounts for every arrival.
+    // only sees the latest snapshot still accounts for every arrival. The
+    // first object only establishes the timing baseline — its bytes have
+    // no arrival interval, so counting them would overstate throughput.
     const arrivals = subscriber.snapshot.get().context.arrivals!;
     expect(arrivals.seq).toBe(2);
-    expect(arrivals.totalBytes).toBe(4); // two 2-byte locObject payloads
+    expect(arrivals.totalBytes).toBe(2); // second 2-byte locObject payload
     expect(arrivals.totalDurationMs).toBeGreaterThanOrEqual(0);
 
     subscriber.destroy();
