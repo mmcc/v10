@@ -18,7 +18,7 @@ import { resolveCatalog } from '../../behaviors/resolve-catalog';
 import { setupMoqSession } from '../../behaviors/setup-moq-session';
 import { subscribeSelectedAudioTrack, subscribeSelectedVideoTrack } from '../../behaviors/subscribe-selected-tracks';
 import { type LatencyControlConfig, type PlayoutState, syncLatency } from '../../behaviors/sync-latency';
-import { trackMoqBandwidth } from '../../behaviors/track-moq-bandwidth';
+import { DEFAULT_MOQ_BANDWIDTH_CONFIG, trackMoqBandwidth } from '../../behaviors/track-moq-bandwidth';
 import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behaviors/track-switching';
 
 // ============================================================================
@@ -47,6 +47,13 @@ export interface MoqEngineState {
   userVideoTrackSelection?: Partial<VideoTrack>;
   userAudioTrackSelection?: Partial<AudioTrack>;
   userTextTrackSelection?: Partial<TextTrack> | 'off';
+  /**
+   * Adapter-written pause flag. The renderers gate their playout rate to 0
+   * while set — without it, video-only playback (no audio master clock to
+   * freeze) would keep presenting on the self-clock while paused.
+   * `undefined` means playing, so engine-only drivers never pause by default.
+   */
+  paused?: boolean;
   /** Consumer-set target latency in seconds (input slot). */
   targetLatency?: number;
   measuredLatency?: number;
@@ -153,6 +160,16 @@ const shareSignals = makeShareSignals<MoqEngineState, MoqEngineContext>([
  * ```
  */
 export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEngineState, MoqEngineContext> {
+  // The arrival-timing sampler reads `moqBandwidth` while the reused
+  // `rankByBandwidth` ranker reads `bandwidth` — map one onto the other so
+  // both share the MoQ-tuned estimator config. Without this the ranker
+  // falls back to the segment-tuned defaults (128 KB `minTotalBytes`) and
+  // never trusts push-sample estimates, and consumer `moqBandwidth`
+  // overrides never reach it.
+  const compositionConfig = {
+    ...config,
+    bandwidth: { ...DEFAULT_MOQ_BANDWIDTH_CONFIG, ...config.moqBandwidth },
+  };
   return createComposition(
     [
       // Session first: owns the transport + MOQT session actor, gated on
@@ -165,6 +182,9 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
       // media model, so live (push) tracks rank and pick unchanged.
       switchVideoTrack,
       switchAudioTrack,
+      // TODO(text-rendering): selection only — no text subscriber/renderer
+      // behavior yet; do not expose a textTracks facade on the adapter until
+      // one exists.
       switchTextTrack,
 
       // Selection → make-before-break subscription handoff.
@@ -188,7 +208,7 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
       shareSignals,
     ],
     {
-      config,
+      config: compositionConfig,
       // Seed bandwidthState so the first selection ranks on the
       // initial-bandwidth fallback instead of waiting for samples.
       initialState: {

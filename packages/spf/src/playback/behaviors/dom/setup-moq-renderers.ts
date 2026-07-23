@@ -15,9 +15,11 @@
  *   video-only playback).
  *
  * Both apply `state.playoutRate` (latency-controller nudges) through the
- * renderer's `getPlaybackRate` seam, and both re-point on subscriber-actor
- * swaps — which is the moment a make-before-break handoff completes; the
- * renderer's keyframe gate handles the decoder reconfiguration.
+ * renderer's `getPlaybackRate` seam — gated to 0 while `state.paused` is
+ * set, so video-only playback actually freezes on pause — and both
+ * re-point on subscriber-actor swaps — which is the moment a
+ * make-before-break handoff completes; the renderer's keyframe gate
+ * handles the decoder reconfiguration.
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
@@ -39,6 +41,14 @@ import type { TrackSubscriberActor } from '../../actors/track-subscriber';
 
 export interface MoqRendererState {
   playoutRate?: number;
+  /**
+   * Adapter-written pause flag; `undefined` means playing. Gates the
+   * renderers' playout rate to 0 — the video self-clock re-anchors on rate
+   * changes, so rate 0 holds presentation exactly and resumes from the
+   * hold point (there is no audio master clock to freeze in video-only
+   * playback).
+   */
+  paused?: boolean;
   currentTime?: number;
 }
 
@@ -63,6 +73,7 @@ function setupAudioRendererSetup({
 }: {
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
+    paused: ReadonlySignal<boolean | undefined>;
     currentTime: Signal<number | undefined>;
   };
   context: {
@@ -85,7 +96,9 @@ function setupAudioRendererSetup({
           () => {
             const renderer = createAudioRendererActor({
               audioContext: context.audioContext.get()!,
-              getPlaybackRate: () => peek(state.playoutRate) ?? 1,
+              // Rate 0 while paused for consistency with the video leg —
+              // the adapter also suspends the AudioContext on pause.
+              getPlaybackRate: () => (peek(state.paused) ? 0 : (peek(state.playoutRate) ?? 1)),
             });
             context.audioRendererActor.set(renderer);
             return () => {
@@ -125,7 +138,7 @@ function setupAudioRendererSetup({
  * const reactor = setupAudioRenderer.setup({ state, context });
  */
 export const setupAudioRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'currentTime'],
+  stateKeys: ['playoutRate', 'paused', 'currentTime'],
   contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor'],
   setup: setupAudioRendererSetup,
 });
@@ -140,6 +153,7 @@ function setupVideoRendererSetup({
 }: {
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
+    paused: ReadonlySignal<boolean | undefined>;
   };
   context: {
     renderSurface: ReadonlySignal<HTMLCanvasElement | OffscreenCanvas | undefined>;
@@ -164,7 +178,11 @@ function setupVideoRendererSetup({
             // Presentation is scheduled against the audio master clock by
             // frame timestamp; without audio the renderer self-clocks.
             getClockTimeUs: () => peek(context.audioRendererActor)?.getClockTimeUs(),
-            getPlaybackRate: () => peek(state.playoutRate) ?? 1,
+            // `paused` gates the rate to 0: without audio there is no
+            // master clock to freeze, and the self-clock's rate-change
+            // re-anchoring makes rate 0 hold exactly and resume from the
+            // hold point.
+            getPlaybackRate: () => (peek(state.paused) ? 0 : (peek(state.playoutRate) ?? 1)),
           });
           context.videoRendererActor.set(renderer);
           return () => {
@@ -194,7 +212,7 @@ function setupVideoRendererSetup({
  * const reactor = setupVideoRenderer.setup({ state, context });
  */
 export const setupVideoRenderer = defineBehavior({
-  stateKeys: ['playoutRate'],
+  stateKeys: ['playoutRate', 'paused'],
   contextKeys: ['renderSurface', 'videoSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupVideoRendererSetup,
 });
