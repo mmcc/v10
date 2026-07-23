@@ -56,6 +56,28 @@ Implemented against the actual spec texts (fetched 2026-07-17):
   Video Config (13) are interpreted; loc-02's pre-IANA Frame Marking /
   Audio Level ids collide with Timestamp.
 
+## Review triage (2026-07-23, PR #1 bot reviews)
+
+46 findings (Codex + cubic) triaged: 28 confirmed and fixed, 8 invalid,
+5 deferred, plus 5 duplicates across the two bots. Notable outcomes:
+
+- Fixed P1s: media subscriptions now gate on `loadActivated || preload
+  === 'auto'`; latency catch-up re-anchors renderer clocks (was an
+  infinite silence/freeze loop); LOC Video Config extradata reconfigures
+  the video decoder; delta catalogs resolve `initRef`; `connection=q`
+  is rejected (native QUIC not implementable in browsers).
+- Make-before-break promotion now waits until the pending track is due
+  at the playout clock — the residual ~60ms audio gap at swap (schedule
+  margin + decode) is deferred alongside the AudioWorklet TODO.
+- Deferred as Phase 5 protocol strictness (all decode-side leniency,
+  no corruption or hang possible): duplicate non-repeatable parameters,
+  out-of-context parameters, full-track-name 4096 limit, server request
+  ID parity/reuse validation.
+- Deliberate stances re-affirmed against review pressure: varint 2^53-1
+  rejection (documented above); keep-playing on transiently-invalid
+  track selection; text selection composes with no renderer (TODO
+  marker added in the engine).
+
 ## Owed to Phase 0/5 (cannot be done in-repo)
 
 - Interop matrix + evidence-based draft pin (plan §7 Phase 0). All wire
