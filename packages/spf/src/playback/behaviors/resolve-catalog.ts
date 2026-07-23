@@ -22,6 +22,10 @@
  * with no prior catalog (fetch unavailable, e.g. nothing published) is
  * dropped — the next independent object (object 0 of a group) recovers.
  *
+ * Auth-expiry retry (MSF §11.4): an EXPIRED_AUTH_TOKEN subscribe error
+ * refreshes the token via the session actor and recreates the catalog
+ * subscription + joining fetch once — same pattern as `track-subscriber`.
+ *
  * Multi-writer on `state.presentation` with the engine adapter (initial
  * `{ url }` input) — same legitimate split as `resolvePresentation`.
  */
@@ -38,6 +42,9 @@ import {
 import { isMoqSourceUrl, parseMoqSource } from '../../media/moq/parse-source';
 import type { MaybeResolvedPresentation } from '../../media/types';
 import { utf8Decode } from '../../network/moqt/bytes';
+import type { MessageParameters } from '../../network/moqt/control-messages';
+import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
+import type { FetchHandle, Subscription } from '../../network/moqt/session';
 import type { MoqSessionActor } from '../actors/moq-session';
 
 export interface ResolveCatalogState {
@@ -113,6 +120,10 @@ function setupResolveCatalog({
           let catalog: MoqCatalog | undefined;
           let fetchSettled = false;
           const bufferedLive: { groupId: number; objectId: number; text: string }[] = [];
+          let cancelled = false;
+          let authRetried = false;
+          let subscription: Subscription | undefined;
+          let fetchHandle: FetchHandle | undefined;
 
           const apply = (text: string, objectId: number): void => {
             // A delta with no prior catalog can't be interpreted (§5.1.6);
@@ -135,53 +146,84 @@ function setupResolveCatalog({
             bufferedLive.length = 0;
           };
 
-          const subscription = session.subscribe(
-            {
-              trackNamespace: source.namespace,
-              trackName: source.trackName,
-              parameters: { ...actor.getAuthParameters(), locationFilter: { type: 'largest-object' } },
-            },
-            {
-              onObject: (object) => {
-                if (object.status !== 'normal' || object.payload.length === 0) return;
-                const text = utf8Decode(object.payload);
-                if (!fetchSettled) {
-                  bufferedLive.push({ groupId: object.groupId, objectId: object.objectId, text });
-                  return;
-                }
-                apply(text, object.objectId);
-              },
-              onError: (error) => {
-                // TODO(error-management): route to a state-error slot once one exists.
-                console.error('[resolveCatalog] catalog subscribe failed:', error);
-              },
-            }
-          );
+          const start = (parameters: MessageParameters): void => {
+            // Fresh attempt: the new joining fetch replays the current
+            // group again, so live deltas must buffer until it settles.
+            fetchSettled = false;
+            bufferedLive.length = 0;
 
-          // Joining fetch (offset 0) replays the current group from its
-          // independent catalog object up to the subscription's start.
-          const fetchHandle = session.fetch(
-            {
-              type: 'relative-joining',
-              joiningRequestId: subscription.requestId,
-              joiningStart: 0,
-              parameters: actor.getAuthParameters(),
-            },
-            {
-              onEntry: (entry) => {
-                if (entry.kind !== 'object' || entry.payload.length === 0) return;
-                apply(utf8Decode(entry.payload), entry.objectId);
+            subscription = session.subscribe(
+              {
+                trackNamespace: source.namespace,
+                trackName: source.trackName,
+                parameters: { ...parameters, locationFilter: { type: 'largest-object' } },
               },
-              onEnd: settleFetch,
-              // No history to replay (e.g. nothing published yet) — fall
-              // back to live-only: the next independent object resolves.
-              onError: settleFetch,
-            }
-          );
+              {
+                onObject: (object) => {
+                  if (object.status !== 'normal' || object.payload.length === 0) return;
+                  const text = utf8Decode(object.payload);
+                  if (!fetchSettled) {
+                    bufferedLive.push({ groupId: object.groupId, objectId: object.objectId, text });
+                    return;
+                  }
+                  apply(text, object.objectId);
+                },
+                onError: (error) => {
+                  // Auth-expiry retry (MSF §11.4), same one-shot pattern as
+                  // track-subscriber: refresh the token and recreate the
+                  // subscription + joining fetch with fresh parameters.
+                  if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN && !authRetried) {
+                    authRetried = true;
+                    void actor.refreshAuthToken().then(
+                      (refreshed) => {
+                        if (cancelled) return;
+                        fetchHandle?.cancel();
+                        subscription?.cancel();
+                        start(refreshed);
+                      },
+                      (refreshError) => {
+                        // TODO(error-management): route to a state-error slot once one exists.
+                        console.error('[resolveCatalog] auth refresh failed:', refreshError);
+                      }
+                    );
+                    return;
+                  }
+                  // TODO(error-management): route to a state-error slot once one exists.
+                  console.error('[resolveCatalog] catalog subscribe failed:', error);
+                },
+              }
+            );
+
+            // Joining fetch (offset 0) replays the current group from its
+            // independent catalog object up to the subscription's start.
+            fetchHandle = session.fetch(
+              {
+                type: 'relative-joining',
+                joiningRequestId: subscription.requestId,
+                joiningStart: 0,
+                parameters,
+              },
+              {
+                onEntry: (entry) => {
+                  if (entry.kind !== 'object' || entry.payload.length === 0) return;
+                  apply(utf8Decode(entry.payload), entry.objectId);
+                },
+                onEnd: settleFetch,
+                // No history to replay (e.g. nothing published yet) or replay
+                // truncated — fall back to live-only: the next independent
+                // object resolves.
+                onError: settleFetch,
+                onReset: settleFetch,
+              }
+            );
+          };
+
+          start(actor.getAuthParameters());
 
           return () => {
-            fetchHandle.cancel();
-            subscription.cancel();
+            cancelled = true;
+            fetchHandle?.cancel();
+            subscription?.cancel();
           };
         },
       },

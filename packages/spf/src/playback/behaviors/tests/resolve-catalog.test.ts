@@ -3,6 +3,7 @@ import { signal } from '../../../core/signals/primitives';
 import { isResolvedPresentation, type MaybeResolvedPresentation } from '../../../media/types';
 import { getTracksByType } from '../../../media/utils/tracks';
 import { utf8Encode } from '../../../network/moqt/bytes';
+import { REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
 import type { FetchHandlers, MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import { resolveCatalog } from '../resolve-catalog';
@@ -64,13 +65,14 @@ function createFakeSessionActor() {
     value: 'active' as const,
     context: { status: 'ready', session } as MoqSessionActorContext,
   });
+  const refreshAuthToken = vi.fn(async () => ({ authorizationTokens: [new Uint8Array([1])] }));
   const actor: MoqSessionActor = {
     snapshot: snapshot as MoqSessionActor['snapshot'],
     getAuthParameters: () => ({}),
-    refreshAuthToken: async () => ({}),
+    refreshAuthToken,
     destroy: () => {},
   };
-  return { actor, subscriptions, fetches };
+  return { actor, subscriptions, fetches, refreshAuthToken };
 }
 
 function catalogObject(groupId: number, objectId: number, text: string) {
@@ -177,6 +179,56 @@ describe('resolveCatalog', () => {
     // ...and the next group's independent catalog resolves.
     subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, CATALOG));
     await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+
+    reactor.destroy();
+  });
+
+  it('refreshes the token and recreates the catalog subscription on EXPIRED_AUTH_TOKEN', async () => {
+    const { actor, subscriptions, fetches, refreshAuthToken } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
+    expect(refreshAuthToken).toHaveBeenCalledOnce();
+    expect(subscriptions[0]!.cancelled).toBe(true);
+    expect(fetches[0]!.cancelled).toBe(true);
+    expect(fetches).toHaveLength(2);
+    expect(subscriptions[1]!.options).toMatchObject({
+      trackNamespace: ['live'],
+      trackName: 'catalog',
+      parameters: { authorizationTokens: [new Uint8Array([1])] },
+    });
+
+    // The fresh attempt resolves the catalog through its own joining fetch.
+    fetches[1]!.handlers.onEntry?.({
+      kind: 'object',
+      groupId: 5,
+      objectId: 0,
+      priority: 128,
+      properties: [],
+      payload: utf8Encode(CATALOG),
+    });
+    fetches[1]!.handlers.onEnd?.();
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+
+    // A second expiry is log-only — the retry is one-shot.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    subscriptions[1]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired again',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(subscriptions).toHaveLength(2);
+    expect(refreshAuthToken).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
 
     reactor.destroy();
   });

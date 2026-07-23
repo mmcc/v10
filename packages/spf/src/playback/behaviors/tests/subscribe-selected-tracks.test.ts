@@ -44,8 +44,8 @@ const PRESENTATION: MaybeResolvedPresentation = {
 interface FakeSubscriber extends TrackSubscriberActor {
   options: CreateTrackSubscriberOptions;
   destroyed: boolean;
-  /** Simulate a buffered keyframe-led group. */
-  becomeDecodable(): void;
+  /** Simulate a buffered keyframe-led group (optionally at a timestamp). */
+  becomeDecodable(oldestTimestampUs?: number): void;
 }
 
 function createFakeSubscriberFactory() {
@@ -63,8 +63,11 @@ function createFakeSubscriberFactory() {
       peek: () => undefined,
       dequeue: () => undefined,
       skipToLatestGroup: () => 0,
-      becomeDecodable() {
-        snapshot.set({ value: 'active', context: { ...snapshot.get().context, hasDecodableFrame: true } });
+      becomeDecodable(oldestTimestampUs?: number) {
+        snapshot.set({
+          value: 'active',
+          context: { ...snapshot.get().context, hasDecodableFrame: true, oldestTimestampUs },
+        });
       },
       destroy() {
         subscriber.destroyed = true;
@@ -92,6 +95,9 @@ function makeDeps() {
     state: {
       presentation: signal<MaybeResolvedPresentation | undefined>(PRESENTATION),
       selectedVideoTrackId: signal<string | undefined>(undefined),
+      preload: signal<'auto' | 'metadata' | 'none' | undefined>(undefined),
+      loadActivated: signal<boolean | undefined>(true),
+      currentTime: signal<number | undefined>(undefined),
     },
     context: {
       moqSessionActor: signal<MoqSessionActor | undefined>(sessionActor),
@@ -145,6 +151,81 @@ describe('subscribeSelectedVideoTrack', () => {
     await vi.waitFor(() => expect(deps.context.videoSubscriberActor.get()).toBe(created[1]));
     expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
     expect(created[0]!.destroyed).toBe(true);
+
+    reactor.destroy();
+  });
+
+  it('waits for the playout clock to reach the pending track before completing the swap', async () => {
+    const deps = makeDeps();
+    deps.state.currentTime.set(10);
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    deps.state.selectedVideoTrackId.set(SD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+
+    // Decodable, but joined at the live edge — its frames aren't due at
+    // the playout clock yet, so the old subscription keeps playing.
+    created[1]!.becomeDecodable(10_600_000);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+    expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[1]);
+    expect(created[0]!.destroyed).toBe(false);
+
+    // The clock catches up to the pending track's oldest frame → swap.
+    deps.state.currentTime.set(10.6);
+    await vi.waitFor(() => expect(deps.context.videoSubscriberActor.get()).toBe(created[1]));
+    expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
+    expect(created[0]!.destroyed).toBe(true);
+
+    reactor.destroy();
+  });
+
+  it('does not subscribe under default preload until load activation', async () => {
+    const deps = makeDeps();
+    deps.state.loadActivated.set(false);
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    // Default preload ('metadata') must not start live media downloads.
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(created).toHaveLength(0);
+
+    deps.state.loadActivated.set(true);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+    reactor.destroy();
+  });
+
+  it('subscribes without load activation when preload is auto', async () => {
+    const deps = makeDeps();
+    deps.state.loadActivated.set(false);
+    deps.state.preload.set('auto');
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+
+    reactor.destroy();
+  });
+
+  it('tears down subscribers when the gate closes', async () => {
+    const deps = makeDeps();
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+
+    deps.state.loadActivated.set(false);
+    await vi.waitFor(() => expect(created[0]!.destroyed).toBe(true));
+    expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+    expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
 
     reactor.destroy();
   });
