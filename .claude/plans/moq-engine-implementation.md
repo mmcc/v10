@@ -78,6 +78,34 @@ Implemented against the actual spec texts (fetched 2026-07-17):
   track selection; text selection composes with no renderer (TODO
   marker added in the engine).
 
+## Review triage round 2 (2026-07-23, cubic follow-up on the fixes)
+
+7 findings on the round-1 fixes: 6 fixed, 1 deferred.
+
+- Audio `getPlaybackRate` no longer gates to 0 on pause — rate 0
+  scheduled an infinite clock segment (duration ÷ 0) and sources whose
+  `playbackRate` stayed 0 after resume. Pause-freezing audio is the
+  adapter's `AudioContext.suspend()` alone. The video self-clock keeps
+  the rate-0 gate, hardened two ways: `present()` reads the clock even
+  with an empty decoded queue (so a pause folds into the anchor
+  immediately, not when the next frame decodes), and the discontinuity
+  re-anchor is skipped at rate 0 (live-edge frames arriving mid-pause
+  no longer present).
+- Bandwidth arrivals: first object only establishes the timing
+  baseline; its bytes are excluded so the first sample doesn't
+  overstate throughput.
+- A transport drop before server SETUP now surfaces through `onClosed`
+  as an error (session actor → `failed`); a deliberate local `close()`
+  stays a clean close.
+- resolve-catalog auth retry: `.catch()` chained after `.then()` so a
+  synchronous throw from re-subscription is contained.
+- Deferred: byte-preserving (non-UTF-8) MSF track/namespace names.
+  Names are JS strings end-to-end (catalog JSON, `utf8Encode` on the
+  MOQT wire), so a non-UTF-8 name can't round-trip anywhere in the
+  pipeline; the fatal decode error is preferred over silent byte
+  corruption. Revisit with the interop phase if a real publisher uses
+  binary names.
+
 ## Owed to Phase 0/5 (cannot be done in-repo)
 
 - Interop matrix + evidence-based draft pin (plan §7 Phase 0). All wire
