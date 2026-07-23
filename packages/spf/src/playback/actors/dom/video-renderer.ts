@@ -79,6 +79,12 @@ export interface VideoRendererActor extends Pick<TransitionActor<VideoRendererCo
 
 const DEFAULT_DECODE_AHEAD = 8;
 const DEFAULT_TICK_INTERVAL_MS = 8;
+/**
+ * Media-time jump beyond which buffered frames are a timeline reset
+ * (latency catch-up skipped groups) rather than frames the self-clock
+ * should wait out in real time.
+ */
+const DISCONTINUITY_THRESHOLD_US = 1_000_000;
 
 export function createVideoRendererActor(options: CreateVideoRendererOptions): VideoRendererActor {
   const decodeAhead = options.decodeAhead ?? DEFAULT_DECODE_AHEAD;
@@ -111,6 +117,8 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
   let decoder: VideoDecoder | null = null;
   let awaitingKeyframe = true;
   let destroyed = false;
+  /** Last per-keyframe LOC Video Config applied as the decoder `description`. */
+  let appliedDescription: Uint8Array | null = null;
 
   /** Decoded frames awaiting presentation, in timestamp order. */
   const decoded: VideoFrame[] = [];
@@ -149,8 +157,18 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     return decoder;
   };
 
+  const sameDescriptionBytes = (bytes: Uint8Array): boolean => {
+    if (appliedDescription === null || appliedDescription.byteLength !== bytes.byteLength) return false;
+    for (let i = 0; i < bytes.byteLength; i++) {
+      if (appliedDescription[i] !== bytes[i]) return false;
+    }
+    return true;
+  };
+
   const pullAndDecode = (): void => {
-    if (!source) return;
+    // After a decoder error there is nothing productive to pull into —
+    // draining would silently strip the jitter buffer at tick rate.
+    if (!source || inner.snapshot.get().context.status === 'error') return;
     while (true) {
       const queued = (decoder?.decodeQueueSize ?? 0) + decoded.length;
       if (queued >= decodeAhead) return;
@@ -162,10 +180,23 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
         continue;
       }
 
+      // LOC tracks may ship parameter sets per keyframe (Video Config
+      // property) instead of via catalog initData — apply them as the
+      // decoder `description` before this keyframe decodes. Publishers
+      // typically repeat the config on every keyframe, so byte-compare
+      // against the last applied bytes to avoid reconfigure churn.
+      if (next.isKey && next.videoConfig && decoderConfig && !sameDescriptionBytes(next.videoConfig)) {
+        closeDecoder();
+        decoderConfig = { ...decoderConfig, description: next.videoConfig };
+        appliedDescription = next.videoConfig;
+      }
+
       const active = ensureDecoder();
-      if (!active) return;
-      source.dequeue();
-      awaitingKeyframe = false;
+      // An errored decoder is closed but still referenced — stop pulling
+      // instead of feeding it doomed decode calls.
+      if (!active || active.state === 'closed') return;
+      // Decode before dequeue: if decode throws, the frame stays buffered
+      // for a later decoder instead of being silently dropped.
       active.decode(
         new EncodedVideoChunk({
           type: next.isKey ? 'key' : 'delta',
@@ -173,6 +204,8 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
           data: next.payload,
         })
       );
+      source.dequeue();
+      awaitingKeyframe = false;
     }
   };
 
@@ -194,7 +227,16 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
         rate,
       };
     }
-    return selfAnchor.timestampUs + (performance.now() - selfAnchor.wallMs) * 1000 * selfAnchor.rate;
+    const clock = selfAnchor.timestampUs + (performance.now() - selfAnchor.wallMs) * 1000 * selfAnchor.rate;
+    // A frame far ahead of the clock is a timeline reset (latency catch-up
+    // skipped groups) — waiting the jump out in real time would freeze
+    // presentation. Re-anchor at the jumped-to frame instead.
+    const next = decoded[0];
+    if (next && next.timestamp - clock > DISCONTINUITY_THRESHOLD_US) {
+      selfAnchor = { timestampUs: next.timestamp, wallMs: performance.now(), rate };
+      return next.timestamp;
+    }
+    return clock;
   };
 
   const present = (): void => {
@@ -258,12 +300,25 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     },
 
     setTrack(nextSource, nextConfig): void {
-      source = nextSource;
+      // A source without a decodable config can never leave
+      // 'waiting-keyframe' — it would retry every tick while the
+      // subscriber's jitter buffer grows unbounded. Fail fast instead.
+      const missingConfig = nextSource !== null && nextConfig === null;
+      source = missingConfig ? null : nextSource;
       decoderConfig = nextConfig;
       awaitingKeyframe = true;
       selfAnchor = null;
+      appliedDescription = null;
       closeDecoder();
-      inner.send({ type: 'status', status: nextSource ? 'waiting-keyframe' : 'idle' });
+      if (missingConfig) {
+        inner.send({
+          type: 'status',
+          status: 'error',
+          error: new Error('video renderer track has no decoder config'),
+        });
+        return;
+      }
+      inner.send({ type: 'status', status: source ? 'waiting-keyframe' : 'idle' });
     },
 
     destroy(): void {

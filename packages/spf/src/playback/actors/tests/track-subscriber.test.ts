@@ -144,6 +144,67 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  it('accumulates cumulative arrival totals for bandwidth sampling', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    handlers.onObject?.(locObject(41, 1, 2_000));
+
+    // Totals are cumulative (not per-object) so a batched observer that
+    // only sees the latest snapshot still accounts for every arrival.
+    const arrivals = subscriber.snapshot.get().context.arrivals!;
+    expect(arrivals.seq).toBe(2);
+    expect(arrivals.totalBytes).toBe(4); // two 2-byte locObject payloads
+    expect(arrivals.totalDurationMs).toBeGreaterThanOrEqual(0);
+
+    subscriber.destroy();
+  });
+
+  it('discards late objects at or behind the drain watermark', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    handlers.onObject?.(locObject(41, 1, 2_000));
+    subscriber.dequeue();
+    subscriber.dequeue();
+
+    // Late arrivals behind what the consumer already took must not
+    // reintroduce an already-consumed prefix at the head of the buffer.
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    handlers.onObject?.(locObject(40, 5, 500));
+    expect(subscriber.peek()).toBeUndefined();
+    expect(subscriber.snapshot.get().context.frameCount).toBe(0);
+
+    // Objects past the watermark still buffer.
+    handlers.onObject?.(locObject(41, 2, 3_000));
+    expect(subscriber.peek()).toMatchObject({ groupId: 41, objectId: 2 });
+
+    subscriber.destroy();
+  });
+
+  it('discards stragglers from groups dropped by skipToLatestGroup', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    handlers.onObject?.(locObject(41, 1, 2_000));
+    handlers.onObject?.(locObject(42, 0, 3_000));
+    expect(subscriber.skipToLatestGroup()).toBe(2);
+
+    // A subgroup stream from the skipped group finishing late must not
+    // land ahead of the keyframe the jump kept.
+    handlers.onObject?.(locObject(41, 2, 2_500));
+    expect(subscriber.peek()).toMatchObject({ groupId: 42, objectId: 0 });
+    expect(subscriber.snapshot.get().context.frameCount).toBe(1);
+
+    subscriber.destroy();
+  });
+
   it('rescales timestamps with the catalog timescale', () => {
     const { session, subscriptions } = createFakeSession();
     const track: MoqTrack = { ...TRACK, moq: { ...TRACK.moq, timescale: 90_000 } };
@@ -191,6 +252,26 @@ describe('createTrackSubscriberActor', () => {
     });
     await vi.waitFor(() => expect(subscriber.snapshot.get().context.status).toBe('error'));
     expect(subscriptions).toHaveLength(2);
+
+    subscriber.destroy();
+  });
+
+  it('errors when auth refresh gives up, without a stale-token retry', async () => {
+    const { session, subscriptions } = createFakeSession();
+    const refreshAuth = vi.fn(async (): Promise<never> => {
+      throw new Error('no fresh token');
+    });
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth });
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 1,
+      reason: 'expired',
+    });
+
+    await vi.waitFor(() => expect(subscriber.snapshot.get().context.status).toBe('error'));
+    expect(refreshAuth).toHaveBeenCalledOnce();
+    expect(subscriptions).toHaveLength(1);
 
     subscriber.destroy();
   });

@@ -28,7 +28,8 @@ function createFakeTransport() {
       return { readable: new ReadableStream<Uint8Array>({ start() {} }), writable: new WritableStream<Uint8Array>() };
     },
     close(info) {
-      closeInfo = info;
+      // Record argument-less closes too, so tests can assert close happened.
+      closeInfo = info ?? {};
       resolveClosed(info);
     },
     closed: new Promise((resolve) => {
@@ -88,17 +89,75 @@ describe('createMoqSessionActor', () => {
     actor.destroy();
   });
 
-  it('fails when the transport cannot connect', async () => {
+  it('fails when the transport cannot connect, closing the half-open transport', async () => {
+    const fake = createFakeTransport();
     const actor = createMoqSessionActor({
       source: makeSource(),
       createTransport: () => ({
-        transport: createFakeTransport().transport,
+        transport: fake.transport,
         ready: Promise.reject(new Error('handshake failed')),
       }),
     });
 
     await vi.waitFor(() => expect(actor.snapshot.get().context.status).toBe('failed'));
     expect(actor.snapshot.get().context.error).toBeInstanceOf(Error);
+    // The rejected `ready` does not close the transport on its own — the
+    // failure path must, or the relay connection leaks.
+    expect(fake.getCloseInfo()).toBeDefined();
+
+    actor.destroy();
+  });
+
+  it('does not connect when destroyed while the auth token is pending', async () => {
+    let resolveToken!: (value: string) => void;
+    const createTransport = vi.fn(makeCreateTransport(createFakeTransport()));
+    const actor = createMoqSessionActor({
+      source: makeSource(),
+      createTransport,
+      authProvider: {
+        getToken: () =>
+          new Promise<string>((resolve) => {
+            resolveToken = resolve;
+          }),
+      },
+    });
+
+    actor.destroy();
+    resolveToken('token');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
+  it('fails without connecting when the source mandates native QUIC', async () => {
+    // MSF §11.1.1: connection=q means native QUIC MUST be used, which the
+    // WebTransport default cannot provide.
+    const webTransportSpy = vi.fn();
+    vi.stubGlobal('WebTransport', webTransportSpy);
+    try {
+      const actor = createMoqSessionActor({ source: makeSource({ connection: 'quic' }) });
+
+      await vi.waitFor(() => expect(actor.snapshot.get().context.status).toBe('failed'));
+      expect(String(actor.snapshot.get().context.error)).toMatch(/QUIC/);
+      expect(webTransportSpy).not.toHaveBeenCalled();
+
+      actor.destroy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('honors a QUIC mandate when a custom transport factory is supplied', async () => {
+    // A non-browser host may legitimately provide native QUIC through the
+    // factory seam — the mandate check must not block it.
+    const fake = createFakeTransport();
+    const actor = createMoqSessionActor({
+      source: makeSource({ connection: 'quic' }),
+      createTransport: makeCreateTransport(fake),
+    });
+
+    fake.sendServerSetup();
+    await vi.waitFor(() => expect(actor.snapshot.get().context.status).toBe('ready'));
 
     actor.destroy();
   });
@@ -139,6 +198,33 @@ describe('createMoqSessionActor', () => {
     expect(refreshed.authorizationTokens?.[0]).toEqual(
       new Uint8Array([0x3, 0x2, ...new TextEncoder().encode('refreshed')])
     );
+
+    actor.destroy();
+  });
+
+  it('rejects refreshAuthToken when the provider cannot supply a fresh token', async () => {
+    const fake = createFakeTransport();
+    const actor = createMoqSessionActor({
+      source: makeSource({ c4mToken: 'stale' }),
+      createTransport: makeCreateTransport(fake),
+      authProvider: { getToken: () => 'stale', refreshToken: () => undefined },
+    });
+
+    // Resolving with the same stale parameters would trigger a pointless
+    // second unauthorized request — give-up must surface as rejection.
+    await expect(actor.refreshAuthToken()).rejects.toThrow(/fresh token/);
+
+    actor.destroy();
+  });
+
+  it('rejects refreshAuthToken without an auth provider', async () => {
+    const fake = createFakeTransport();
+    const actor = createMoqSessionActor({
+      source: makeSource({ c4mToken: 'abc' }),
+      createTransport: makeCreateTransport(fake),
+    });
+
+    await expect(actor.refreshAuthToken()).rejects.toThrow(/fresh token/);
 
     actor.destroy();
   });

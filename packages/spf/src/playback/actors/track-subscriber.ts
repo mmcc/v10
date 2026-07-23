@@ -51,11 +51,13 @@ export interface TrackSubscriberContext {
   oldestTimestampUs?: number;
   latestGroupId?: number;
   /**
-   * Object-arrival throughput sample: the last received object's payload
-   * size and its arrival gap. `seq` increments per sample so a bandwidth
-   * observer can consume each sample exactly once.
+   * Cumulative object-arrival throughput: total payload bytes received and
+   * total inter-arrival time. Cumulative (rather than per-object) so a
+   * microtask-batched observer that sees only the latest snapshot still
+   * accounts for every object — it diffs against its last-consumed totals.
+   * `seq` increments per arrival as a cheap change marker.
    */
-  lastSample?: { seq: number; bytes: number; durationMs: number };
+  arrivals?: { seq: number; totalBytes: number; totalDurationMs: number };
   error?: RequestError | unknown;
   done?: PublishDone;
 }
@@ -73,7 +75,7 @@ export interface CreateTrackSubscriberOptions {
 
 type SubscriberMessage =
   | { type: 'subscribed' }
-  | { type: 'frame-buffered'; frame: JitterFrame; bytes: number; durationMs: number }
+  | { type: 'frame-buffered'; frame: JitterFrame; totalBytes: number; totalDurationMs: number }
   | { type: 'buffer-drained'; frameCount: number; oldestTimestampUs?: number; newestTimestampUs?: number }
   | { type: 'done'; done: PublishDone }
   | { type: 'error'; error: RequestError | unknown };
@@ -107,9 +109,25 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   const frames: JitterFrame[] = [];
   let destroyed = false;
   let sampleSeq = 0;
+  let totalBytes = 0;
+  let totalDurationMs = 0;
   let lastArrivalMs: number | undefined;
   let authRetried = false;
   let subscription: Subscription | undefined;
+
+  // Drain watermark: the consumer has already taken everything at or
+  // behind this (group, object) position. Late arrivals behind it must be
+  // discarded — inserting them at frames[0] would reintroduce an
+  // already-consumed prefix (stale deltas fed to a decoder that moved on;
+  // old audio butt-joined after newer audio). The watermark lives for the
+  // actor's whole lifetime: an actor is bound to one track (the
+  // auth-expiry retry resubscribes the same track), so (group, object)
+  // positions never restart. A different track means a new actor.
+  let lastDrained: { groupId: number; objectId: number } | undefined;
+
+  const isBehindWatermark = (groupId: number, objectId: number): boolean =>
+    lastDrained !== undefined &&
+    (groupId < lastDrained.groupId || (groupId === lastDrained.groupId && objectId <= lastDrained.objectId));
 
   const inner = createTransitionActor<TrackSubscriberContext, SubscriberMessage>(
     { status: 'pending', hasDecodableFrame: false, frameCount: 0 },
@@ -127,7 +145,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             newestTimestampUs: Math.max(context.newestTimestampUs ?? frame.timestampUs, frame.timestampUs),
             oldestTimestampUs: frames[0]?.timestampUs,
             latestGroupId: Math.max(context.latestGroupId ?? frame.groupId, frame.groupId),
-            lastSample: { seq: ++sampleSeq, bytes: message.bytes, durationMs: message.durationMs },
+            arrivals: { seq: ++sampleSeq, totalBytes: message.totalBytes, totalDurationMs: message.totalDurationMs },
           };
         }
         case 'buffer-drained':
@@ -162,6 +180,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
 
   const handleObject = (object: MoqtObject): void => {
     if (destroyed || object.status !== 'normal') return;
+    if (isBehindWatermark(object.groupId, object.objectId)) return;
     const loc = toLocFrame(object, timescale !== undefined ? { timescale } : {});
     if (!loc) return;
     const frame: JitterFrame = { groupId: object.groupId, objectId: object.objectId, ...loc };
@@ -170,7 +189,9 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     const now = performance.now();
     const durationMs = lastArrivalMs === undefined ? 0 : now - lastArrivalMs;
     lastArrivalMs = now;
-    inner.send({ type: 'frame-buffered', frame, bytes: object.payload.byteLength, durationMs });
+    totalBytes += object.payload.byteLength;
+    totalDurationMs += durationMs;
+    inner.send({ type: 'frame-buffered', frame, totalBytes, totalDurationMs });
   };
 
   const notifyDrain = (): void => {
@@ -224,7 +245,10 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
 
     dequeue(): JitterFrame | undefined {
       const frame = frames.shift();
-      if (frame) notifyDrain();
+      if (frame) {
+        lastDrained = { groupId: frame.groupId, objectId: frame.objectId };
+        notifyDrain();
+      }
       return frame;
     },
 
@@ -240,6 +264,11 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
       }
       if (keyIndex <= 0) return 0;
       frames.splice(0, keyIndex);
+      // The jump makes everything before the kept keyframe stale —
+      // including stragglers that have not arrived yet — so the watermark
+      // sits just before it, not at the last spliced-out frame.
+      const kept = frames[0]!;
+      lastDrained = { groupId: kept.groupId, objectId: kept.objectId - 1 };
       notifyDrain();
       return keyIndex;
     },
