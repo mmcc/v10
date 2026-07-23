@@ -1,4 +1,5 @@
 export { isMoqSourceUrl } from '../../../media/moq/parse-source';
+export { isResolvedPresentation } from '../../../media/types';
 export type { CreateMoqTransport, MoqAuthProvider } from '../../actors/moq-session';
 export type { LatencyControlConfig, PlayoutState } from '../../behaviors/sync-latency';
 export type { MoqAudioContext, MoqMediaAPI, MoqMediaOptions, MoqMediaProps } from './adapter';

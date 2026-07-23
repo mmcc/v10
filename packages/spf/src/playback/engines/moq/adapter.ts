@@ -27,11 +27,13 @@ import {
 
 /**
  * The `AudioContextLike` render seam plus the lifecycle surface the
- * adapter drives (`resume`/`suspend` on play/pause, `close` on destroy).
+ * adapter drives (`resume`/`suspend` on play/pause, `close` on destroy)
+ * and the `createGain` factory backing the facade's `volume`/`muted`.
  * `AudioContext` satisfies it structurally.
  */
 export interface MoqAudioContext extends AudioContextLike {
   readonly state: AudioContextState;
+  createGain(): GainNode;
   resume(): Promise<void>;
   suspend(): Promise<void>;
   close(): Promise<void>;
@@ -72,6 +74,9 @@ export interface MoqMediaAPI extends MoqMediaProps {
   play(): Promise<void>;
   pause(): void;
   readonly paused: boolean;
+  /** Output gain, clamped to [0, 1]. Applied through a GainNode ahead of the destination. */
+  volume: number;
+  muted: boolean;
   /** Media time from the audio master clock, in seconds. */
   readonly currentTime: number;
   /** Live streams have no bounded duration. */
@@ -100,6 +105,10 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     #preload: MoqMediaProps['preload'] = moqMediaDefaultProps.preload;
     readonly #createAudioContext: () => MoqAudioContext;
     #audioContext: MoqAudioContext | undefined;
+    #volume = 1;
+    #muted = false;
+    #gain: GainNode | undefined;
+    #renderContext: AudioContextLike | undefined;
 
     constructor(...args: any[]) {
       super(...args);
@@ -157,7 +166,30 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       } else if (this.paused && audioContext.state === 'running') {
         void audioContext.suspend();
       }
-      this.#signals.context.audioContext.set(audioContext);
+      this.#signals.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
+    }
+
+    /**
+     * Renderer-facing view of the audio context whose `destination` is a
+     * GainNode implementing `volume`/`muted` — the renderer connects its
+     * sources to `destination`, so routing that through the gain gives
+     * the facade volume control without a renderer seam.
+     */
+    #createRenderContext(audioContext: MoqAudioContext): AudioContextLike {
+      const gain = (this.#gain = audioContext.createGain());
+      gain.connect(audioContext.destination);
+      gain.gain.value = this.#muted ? 0 : this.#volume;
+      return {
+        get currentTime() {
+          return audioContext.currentTime;
+        },
+        get destination() {
+          return gain;
+        },
+        createBuffer: (numberOfChannels, length, sampleRate) =>
+          audioContext.createBuffer(numberOfChannels, length, sampleRate),
+        createBufferSource: () => audioContext.createBufferSource(),
+      };
     }
 
     detach(): void {
@@ -188,6 +220,28 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       return this.#signals.state.paused.get() ?? true;
     }
 
+    get volume(): number {
+      return this.#volume;
+    }
+
+    set volume(value: number) {
+      this.#volume = Math.min(1, Math.max(0, value));
+      this.#applyGain();
+    }
+
+    get muted(): boolean {
+      return this.#muted;
+    }
+
+    set muted(value: boolean) {
+      this.#muted = value;
+      this.#applyGain();
+    }
+
+    #applyGain(): void {
+      if (this.#gain) this.#gain.gain.value = this.#muted ? 0 : this.#volume;
+    }
+
     get currentTime(): number {
       return this.#signals.state.currentTime.get() ?? 0;
     }
@@ -205,6 +259,8 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       void this.#engine.destroy();
       void this.#audioContext?.close();
       this.#audioContext = undefined;
+      this.#gain = undefined;
+      this.#renderContext = undefined;
     }
   }
 
