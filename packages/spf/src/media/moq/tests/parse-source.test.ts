@@ -65,6 +65,18 @@ describe('decodeNamespaceName', () => {
     expect(() => decodeNamespaceName('ab--t.')).toThrow();
   });
 
+  it('decodes multi-byte UTF-8 escapes as bytes, not code units', () => {
+    expect(decodeNamespaceName('caf.c3.a9--t')).toEqual({
+      namespace: ['café'],
+      trackName: 't',
+    });
+  });
+
+  it('rejects escape sequences that are not valid UTF-8', () => {
+    expect(() => decodeNamespaceName('a.c3--t')).toThrow(/invalid UTF-8/); // truncated sequence
+    expect(() => decodeNamespaceName('a.ff--t')).toThrow(/invalid UTF-8/);
+  });
+
   it('rejects identifiers without the -- delimiter', () => {
     expect(() => decodeNamespaceName('just-a-namespace')).toThrow();
   });
@@ -76,6 +88,14 @@ describe('encodeNamespaceName', () => {
     expect(decodeNamespaceName(encoded)).toEqual({
       namespace: ['example.net', 'team-2'],
       trackName: 'hi res',
+    });
+  });
+
+  it('escapes non-ASCII names per UTF-8 byte and round-trips them', () => {
+    expect(encodeNamespaceName(['café'], '中文')).toBe('caf.c3.a9--.e4.b8.ad.e6.96.87');
+    expect(decodeNamespaceName(encodeNamespaceName(['café'], '中文'))).toEqual({
+      namespace: ['café'],
+      trackName: '中文',
     });
   });
 });

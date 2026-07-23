@@ -73,6 +73,8 @@ export interface MoqCatalog {
   generatedAt?: number;
   isComplete?: boolean;
   tracks: MoqCatalogTrack[];
+  /** Retained init-data map so delta-added tracks can resolve initRef (§5.3). */
+  initDataList?: Map<string, Uint8Array>;
 }
 
 /** Fields of the moq-specific side-channel carried on each live track. */
@@ -179,6 +181,56 @@ function parseInitDataList(raw: unknown): Map<string, Uint8Array> {
   return initData;
 }
 
+/**
+ * Extract only the fields present in a raw track entry — no defaults.
+ * Clone operations layer this partial over the parent so inherited values
+ * survive (§5.1.6: a clone inherits all attributes except Track Name).
+ */
+function parseCatalogTrackFields(
+  raw: Record<string, unknown>,
+  initDataList: Map<string, Uint8Array>
+): Partial<MoqCatalogTrack> {
+  const number = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
+  const initRef = isString(raw.initRef) ? raw.initRef : undefined;
+
+  const fields: Partial<MoqCatalogTrack> = {};
+  if (isString(raw.name)) fields.name = raw.name;
+  if (isString(raw.namespace)) fields.namespace = parseNamespaceString(raw.namespace);
+  if (isString(raw.packaging)) fields.packaging = raw.packaging;
+  if (typeof raw.isLive === 'boolean') fields.isLive = raw.isLive;
+  if (isString(raw.role)) fields.role = raw.role;
+  if (isString(raw.label)) fields.label = raw.label;
+  if (isString(raw.lang)) fields.language = raw.lang;
+  if (isString(raw.codec)) fields.codec = raw.codec;
+  if (isString(raw.mimeType)) fields.mimeType = raw.mimeType;
+  if (isString(raw.channelConfig)) fields.channelConfig = raw.channelConfig;
+  fields.bitrate = number(raw.bitrate);
+  fields.avgBitrate = number(raw.avgBitrate);
+  fields.width = number(raw.width);
+  fields.height = number(raw.height);
+  fields.framerate = number(raw.framerate);
+  fields.timescale = number(raw.timescale);
+  fields.samplerate = number(raw.samplerate);
+  fields.renderGroup = number(raw.renderGroup);
+  fields.altGroup = number(raw.altGroup);
+  fields.targetLatency = number(raw.targetLatency);
+  fields.maxGopDuration = number(raw.maxGopDuration);
+  fields.maxGroupDuration = number(raw.maxGroupDuration);
+  fields.temporalId = number(raw.temporalId);
+  fields.spatialId = number(raw.spatialId);
+  if (isPlainObject(raw.buffers)) {
+    fields.buffers = {
+      target: number(raw.buffers.target),
+      min: number(raw.buffers.min),
+      max: number(raw.buffers.max),
+    };
+  }
+  if (Array.isArray(raw.depends)) fields.dependencies = raw.depends.filter(isString);
+  if (initRef) fields.initData = initDataList.get(initRef);
+  if (isPlainObject(raw.authInfo)) fields.authInfo = raw.authInfo;
+  return fields;
+}
+
 function parseCatalogTrack(
   raw: Record<string, unknown>,
   fallbackNamespace: string[],
@@ -186,53 +238,24 @@ function parseCatalogTrack(
 ): MoqCatalogTrack | null {
   const name = raw.name;
   if (!isString(name)) return null;
-
-  const namespace = isString(raw.namespace) ? parseNamespaceString(raw.namespace) : fallbackNamespace;
-  const number = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
-  const initRef = isString(raw.initRef) ? raw.initRef : undefined;
-
-  const track: MoqCatalogTrack = {
-    namespace,
+  return {
+    namespace: fallbackNamespace,
+    packaging: '',
+    isLive: false,
+    ...parseCatalogTrackFields(raw, initDataList),
     name,
-    packaging: isString(raw.packaging) ? raw.packaging : '',
-    isLive: raw.isLive === true,
   };
-  if (isString(raw.role)) track.role = raw.role;
-  if (isString(raw.label)) track.label = raw.label;
-  if (isString(raw.lang)) track.language = raw.lang;
-  if (isString(raw.codec)) track.codec = raw.codec;
-  if (isString(raw.mimeType)) track.mimeType = raw.mimeType;
-  if (isString(raw.channelConfig)) track.channelConfig = raw.channelConfig;
-  track.bitrate = number(raw.bitrate);
-  track.avgBitrate = number(raw.avgBitrate);
-  track.width = number(raw.width);
-  track.height = number(raw.height);
-  track.framerate = number(raw.framerate);
-  track.timescale = number(raw.timescale);
-  track.samplerate = number(raw.samplerate);
-  track.renderGroup = number(raw.renderGroup);
-  track.altGroup = number(raw.altGroup);
-  track.targetLatency = number(raw.targetLatency);
-  track.maxGopDuration = number(raw.maxGopDuration);
-  track.maxGroupDuration = number(raw.maxGroupDuration);
-  track.temporalId = number(raw.temporalId);
-  track.spatialId = number(raw.spatialId);
-  if (isPlainObject(raw.buffers)) {
-    track.buffers = {
-      target: number(raw.buffers.target),
-      min: number(raw.buffers.min),
-      max: number(raw.buffers.max),
-    };
-  }
-  if (Array.isArray(raw.depends)) track.dependencies = raw.depends.filter(isString);
-  if (initRef) track.initData = initDataList.get(initRef);
-  if (isPlainObject(raw.authInfo)) track.authInfo = raw.authInfo;
-  return track;
 }
 
 // ============================================================================
 // Catalog updates (independent + delta)
 // ============================================================================
+
+// §5.1.1: a subscriber MUST NOT parse a catalog version it does not
+// understand; versions follow the 'draft-XX' convention. The bare '1' is a
+// lenient interop alias seen in early catalogs. (Interop check pending —
+// verify which form publishers actually emit.)
+const SUPPORTED_MSF_VERSIONS = new Set(['draft-01', '1']);
 
 export interface MoqCatalogUpdateOptions {
   /** Namespace of the catalog track itself — inherited by tracks that omit one (§5.2.2). */
@@ -259,10 +282,14 @@ export function applyMoqCatalogUpdate(
   if (raw.deltaUpdate !== undefined) {
     if (!current) throw new Error('MSF delta update received with no prior catalog');
     if (!Array.isArray(raw.deltaUpdate)) throw new Error('MSF deltaUpdate is not an array');
-    return applyDelta(current, raw.deltaUpdate, options);
+    const initDataList = new Map([...(current.initDataList ?? []), ...parseInitDataList(raw.initDataList)]);
+    return applyDelta(current, raw.deltaUpdate, options, initDataList);
   }
 
   if (!isString(raw.version)) throw new Error('MSF catalog is missing its version');
+  if (!SUPPORTED_MSF_VERSIONS.has(raw.version)) {
+    throw new Error(`unsupported MSF catalog version ${raw.version}`);
+  }
   if (!Array.isArray(raw.tracks)) throw new Error('MSF catalog is missing its tracks array');
 
   const initDataList = parseInitDataList(raw.initDataList);
@@ -271,13 +298,18 @@ export function applyMoqCatalogUpdate(
     .map((entry) => parseCatalogTrack(entry, options.catalogNamespace, initDataList))
     .filter((track): track is MoqCatalogTrack => track !== null);
 
-  const catalog: MoqCatalog = { version: raw.version, tracks };
+  const catalog: MoqCatalog = { version: raw.version, tracks, initDataList };
   if (typeof raw.generatedAt === 'number') catalog.generatedAt = raw.generatedAt;
   if (raw.isComplete === true) catalog.isComplete = true;
   return catalog;
 }
 
-function applyDelta(current: MoqCatalog, operations: unknown[], options: MoqCatalogUpdateOptions): MoqCatalog {
+function applyDelta(
+  current: MoqCatalog,
+  operations: unknown[],
+  options: MoqCatalogUpdateOptions,
+  initDataList: Map<string, Uint8Array>
+): MoqCatalog {
   let tracks = [...current.tracks];
   const keyOf = (namespace: readonly string[], name: string) => moqTrackId(namespace, name);
 
@@ -289,7 +321,7 @@ function applyDelta(current: MoqCatalog, operations: unknown[], options: MoqCata
     switch (operation.op) {
       case 'add': {
         for (const entry of entries) {
-          const track = parseCatalogTrack(entry, options.catalogNamespace, new Map());
+          const track = parseCatalogTrack(entry, options.catalogNamespace, initDataList);
           if (track) tracks.push(track);
         }
         break;
@@ -318,8 +350,8 @@ function applyDelta(current: MoqCatalog, operations: unknown[], options: MoqCata
             (track) => keyOf(track.namespace, track.name) === keyOf(parentNamespace, entry.parentName as string)
           );
           if (!parent) throw new Error(`MSF clone operation references unknown parent ${entry.parentName}`);
-          const overrides = parseCatalogTrack(entry, options.catalogNamespace, new Map());
-          if (!overrides || overrides.name === parent.name) {
+          const overrides = parseCatalogTrackFields(entry, initDataList);
+          if (!isString(overrides.name) || overrides.name === parent.name) {
             throw new Error('MSF clone operation requires a new track name');
           }
           tracks.push({ ...parent, ...pruneUndefined(overrides) });
@@ -330,7 +362,7 @@ function applyDelta(current: MoqCatalog, operations: unknown[], options: MoqCata
         throw new Error(`unknown MSF delta operation ${operation.op}`);
     }
   }
-  return { ...current, tracks };
+  return { ...current, tracks, initDataList };
 }
 
 function pruneUndefined<T extends object>(value: T): Partial<T> {

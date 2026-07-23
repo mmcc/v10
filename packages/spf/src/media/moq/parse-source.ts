@@ -63,12 +63,13 @@ const LOWER_HEX = /^[0-9a-f]{2}$/;
 
 /**
  * Decode one MSF-encoded namespace field or track name: literal
- * `[a-zA-Z0-9_]` bytes plus `.xx` lowercase-hex escapes for everything
- * else. Rejects malformed and non-canonical encodings (uppercase hex,
- * redundant escapes of literal characters) per moq-transport §1.5.1.
+ * `[a-zA-Z0-9_]` bytes plus `.xx` lowercase-hex escapes for every other
+ * UTF-8 byte (tuples are byte strings, §11.1.2). Rejects malformed and
+ * non-canonical encodings (uppercase hex, redundant escapes of literal
+ * characters, invalid UTF-8) per moq-transport §1.5.1.
  */
 function decodeNameComponent(encoded: string): string {
-  let out = '';
+  const bytes: number[] = [];
   for (let i = 0; i < encoded.length; i++) {
     const char = encoded[i]!;
     if (char === '.') {
@@ -76,32 +77,31 @@ function decodeNameComponent(encoded: string): string {
       if (!LOWER_HEX.test(hex)) {
         throw new Error(`invalid MSF name encoding: bad escape in ${JSON.stringify(encoded)}`);
       }
-      const decoded = String.fromCharCode(Number.parseInt(hex, 16));
-      if (LITERAL_CHAR.test(decoded)) {
+      const byte = Number.parseInt(hex, 16);
+      if (LITERAL_CHAR.test(String.fromCharCode(byte))) {
         throw new Error(`invalid MSF name encoding: redundant escape .${hex}`);
       }
-      out += decoded;
+      bytes.push(byte);
       i += 2;
     } else if (LITERAL_CHAR.test(char)) {
-      out += char;
+      bytes.push(char.charCodeAt(0));
     } else {
       throw new Error(`invalid MSF name encoding: unexpected character ${JSON.stringify(char)}`);
     }
   }
-  return out;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    throw new Error(`invalid MSF name encoding: invalid UTF-8 in ${JSON.stringify(encoded)}`);
+  }
 }
 
 /** Encode one namespace field or track name into the MSF string form. */
 export function encodeNameComponent(value: string): string {
   let out = '';
-  for (const char of value) {
-    if (LITERAL_CHAR.test(char)) {
-      out += char;
-    } else {
-      for (let i = 0; i < char.length; i++) {
-        out += `.${char.charCodeAt(i).toString(16).padStart(2, '0')}`;
-      }
-    }
+  for (const byte of new TextEncoder().encode(value)) {
+    const char = String.fromCharCode(byte);
+    out += LITERAL_CHAR.test(char) ? char : `.${byte.toString(16).padStart(2, '0')}`;
   }
   return out;
 }
