@@ -317,18 +317,24 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
 export function decodeLocationFilter(bytes: Uint8Array): LocationFilter {
   const reader = new ByteReader(bytes);
   const type = reader.readVarint();
-  switch (type) {
-    case LOCATION_FILTER_TYPE['next-group-start']:
-      return { type: 'next-group-start' };
-    case LOCATION_FILTER_TYPE['largest-object']:
-      return { type: 'largest-object' };
-    case LOCATION_FILTER_TYPE['absolute-start']:
-      return { type: 'absolute-start', start: readLocation(reader) };
-    case LOCATION_FILTER_TYPE['absolute-range']:
-      return { type: 'absolute-range', start: readLocation(reader), endGroupDelta: reader.readVarint() };
-    default:
-      throw new MoqtProtocolError(`unknown location filter type ${type}`);
+  const filter = ((): LocationFilter => {
+    switch (type) {
+      case LOCATION_FILTER_TYPE['next-group-start']:
+        return { type: 'next-group-start' };
+      case LOCATION_FILTER_TYPE['largest-object']:
+        return { type: 'largest-object' };
+      case LOCATION_FILTER_TYPE['absolute-start']:
+        return { type: 'absolute-start', start: readLocation(reader) };
+      case LOCATION_FILTER_TYPE['absolute-range']:
+        return { type: 'absolute-range', start: readLocation(reader), endGroupDelta: reader.readVarint() };
+      default:
+        throw new MoqtProtocolError(`unknown location filter type ${type}`);
+    }
+  })();
+  if (reader.remaining !== 0) {
+    throw new MoqtProtocolError('location filter has trailing bytes');
   }
+  return filter;
 }
 
 // ============================================================================
@@ -942,7 +948,11 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
       };
     }
     case MESSAGE_TYPE.FETCH_OK: {
-      const endOfTrack = reader.readUint8() === 1;
+      const endOfTrackWire = reader.readUint8();
+      if (endOfTrackWire > 1) {
+        throw new MoqtProtocolError(`invalid FETCH_OK end-of-track value ${endOfTrackWire}`);
+      }
+      const endOfTrack = endOfTrackWire === 1;
       const endLocation = readLocation(reader);
       const parameters = decodeMessageParameters(reader);
       return {

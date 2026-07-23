@@ -148,6 +148,18 @@ function createFakeTransport() {
       void writer.write(bytes).then(() => writer.close());
       incomingUni.push(pipe.readable);
     },
+    /** Open a unidirectional data stream the test writes to (and may reset). */
+    openControlledDataStream(): { write(bytes: Uint8Array): Promise<void>; reset(error: unknown): void } {
+      const pipe = new TransformStream<Uint8Array, Uint8Array>();
+      const writer = pipe.writable.getWriter();
+      incomingUni.push(pipe.readable);
+      return {
+        write: (bytes) => writer.write(bytes),
+        reset: (error) => {
+          writer.abort(error).catch(() => {});
+        },
+      };
+    },
     openIncomingBidi(bytes: Uint8Array): { responses: Promise<Uint8Array[]> } {
       const serverToClient = new TransformStream<Uint8Array, Uint8Array>();
       const clientToServer = new TransformStream<Uint8Array, Uint8Array>();
@@ -376,6 +388,73 @@ describe('createMoqtSession', () => {
     await vi.waitFor(() => expect(onEnd).toHaveBeenCalled());
 
     harness.session.destroy();
+  });
+
+  it('rejects ready when the session closes before the server SETUP', async () => {
+    const harness = createSessionHarness();
+    harness.session.close();
+    await expect(harness.session.ready).rejects.toThrow('session closed before server SETUP');
+  });
+
+  it('reports a reset fetch stream as onReset, not a clean onEnd', async () => {
+    const harness = createSessionHarness();
+    harness.sendServerSetup();
+
+    const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+    const subscribeStream = await harness.nextRequestStream();
+    await subscribeStream.firstMessage;
+
+    const entries: unknown[] = [];
+    const onEnd = vi.fn();
+    const onReset = vi.fn();
+    harness.session.fetch(
+      { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
+      { onEntry: (entry) => entries.push(entry), onEnd, onReset }
+    );
+    const fetchStream = await harness.nextRequestStream();
+    await fetchStream.firstMessage;
+
+    // Fetch data stream: header + one full entry, then a reset mid-replay.
+    const writer = new ByteWriter();
+    writer.writeVarint(0x05);
+    writer.writeVarint(2); // fetch request id
+    writer.writeVarint(0x1c); // group delta + object delta + priority present
+    writer.writeVarint(41);
+    writer.writeVarint(0);
+    writer.writeUint8(128);
+    const payload = utf8Encode('{"version":"1"}');
+    writer.writeVarint(payload.length);
+    writer.writeBytes(payload);
+    const dataStream = harness.openControlledDataStream();
+    await dataStream.write(writer.toBytes());
+    await vi.waitFor(() => expect(entries).toHaveLength(1));
+    dataStream.reset(new Error('reset mid-replay'));
+
+    await vi.waitFor(() => expect(onReset).toHaveBeenCalled());
+    expect(onEnd).not.toHaveBeenCalled();
+
+    harness.session.destroy();
+  });
+
+  it('treats a truncated response frame on a request stream as a protocol error', async () => {
+    const onClosed = vi.fn();
+    const harness = createSessionHarness({ onClosed });
+    harness.sendServerSetup();
+    await harness.session.ready;
+
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' });
+    const request = await harness.nextRequestStream();
+    await request.firstMessage;
+
+    // A frame header promising a 100-byte body, then FIN with none of it.
+    const partial = new ByteWriter();
+    partial.writeVarint(0x04);
+    partial.writeUint16(100);
+    await request.send(partial.toBytes());
+    await request.fin();
+
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
+    expect(harness.getCloseInfo()).toMatchObject({ closeCode: 0x3 });
   });
 
   it('reports GOAWAY from the control stream', async () => {

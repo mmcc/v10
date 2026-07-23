@@ -177,6 +177,22 @@ describe('readSubgroupObjects', () => {
     await expect(collect(readSubgroupObjects(reader, header))).rejects.toThrow(MoqtProtocolError);
   });
 
+  it('throws MoqtProtocolError when delta-decoded object IDs overflow the varint range', async () => {
+    const bytes = encodeSubgroupStream({
+      type: 0x38,
+      trackAlias: 1,
+      groupId: 7,
+      objects: [
+        { objectIdDelta: Number.MAX_SAFE_INTEGER, payload: utf8Encode('a') },
+        { objectIdDelta: 0, payload: utf8Encode('b') }, // 2^53-1 + 0 + 1 overflows
+      ],
+    });
+    const reader = new StreamReader(streamOf(bytes));
+    await reader.readVarint();
+    const header = await readSubgroupHeader(reader, 0x38);
+    await expect(collect(readSubgroupObjects(reader, header))).rejects.toThrow(MoqtProtocolError);
+  });
+
   it('parses per-object properties when the header PROPERTIES bit is set', async () => {
     // Properties KVP: type 0x06 (Timestamp), varint value 90000.
     const props = new ByteWriter();
@@ -259,6 +275,28 @@ describe('readFetchEntries', () => {
   it('rejects a first object that references the prior object', async () => {
     const bytes = encodeFetchStream((w) => {
       w.writeVarint(0x00); // no group/object deltas on the first object
+    });
+    const reader = new StreamReader(streamOf(bytes));
+    await reader.readVarint();
+    await readFetchHeader(reader);
+    await expect(collect(readFetchEntries(reader))).rejects.toThrow(MoqtProtocolError);
+  });
+
+  it('rejects delta-decoded locations that overflow the varint range', async () => {
+    const bytes = encodeFetchStream((w) => {
+      // First object: absolute group at the varint ceiling.
+      w.writeVarint(0x1c);
+      w.writeVarint(Number.MAX_SAFE_INTEGER); // group id (absolute)
+      w.writeVarint(0); // object id (absolute)
+      w.writeUint8(100); // priority
+      w.writeVarint(1); // payload length
+      w.writeBytes(utf8Encode('a'));
+      // Second object: group delta 0 → 2^53-1 + 0 + 1 overflows.
+      w.writeVarint(0x0c);
+      w.writeVarint(0); // group delta
+      w.writeVarint(0); // object id
+      w.writeVarint(1);
+      w.writeBytes(utf8Encode('b'));
     });
     const reader = new StreamReader(streamOf(bytes));
     await reader.readVarint();

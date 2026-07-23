@@ -139,6 +139,8 @@ export interface FetchHandlers {
   onEntry?(entry: FetchStreamEntry): void;
   /** The fetch data stream finished cleanly (FIN). */
   onEnd?(): void;
+  /** The fetch data stream was reset — delivered entries may be incomplete. */
+  onReset?(info: { error: unknown }): void;
   onGoaway?(goaway: Goaway): void;
 }
 
@@ -278,6 +280,7 @@ class MoqtSessionImpl implements MoqtSession {
   #aliasWaiters = new Map<number, AliasWaiter[]>();
 
   #resolveReady!: () => void;
+  #rejectReady!: (error: unknown) => void;
   #controlWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
   #receivedServerSetup = false;
   #receivedControlGoaway = false;
@@ -287,9 +290,12 @@ class MoqtSessionImpl implements MoqtSession {
     this.#transport = transport;
     this.#config = config;
     this.#callbacks = config.callbacks ?? {};
-    this.ready = new Promise((resolve) => {
+    this.ready = new Promise((resolve, reject) => {
       this.#resolveReady = resolve;
+      this.#rejectReady = reject;
     });
+    // Consumers may observe readiness through `onClosed` alone.
+    this.ready.catch(() => {});
 
     void this.#start();
   }
@@ -339,6 +345,9 @@ class MoqtSessionImpl implements MoqtSession {
   #handleClosed(error: unknown): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    if (!this.#receivedServerSetup) {
+      this.#rejectReady(error ?? new MoqtProtocolError('session closed before server SETUP'));
+    }
     for (const waiters of this.#aliasWaiters.values()) {
       for (const waiter of waiters) {
         clearTimeout(waiter.timer);
@@ -720,7 +729,9 @@ class MoqtSessionImpl implements MoqtSession {
       record.handlers.onEnd?.();
     } catch (error) {
       if (isMoqtProtocolError(error)) throw error;
-      record.handlers.onEnd?.();
+      // A reset mid-replay means entries may be missing — never report it
+      // as the clean FIN `onEnd` promises.
+      record.handlers.onReset?.({ error });
     }
   }
 
