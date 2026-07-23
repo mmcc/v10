@@ -1,4 +1,4 @@
 [tools]
 1password = "latest"
 node = "latest"
-pnpm = "latest"
+pnpm = "10.17.0"
