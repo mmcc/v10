@@ -41,7 +41,6 @@ describe('setupAudioRenderer', () => {
   function setupSetupAudioRenderer() {
     const state = {
       playoutRate: signal<number | undefined>(undefined),
-      paused: signal<boolean | undefined>(undefined),
       currentTime: signal<number | undefined>(undefined),
     };
     const context = {
@@ -53,7 +52,7 @@ describe('setupAudioRenderer', () => {
     return { state, context, reactor };
   }
 
-  it('gates getPlaybackRate to 0 while paused', async () => {
+  it('keeps getPlaybackRate at the playout rate (pause is handled by AudioContext suspension)', async () => {
     vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
     const { state, reactor } = setupSetupAudioRenderer();
 
@@ -61,14 +60,9 @@ describe('setupAudioRenderer', () => {
     const { getPlaybackRate } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
 
     expect(getPlaybackRate!()).toBe(1);
+    // Rate must stay positive even through a pause: a rate of 0 would
+    // schedule an infinite clock segment (duration ÷ 0) and dead sources.
     state.playoutRate.set(1.05);
-    expect(getPlaybackRate!()).toBe(1.05);
-
-    state.paused.set(true);
-    expect(getPlaybackRate!()).toBe(0);
-
-    // Resume returns to the playout rate, not a reset default.
-    state.paused.set(false);
     expect(getPlaybackRate!()).toBe(1.05);
 
     reactor.destroy();

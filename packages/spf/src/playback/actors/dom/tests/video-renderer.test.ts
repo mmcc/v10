@@ -303,4 +303,88 @@ describe('createVideoRendererActor', () => {
       renderer.destroy();
     }
   });
+
+  it('self-clock freezes on pause even when the decoded queue is empty', async () => {
+    const frames = await encodeTestFrames(3);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let playbackRate = 1;
+    const renderer = createVideoRendererActor({ canvas, getPlaybackRate: () => playbackRate });
+    const lastPresented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    // Source the test tops up mid-run, so the decoded queue can drain to
+    // empty before the pause lands.
+    const queue: JitterFrame[] = [frames[0]!];
+    const source: VideoFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+
+    try {
+      renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(lastPresented()).toBe(0), { timeout: 5000 });
+
+      // Pause with nothing decoded: the rate change must fold into the
+      // anchor on the next presentation tick, not when a frame arrives.
+      playbackRate = 0;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      now += 5_000; // 5s of wall time passes mid-pause
+
+      // Frames arriving during the pause hold — a stale anchor would put
+      // the clock ~5s ahead and present them immediately.
+      queue.push(frames[1]!, frames[2]!);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(lastPresented()).toBe(0);
+
+      // Resume: the clock continues from the hold point, so the next frame
+      // is due only after its own duration elapses.
+      playbackRate = 1;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      now += 50;
+      await vi.waitFor(() => expect(lastPresented()).toBe(FRAME_DURATION_US), { timeout: 5000 });
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('self-clock does not re-anchor across a discontinuity while paused', async () => {
+    const frames = await encodeTestFrames(4);
+    // The live edge keeps moving during a pause: frames arriving mid-pause
+    // land far ahead of the held clock.
+    const JUMP_US = 5_000_000;
+    const jumped = frames.map((frame, i) =>
+      i < 1 ? frame : { ...frame, timestampUs: JUMP_US + (i - 1) * FRAME_DURATION_US }
+    );
+
+    const canvas = document.createElement('canvas');
+    const now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let playbackRate = 1;
+    const renderer = createVideoRendererActor({ canvas, getPlaybackRate: () => playbackRate });
+    const lastPresented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    const queue: JitterFrame[] = [jumped[0]!];
+    const source: VideoFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+
+    try {
+      renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(lastPresented()).toBe(0), { timeout: 5000 });
+
+      playbackRate = 0;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Far-ahead frames arriving mid-pause must not trigger the
+      // discontinuity re-anchor — that would present them while paused.
+      queue.push(jumped[1]!, jumped[2]!, jumped[3]!);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(lastPresented()).toBe(0);
+
+      // On resume the discontinuity re-anchor kicks in and presentation
+      // jumps to the live edge instead of freezing for ~5s of wall time.
+      playbackRate = 1;
+      await vi.waitFor(() => expect(lastPresented()).toBeGreaterThanOrEqual(JUMP_US), { timeout: 5000 });
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
 });

@@ -179,6 +179,8 @@ function createFakeTransport() {
       return { responses };
     },
     getCloseInfo: () => closeInfo,
+    /** Simulate a transport-side drop (peer/network close, not a local `close()`). */
+    dropTransport: () => resolveClosed(undefined),
   };
 }
 
@@ -394,6 +396,29 @@ describe('createMoqtSession', () => {
     const harness = createSessionHarness();
     harness.session.close();
     await expect(harness.session.ready).rejects.toThrow('session closed before server SETUP');
+  });
+
+  it('reports a transport drop before the server SETUP as an error close', async () => {
+    const onClosed = vi.fn();
+    const harness = createSessionHarness({ onClosed });
+    harness.dropTransport();
+
+    // Callback-only consumers must observe the failure too — a clean
+    // `onClosed({})` would read as a normal session close.
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
+    expect(onClosed).toHaveBeenCalledWith({
+      error: expect.objectContaining({ message: 'session closed before server SETUP' }),
+    });
+    await expect(harness.session.ready).rejects.toThrow('session closed before server SETUP');
+  });
+
+  it('reports a local close() before the server SETUP as a clean close', async () => {
+    const onClosed = vi.fn();
+    const harness = createSessionHarness({ onClosed });
+    harness.session.close();
+
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
+    expect(onClosed).toHaveBeenCalledWith({});
   });
 
   it('reports a reset fetch stream as onReset, not a clean onEnd', async () => {

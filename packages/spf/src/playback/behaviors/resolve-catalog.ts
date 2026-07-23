@@ -174,18 +174,22 @@ function setupResolveCatalog({
                   // subscription + joining fetch with fresh parameters.
                   if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN && !authRetried) {
                     authRetried = true;
-                    void actor.refreshAuthToken().then(
-                      (refreshed) => {
+                    // `.catch()` after `.then()` (not a rejection handler on
+                    // the same `.then()`) so a synchronous throw from
+                    // `start()` is contained rather than becoming an
+                    // unhandled rejection.
+                    void actor
+                      .refreshAuthToken()
+                      .then((refreshed) => {
                         if (cancelled) return;
                         fetchHandle?.cancel();
                         subscription?.cancel();
                         start(refreshed);
-                      },
-                      (refreshError) => {
+                      })
+                      .catch((refreshError) => {
                         // TODO(error-management): route to a state-error slot once one exists.
                         console.error('[resolveCatalog] auth refresh failed:', refreshError);
-                      }
-                    );
+                      });
                     return;
                   }
                   // TODO(error-management): route to a state-error slot once one exists.

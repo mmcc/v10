@@ -73,7 +73,6 @@ function setupAudioRendererSetup({
 }: {
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
-    paused: ReadonlySignal<boolean | undefined>;
     currentTime: Signal<number | undefined>;
   };
   context: {
@@ -96,9 +95,12 @@ function setupAudioRendererSetup({
           () => {
             const renderer = createAudioRendererActor({
               audioContext: context.audioContext.get()!,
-              // Rate 0 while paused for consistency with the video leg —
-              // the adapter also suspends the AudioContext on pause.
-              getPlaybackRate: () => (peek(state.paused) ? 0 : (peek(state.playoutRate) ?? 1)),
+              // No paused gating here: the adapter suspends the
+              // AudioContext on pause, which freezes the hardware clock and
+              // every scheduled source. Rate 0 would instead produce an
+              // infinite clock segment (duration ÷ 0) and sources whose
+              // `playbackRate` stays 0 after resume — a permanent stall.
+              getPlaybackRate: () => peek(state.playoutRate) ?? 1,
             });
             context.audioRendererActor.set(renderer);
             return () => {
@@ -138,7 +140,7 @@ function setupAudioRendererSetup({
  * const reactor = setupAudioRenderer.setup({ state, context });
  */
 export const setupAudioRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'paused', 'currentTime'],
+  stateKeys: ['playoutRate', 'currentTime'],
   contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor'],
   setup: setupAudioRendererSetup,
 });
