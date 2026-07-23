@@ -155,6 +155,21 @@ describe('parseMoqCatalog', () => {
     expect(() => parseMoqCatalog(JSON.stringify({ tracks: [] }), { url: SOURCE_URL })).toThrow();
     expect(() => parseMoqCatalog(JSON.stringify({ version: '1' }), { url: SOURCE_URL })).toThrow();
   });
+
+  it('rejects catalog versions it does not understand (§5.1.1)', () => {
+    expect(() => parseMoqCatalog(JSON.stringify({ version: 'draft-99', tracks: [] }), { url: SOURCE_URL })).toThrow(
+      /unsupported MSF catalog version/
+    );
+  });
+
+  it('accepts the draft-01 version', () => {
+    const text = JSON.stringify({
+      version: 'draft-01',
+      tracks: [{ name: 'video', packaging: 'loc', isLive: true, role: 'video', codec: 'avc1.64001f' }],
+    });
+    const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+    expect(getTracksByType(presentation, 'video')).toHaveLength(1);
+  });
 });
 
 describe('applyMoqCatalogUpdate', () => {
@@ -187,10 +202,11 @@ describe('applyMoqCatalogUpdate', () => {
     expect(updated.tracks.map((track) => track.name)).toEqual(['1080p-video', '720p-video']);
   });
 
-  it('clones a parent track with overrides', () => {
-    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, {
-      catalogNamespace: ['conference.example.com', 'conference123', 'alice'],
-    });
+  it('clones a parent track with overrides, inheriting everything not redefined (§5.1.6)', () => {
+    // catalogNamespace differs from the parent's namespace so inheritance
+    // is distinguishable from the fallback.
+    const cloneOptions = { catalogNamespace: ['other', 'catalog'] };
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, cloneOptions);
     const delta = JSON.stringify({
       version: '1',
       deltaUpdate: [
@@ -201,8 +217,6 @@ describe('applyMoqCatalogUpdate', () => {
               parentName: '1080p-video',
               parentNamespace: 'conference.example.com/conference123/alice',
               name: '540p-video',
-              packaging: 'loc',
-              isLive: true,
               width: 960,
               height: 540,
               bitrate: 700000,
@@ -211,16 +225,65 @@ describe('applyMoqCatalogUpdate', () => {
         },
       ],
     });
-    const updated = applyMoqCatalogUpdate(initial, delta, {
-      catalogNamespace: ['conference.example.com', 'conference123', 'alice'],
-    });
+    const updated = applyMoqCatalogUpdate(initial, delta, cloneOptions);
     const clone = updated.tracks.find((track) => track.name === '540p-video');
     expect(clone).toMatchObject({
       name: '540p-video',
+      namespace: ['conference.example.com', 'conference123', 'alice'], // inherited
+      packaging: 'loc', // inherited
+      isLive: true, // inherited
       codec: 'av01.0.08M.10.0.110.09', // inherited
       width: 960, // overridden
       bitrate: 700000,
     });
+
+    const presentation = moqCatalogToPresentation(updated, { url: SOURCE_URL }, SESSION_URI);
+    const videoIds = getTracksByType(presentation, 'video').map((track) => track.id);
+    expect(videoIds).toContain(moqTrackId(['conference.example.com', 'conference123', 'alice'], '540p-video'));
+  });
+
+  it('resolves a delta-added track initRef against the delta root initDataList', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      version: '1',
+      deltaUpdate: [
+        {
+          op: 'add',
+          tracks: [
+            { name: 'hevc', packaging: 'loc', isLive: true, role: 'video', codec: 'hvc1.1.6.L93.B0', initRef: 'i2' },
+          ],
+        },
+      ],
+      initDataList: [{ id: 'i2', type: 'inline', data: btoa('\x0a\x0b') }],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, options);
+    const added = updated.tracks.find((track) => track.name === 'hevc');
+    expect(added?.initData).toEqual(new Uint8Array([0x0a, 0x0b]));
+  });
+
+  it('resolves a delta-added track initRef against the base catalog initDataList', () => {
+    const base = JSON.stringify({
+      version: '1',
+      tracks: [
+        { name: 'video', packaging: 'loc', isLive: true, role: 'video', codec: 'avc1.64001f', initRef: 'init1' },
+      ],
+      initDataList: [{ id: 'init1', type: 'inline', data: btoa('\x01\x02\x03') }],
+    });
+    const initial = applyMoqCatalogUpdate(undefined, base, options);
+    const delta = JSON.stringify({
+      version: '1',
+      deltaUpdate: [
+        {
+          op: 'add',
+          tracks: [
+            { name: 'video-2', packaging: 'loc', isLive: true, role: 'video', codec: 'avc1.64001f', initRef: 'init1' },
+          ],
+        },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, options);
+    const added = updated.tracks.find((track) => track.name === 'video-2');
+    expect(added?.initData).toEqual(new Uint8Array([1, 2, 3]));
   });
 
   it('rejects a delta update with no prior catalog', () => {

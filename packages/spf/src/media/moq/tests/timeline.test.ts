@@ -44,6 +44,12 @@ describe('templateMediaTimeForGroup', () => {
     const objectIndexed = parseMediaTimelineTemplate([0, 20, [0, 0], [0, 1], 0, 0])!;
     expect(templateMediaTimeForGroup(objectIndexed, 5)).toBeNull();
   });
+
+  it('returns null for groups between stride entries', () => {
+    const strided = parseMediaTimelineTemplate([0, 2002, [0, 0], [2, 0], 0, 0])!;
+    expect(templateMediaTimeForGroup(strided, 3)).toBeNull();
+    expect(templateMediaTimeForGroup(strided, 4)).toBe(4004);
+  });
 });
 
 describe('templateGroupForMediaTime', () => {

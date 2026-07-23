@@ -59,12 +59,14 @@ export function parseMediaTimelineTemplate(raw: unknown): MediaTimelineTemplate 
 /**
  * Media time (milliseconds) of a group's first entry per the template, or
  * `null` when the template's group stride is zero (object-indexed
- * templates need object-level resolution the caller must do itself).
+ * templates need object-level resolution the caller must do itself), the
+ * group precedes the template start, or the group falls between stride
+ * entries (no template entry exists for it).
  */
 export function templateMediaTimeForGroup(template: MediaTimelineTemplate, groupId: number): number | null {
   if (template.deltaLocation.group === 0) return null;
   const index = (groupId - template.startLocation.group) / template.deltaLocation.group;
-  if (!Number.isFinite(index) || index < 0) return null;
+  if (!Number.isInteger(index) || index < 0) return null;
   return template.startMediaTime + index * template.deltaMediaTime;
 }
 
