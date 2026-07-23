@@ -10,7 +10,9 @@
  * random-access point, and alternate-group tracks share group numbers,
  * §4.2) while the old subscription keeps playing. Only once the new
  * subscriber has buffered a decodable keyframe-led group
- * (`hasDecodableFrame`) does the swap happen: old cancelled, new promoted.
+ * (`hasDecodableFrame`) *and* its oldest frame is due at the playout
+ * clock (`currentTime`) does the swap happen: old cancelled, new
+ * promoted.
  * That's what prevents playback gaps on ABR/language switches, and it's
  * why each type has a `pending*SubscriberActor` sibling slot — old and
  * new overlap during the handoff.
@@ -18,6 +20,13 @@
  * ```
  * 'preconditions-unmet' → 'session-ready'
  * ```
+ *
+ * `'session-ready'` requires the session actor to be ready *and* the load
+ * gate to be open (`loadActivated || preload === 'auto'` — the same gate
+ * as HLS `load-segments`' full-range loading). Catalog resolution stays
+ * ungated in `resolve-catalog`, so `preload: 'metadata'` still resolves
+ * tracks without downloading media. Closing the gate exits the state and
+ * tears both subscribers down.
  *
  * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor`
  * slots (renderers and latency/bandwidth behaviors only read). Slot reads
@@ -43,6 +52,10 @@ export interface SubscribeSelectedTracksState {
   presentation?: MaybeResolvedPresentation;
   selectedVideoTrackId?: string;
   selectedAudioTrackId?: string;
+  preload?: 'auto' | 'metadata' | 'none';
+  loadActivated?: boolean;
+  /** Playout clock (media seconds) — gates make-before-break promotion. */
+  currentTime?: number;
 }
 
 export interface SubscribeSelectedTracksContext {
@@ -64,6 +77,13 @@ type PendingKey = 'pendingVideoSubscriberActor' | 'pendingAudioSubscriberActor';
 
 type FsmState = 'preconditions-unmet' | 'session-ready';
 
+/**
+ * Promotion slack: one ~30fps frame in microseconds. The pending
+ * subscriber's oldest frame counts as "due" this close to the playout
+ * clock so promotion doesn't wait a full clock tick past the boundary.
+ */
+const PROMOTION_EPSILON_US = 33_000;
+
 interface VariantWiring {
   trackType: 'video' | 'audio';
   selectionKey: SelectionKey;
@@ -75,6 +95,9 @@ interface VariantWiring {
 
 type VariantStateMap<S extends SelectionKey> = {
   presentation: ReadonlySignal<SubscribeSelectedTracksState['presentation']>;
+  preload: ReadonlySignal<SubscribeSelectedTracksState['preload']>;
+  loadActivated: ReadonlySignal<SubscribeSelectedTracksState['loadActivated']>;
+  currentTime: ReadonlySignal<SubscribeSelectedTracksState['currentTime']>;
 } & { [P in S]: ReadonlySignal<string | undefined> };
 
 type VariantContextMap<Sub extends SubscriberKey, P extends PendingKey> = {
@@ -109,7 +132,11 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
 
   const derivedStateSignal = computed<FsmState>(() => {
     const actor = context.moqSessionActor.get();
-    return actor && actor.snapshot.get().context.status === 'ready' ? 'session-ready' : 'preconditions-unmet';
+    const sessionReady = !!actor && actor.snapshot.get().context.status === 'ready';
+    // Same gate as HLS load-segments' full-range loading: default preload
+    // ('metadata') must not download live media before load activation.
+    const loadGateOpen = state.loadActivated.get() || state.preload.get() === 'auto';
+    return sessionReady && loadGateOpen ? 'session-ready' : 'preconditions-unmet';
   });
 
   const clearSlots = (): void => {
@@ -155,7 +182,24 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             if (pending?.track.id === selectedId) {
               // Handoff in flight: tracked read — the swap fires when the
               // new subscription has a decodable keyframe buffered.
-              if (pending.snapshot.get().context.hasDecodableFrame) {
+              const pendingContext = pending.snapshot.get().context;
+              if (!pendingContext.hasDecodableFrame) return;
+              // The pending subscription joined at the live edge, but the
+              // playout clock runs ~targetLatency behind it — promoting
+              // before its frames are due freezes video / gaps audio for
+              // that window. Wait until the oldest buffered frame is due
+              // at the clock. Tracked currentTime read lives inside this
+              // branch only, so the clock cadence re-fires the effect just
+              // while a handoff is in flight. No clock (video-only) or no
+              // timestamp yet → promote immediately (video self-clock
+              // re-anchors).
+              const currentTime = state.currentTime.get();
+              const oldestTimestampUs = pendingContext.oldestTimestampUs;
+              const due =
+                currentTime === undefined ||
+                oldestTimestampUs === undefined ||
+                oldestTimestampUs <= currentTime * 1e6 + PROMOTION_EPSILON_US;
+              if (due) {
                 current?.destroy();
                 subscriberSlot.set(pending);
                 pendingSlot.set(undefined);
@@ -204,7 +248,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
  * const reactor = subscribeSelectedVideoTrack.setup({ state, context });
  */
 export const subscribeSelectedVideoTrack = defineBehavior({
-  stateKeys: ['presentation', 'selectedVideoTrackId'],
+  stateKeys: ['presentation', 'selectedVideoTrackId', 'preload', 'loadActivated', 'currentTime'],
   contextKeys: ['moqSessionActor', 'videoSubscriberActor', 'pendingVideoSubscriberActor'],
   setup: (deps: {
     state: VariantStateMap<'selectedVideoTrackId'>;
@@ -231,7 +275,7 @@ export const subscribeSelectedVideoTrack = defineBehavior({
  * const reactor = subscribeSelectedAudioTrack.setup({ state, context });
  */
 export const subscribeSelectedAudioTrack = defineBehavior({
-  stateKeys: ['presentation', 'selectedAudioTrackId'],
+  stateKeys: ['presentation', 'selectedAudioTrackId', 'preload', 'loadActivated', 'currentTime'],
   contextKeys: ['moqSessionActor', 'audioSubscriberActor', 'pendingAudioSubscriberActor'],
   setup: (deps: {
     state: VariantStateMap<'selectedAudioTrackId'>;
