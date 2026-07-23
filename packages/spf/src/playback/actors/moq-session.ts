@@ -131,12 +131,29 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
   );
 
   const start = async () => {
+    // MSF `connection=q` mandates native QUIC (§11.1.1 "MUST be used"),
+    // which the WebTransport default cannot provide. Only a host-supplied
+    // transport factory (e.g. a non-browser runtime with a QUIC stack) can
+    // honor the mandate — without one, connecting would silently violate it.
+    if (source.connection === 'quic' && !options.createTransport) {
+      inner.send({
+        type: 'failed',
+        error: new Error(
+          'MSF source mandates a native QUIC connection (connection=q), but no QUIC-capable transport factory was provided'
+        ),
+      });
+      return;
+    }
+    let transport: MoqtTransport | undefined;
     try {
       if (authProvider) {
         authToken = toTokenBytes(await authProvider.getToken()) ?? authToken;
+        // destroy() during a pending getToken() must not open a connection.
+        if (destroyed) return;
       }
-      const { transport, ready } = createTransport(source.connectUrl, [MOQT_PROTOCOL_ID]);
-      await ready;
+      const created = createTransport(source.connectUrl, [MOQT_PROTOCOL_ID]);
+      transport = created.transport;
+      await created.ready;
       if (destroyed) {
         transport.close();
         return;
@@ -154,6 +171,17 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       if (destroyed) return;
       inner.send({ type: 'connected', session });
     } catch (error) {
+      // A transport opened before the failure must not leak the relay
+      // connection — a rejected `ready` does not close it on its own.
+      if (session) {
+        session.destroy();
+      } else {
+        try {
+          transport?.close();
+        } catch {
+          // an already-failed transport throws on close()
+        }
+      }
       if (!destroyed) inner.send({ type: 'failed', error });
     }
   };
@@ -172,8 +200,14 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
     getAuthParameters: tokenParameters,
 
     async refreshAuthToken(): Promise<MessageParameters> {
+      // No refreshed token means the provider gave up (or there is no
+      // provider) — resolving with the stale parameters would trigger a
+      // pointless second unauthorized request, so surface the give-up.
       const refreshed = toTokenBytes(await authProvider?.refreshToken?.());
-      if (refreshed) authToken = refreshed;
+      if (!refreshed) {
+        throw new Error('MoQ auth provider could not supply a fresh token');
+      }
+      authToken = refreshed;
       return tokenParameters();
     },
 

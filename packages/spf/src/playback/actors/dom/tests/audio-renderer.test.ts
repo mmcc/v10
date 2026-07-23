@@ -119,6 +119,47 @@ describe('createAudioRendererActor', () => {
     renderer.destroy();
   });
 
+  it('errors when a source is set without a decoder config', async () => {
+    const audioContext = createFakeAudioContext();
+    const renderer = createAudioRendererActor({ audioContext, tickIntervalMs: 5 });
+    const queue: JitterFrame[] = [
+      { groupId: 0, objectId: 0, timestampUs: 0, isKey: true, payload: new Uint8Array([1]) },
+      { groupId: 0, objectId: 1, timestampUs: 20_000, isKey: true, payload: new Uint8Array([2]) },
+    ];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+
+    renderer.setTrack(source, null);
+
+    expect(renderer.snapshot.get().context.status).toBe('error');
+    expect(renderer.snapshot.get().context.error).toBeInstanceOf(Error);
+    // The rejected source must not be drained (or retained) by the tick loop.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(queue).toHaveLength(2);
+
+    renderer.destroy();
+  });
+
+  it('stops draining the jitter buffer after a decoder error', async () => {
+    const frames = await encodeTestFrames(10);
+    const audioContext = createFakeAudioContext();
+    const queue = [...frames];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    const renderer = createAudioRendererActor({ audioContext, tickIntervalMs: 5 });
+
+    // A well-formed but undecodable config: the decoder rejects either at
+    // configure or on first decode, and the pull loop must stop instead of
+    // stripping the queue one frame per tick.
+    renderer.setTrack(source, { codec: 'bogus-codec', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.status).toBe('error'), { timeout: 5000 });
+    const remaining = queue.length;
+    expect(remaining).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(queue).toHaveLength(remaining);
+
+    renderer.destroy();
+  });
+
   it('applies rate changes forward-only: already-scheduled audio keeps its clock mapping', async () => {
     const frames = await encodeTestFrames(5);
     const audioContext = createFakeAudioContext();
@@ -193,6 +234,30 @@ describe('createAudioRendererActor', () => {
     const resumed = renderer.getClockTimeUs()!;
     expect(resumed).toBeGreaterThanOrEqual(held);
     expect(resumed).toBeLessThan(held + FRAME_DURATION_US);
+
+    renderer.destroy();
+  });
+
+  it('re-anchors instead of inserting silence on a large timestamp jump', async () => {
+    const frames = await encodeTestFrames(3);
+    // Latency catch-up: the third frame arrives from far ahead of the
+    // scheduled timeline.
+    const JUMP_US = 5_000_000;
+    frames[2] = { ...frames[2]!, timestampUs: JUMP_US };
+    const audioContext = createFakeAudioContext();
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
+
+    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(JUMP_US), {
+      timeout: 5000,
+    });
+
+    // Without re-anchoring the jump maps to ~5s of scheduled silence, so
+    // shortly into playback the clock would still sit in the pre-jump
+    // timeline; the reset schedules the jumped audio right at the context
+    // clock (+margin) and the media clock lands past the jump immediately.
+    audioContext.currentTime = 0.06;
+    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(JUMP_US);
 
     renderer.destroy();
   });

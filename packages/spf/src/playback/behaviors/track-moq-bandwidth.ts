@@ -11,9 +11,11 @@
  * the segment-tuned `minBytes`/`minDuration` defaults would discard
  * entirely. The EWMA smoothing absorbs the extra per-sample noise.
  *
- * Reads both per-type subscriber slots; each sample carries a `seq` so a
- * sample is consumed exactly once even though the effect re-fires on any
- * snapshot change.
+ * Reads both per-type subscriber slots. Effects are microtask-batched, so
+ * burst arrivals collapse into one run — the subscriber therefore exposes
+ * *cumulative* totals, and each run feeds the delta since the totals it
+ * last consumed as one aggregate sample (the duration-weighted EWMA
+ * handles aggregates), losing no bytes to batching.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import { effect } from '../../core/signals/effect';
@@ -64,19 +66,23 @@ function setupTrackMoqBandwidth({
 }): () => void {
   const bandwidthConfig: BandwidthConfig = { ...DEFAULT_MOQ_BANDWIDTH_CONFIG, ...config?.moqBandwidth };
 
-  // Last consumed sample sequence per actor. Keyed weakly so a destroyed
+  // Last consumed cumulative totals per actor. Keyed weakly so a destroyed
   // subscriber's bookkeeping goes with it.
-  const consumedSeq = new WeakMap<TrackSubscriberActor, number>();
+  const consumed = new WeakMap<TrackSubscriberActor, { seq: number; totalBytes: number; totalDurationMs: number }>();
 
   const sampleFrom = (subscriber: TrackSubscriberActor | undefined): void => {
     if (!subscriber) return;
-    const sample = subscriber.snapshot.get().context.lastSample;
-    if (!sample || consumedSeq.get(subscriber) === sample.seq) return;
-    consumedSeq.set(subscriber, sample.seq);
-    if (sample.durationMs <= 0) return;
+    const arrivals = subscriber.snapshot.get().context.arrivals;
+    if (!arrivals) return;
+    const previous = consumed.get(subscriber);
+    if (previous?.seq === arrivals.seq) return;
+    consumed.set(subscriber, arrivals);
+    const bytes = arrivals.totalBytes - (previous?.totalBytes ?? 0);
+    const durationMs = arrivals.totalDurationMs - (previous?.totalDurationMs ?? 0);
+    if (durationMs <= 0) return;
     const current = peek(state.bandwidthState);
     if (!current) return;
-    state.bandwidthState.set(sampleBandwidth(current, sample.durationMs, sample.bytes, bandwidthConfig));
+    state.bandwidthState.set(sampleBandwidth(current, durationMs, bytes, bandwidthConfig));
   };
 
   const disposals = [

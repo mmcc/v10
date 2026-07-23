@@ -19,6 +19,8 @@ function fakeSubscriber() {
     context: { status: 'active', hasDecodableFrame: false, frameCount: 0 } as TrackSubscriberContext,
   });
   let seq = 0;
+  let totalBytes = 0;
+  let totalDurationMs = 0;
   const subscriber: TrackSubscriberActor = {
     track: { id: 'live/video' } as MoqTrack,
     snapshot: snapshot as TrackSubscriberActor['snapshot'],
@@ -29,9 +31,11 @@ function fakeSubscriber() {
   };
   const emitSample = (bytes: number, durationMs: number) => {
     seq++;
+    totalBytes += bytes;
+    totalDurationMs += durationMs;
     snapshot.set({
       value: 'active',
-      context: { ...snapshot.get().context, lastSample: { seq, bytes, durationMs } },
+      context: { ...snapshot.get().context, arrivals: { seq, totalBytes, totalDurationMs } },
     });
   };
   const reemit = () => snapshot.set({ ...snapshot.get() });
@@ -77,6 +81,21 @@ describe('trackMoqBandwidth', () => {
     reemit();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(deps.state.bandwidthState.get()!.bytesSampled).toBe(50_000);
+
+    cleanup();
+  });
+
+  it('aggregates samples that land in one batch', async () => {
+    const { subscriber, emitSample } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    const cleanup = trackMoqBandwidth.setup(deps);
+
+    // Effects are microtask-batched: both arrivals collapse into one run
+    // that only sees the final snapshot — the cumulative totals must still
+    // account for every byte.
+    emitSample(30_000, 50);
+    emitSample(20_000, 50);
+    await vi.waitFor(() => expect(deps.state.bandwidthState.get()!.bytesSampled).toBe(50_000));
 
     cleanup();
   });

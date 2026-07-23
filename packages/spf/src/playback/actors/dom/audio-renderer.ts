@@ -92,6 +92,13 @@ const DEFAULT_TICK_INTERVAL_MS = 10;
  * controller measures.
  */
 const MAX_PENDING_DECODES = 4;
+/**
+ * Media-time jump beyond which incoming audio is a timeline reset (latency
+ * catch-up skipped groups) rather than a gap in the same timeline. Small
+ * gaps map to scheduled silence; a reset re-anchors the schedule so the
+ * jump is not converted into an equal stretch of silence.
+ */
+const DISCONTINUITY_THRESHOLD_US = 1_000_000;
 
 export function createAudioRendererActor(options: CreateAudioRendererOptions): AudioRendererActor {
   const { audioContext } = options;
@@ -118,6 +125,8 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   let decoderConfig: AudioDecoderConfig | null = null;
   let decoder: AudioDecoder | null = null;
   let destroyed = false;
+  /** Timestamp of the last chunk fed to the decoder, for discontinuity detection. */
+  let lastEnqueuedUs: number | undefined;
 
   /**
    * One scheduled buffer's context-time span mapped to media time. The
@@ -179,6 +188,15 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       }
 
       const currentRate = rate();
+      // A forward jump past the discontinuity threshold means the source
+      // skipped ahead (latency catch-up): scheduling it as silence would
+      // keep the latency it was meant to shed — and re-trigger the
+      // catch-up loop forever. Drop the stale schedule and anchor fresh.
+      const previous = segments[segments.length - 1];
+      if (previous && data.timestamp - segmentEndMediaUs(previous) > DISCONTINUITY_THRESHOLD_US) {
+        stopAll();
+      }
+
       const last = segments[segments.length - 1];
       // Continue the scheduled timeline: media-contiguous data butt-joins
       // the previous buffer; a media gap inserts a matching stretch of
@@ -217,7 +235,9 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   };
 
   const tick = (): void => {
-    if (destroyed || !source) return;
+    // After a decoder error there is nothing productive to pull into —
+    // draining would silently strip the jitter buffer at tick rate.
+    if (destroyed || !source || inner.snapshot.get().context.status === 'error') return;
     try {
       pruneSegments();
       // Keep the schedule topped up to the margin horizon; every audio
@@ -228,9 +248,20 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       ) {
         const next = source.peek();
         if (!next) return;
+        // FFmpeg-backed audio decoders rebase output timestamps by frame
+        // accumulation from the first input, hiding an input-side jump
+        // from the scheduler. Restart the decoder at the discontinuity so
+        // outputs re-base to the jumped-to timeline (every audio frame is
+        // independently decodable, so a restart is glitch-free).
+        if (lastEnqueuedUs !== undefined && next.timestampUs - lastEnqueuedUs > DISCONTINUITY_THRESHOLD_US) {
+          closeDecoder();
+        }
         const active = ensureDecoder();
-        if (!active) return;
-        source.dequeue();
+        // An errored decoder is closed but still referenced — stop pulling
+        // instead of feeding it doomed decode calls.
+        if (!active || active.state === 'closed') return;
+        // Decode before dequeue: if decode throws, the frame stays
+        // buffered for a later decoder instead of being silently dropped.
         active.decode(
           new EncodedAudioChunk({
             type: next.isKey ? 'key' : 'delta',
@@ -238,6 +269,8 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
             data: next.payload,
           })
         );
+        source.dequeue();
+        lastEnqueuedUs = next.timestampUs;
       }
     } catch (error) {
       inner.send({ type: 'status', status: 'error', error });
@@ -251,10 +284,23 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     },
 
     setTrack(nextSource, nextConfig): void {
-      source = nextSource;
+      // A source without a decodable config can never schedule audio — it
+      // would spin every tick while the subscriber's jitter buffer grows
+      // unbounded. Fail fast instead.
+      const missingConfig = nextSource !== null && nextConfig === null;
+      source = missingConfig ? null : nextSource;
       decoderConfig = nextConfig;
+      lastEnqueuedUs = undefined;
       closeDecoder();
-      inner.send({ type: 'status', status: nextSource ? 'rendering' : 'idle' });
+      if (missingConfig) {
+        inner.send({
+          type: 'status',
+          status: 'error',
+          error: new Error('audio renderer track has no decoder config'),
+        });
+        return;
+      }
+      inner.send({ type: 'status', status: source ? 'rendering' : 'idle' });
     },
 
     getClockTimeUs(): number | undefined {
