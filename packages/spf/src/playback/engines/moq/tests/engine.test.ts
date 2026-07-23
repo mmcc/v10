@@ -64,7 +64,7 @@ interface RelaySubscription {
   trackAlias: number;
 }
 
-function createFakeRelay() {
+function createFakeRelay(catalog: string = CATALOG) {
   let uniController!: ReadableStreamDefaultController<ReadableStream<Uint8Array>>;
   const subscriptions: RelaySubscription[] = [];
   let nextAlias = 1;
@@ -93,7 +93,7 @@ function createFakeRelay() {
       await writer.write(encodeSubscribeOk(trackAlias));
       if (message.trackName === 'catalog') {
         // Serve the current catalog as a live independent object.
-        openUni(encodeLocObjectStream(trackAlias, 0, 0, 0, utf8Encode(CATALOG)));
+        openUni(encodeLocObjectStream(trackAlias, 0, 0, 0, utf8Encode(catalog)));
       }
       return;
     }
@@ -202,6 +202,109 @@ describe('createMoqEngine', () => {
       () => expect(signals.context.videoRendererActor.get()?.snapshot.get().context.framesDecoded).toBeGreaterThan(0),
       { timeout: 5000 }
     );
+
+    await engine.destroy();
+  });
+
+  it('ranks ABR with the MoQ-tuned estimator config, not the segment-tuned defaults', async () => {
+    const catalog = JSON.stringify({
+      version: '1',
+      tracks: [
+        {
+          name: 'video-hi',
+          packaging: 'loc',
+          isLive: true,
+          role: 'video',
+          codec: 'vp8',
+          width: 1280,
+          height: 720,
+          bitrate: 3_000_000,
+        },
+        {
+          name: 'video-lo',
+          packaging: 'loc',
+          isLive: true,
+          role: 'video',
+          codec: 'vp8',
+          width: 320,
+          height: 180,
+          bitrate: 200_000,
+        },
+      ],
+    });
+    const relay = createFakeRelay(catalog);
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    // 50 KB sampled at ~300 kbps: past the MoQ-tuned 32 KB minTotalBytes
+    // but short of the segment-tuned 128 KB — the ranker trusts this
+    // estimate only if `moqBandwidth` reached it as `bandwidth`.
+    signals.state.bandwidthState.set({
+      fastEstimate: 300_000,
+      fastTotalWeight: 100,
+      slowEstimate: 300_000,
+      slowTotalWeight: 100,
+      bytesSampled: 50_000,
+    });
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+
+    // 300 kbps × 0.85 safety margin fits only the 200 kbps rendition; the
+    // untrusted-estimate fallback (5 Mbps initialBandwidth) would pick hi.
+    await vi.waitFor(() => expect(signals.state.selectedVideoTrackId.get()).toBe('live/video-lo'), {
+      timeout: 5000,
+    });
+
+    await engine.destroy();
+  });
+
+  it('freezes video-only presentation while paused and resumes from the hold point', async () => {
+    const relay = createFakeRelay();
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    signals.context.renderSurface.set(document.createElement('canvas'));
+    // Pause before frames arrive: the renderer's self-clock anchors at the
+    // first decoded frame with rate 0, so the clock holds there.
+    signals.state.paused.set(true);
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+
+    await vi.waitFor(
+      () => {
+        expect(relay.subscriptions.map((s) => s.message.trackName)).toContain('video');
+      },
+      { timeout: 5000 }
+    );
+    const videoSubscription = relay.subscriptions.find((s) => s.message.trackName === 'video')!;
+
+    // Two keyframes 200 ms apart: while paused only the anchor frame may
+    // present (the poster frame); the later one must hold.
+    relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 1, 0, 0, await encodeKeyframe()));
+    relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 2, 0, 200_000, await encodeKeyframe()));
+
+    const presentedUs = () => signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+    await vi.waitFor(() => expect(presentedUs()).toBe(0), { timeout: 5000 });
+
+    // Longer than the 200 ms frame gap: with a running clock the second
+    // frame would have presented by now.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(presentedUs()).toBe(0);
+
+    // Resume: the self-clock re-anchors at the hold point and the second
+    // frame presents once 200 ms of media time elapse.
+    signals.state.paused.set(false);
+    await vi.waitFor(() => expect(presentedUs()).toBe(200_000), { timeout: 5000 });
 
     await engine.destroy();
   });
