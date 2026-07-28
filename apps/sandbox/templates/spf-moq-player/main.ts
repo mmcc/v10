@@ -352,9 +352,17 @@ function currentSrc(): string {
 }
 
 function unmount(): void {
+  // `teardown` destroys the relay it captured; clearing the module reference
+  // too keeps a torn-down relay from outliving its player.
   teardown?.();
   teardown = undefined;
+  activeRelay = undefined;
   mount.replaceChildren();
+  // The rendition buttons close over the media element, so they have to go
+  // with it — otherwise they stay clickable and write to a destroyed engine
+  // until the next catalog resolves and rebuilds them.
+  trackButtons.replaceChildren();
+  trackAutoButton.setAttribute('aria-pressed', 'true');
 }
 
 async function render(): Promise<void> {
@@ -380,7 +388,6 @@ async function render(): Promise<void> {
     modeBadge.textContent = 'loopback';
     modeBadge.classList.remove('relay');
   } else {
-    activeRelay = undefined;
     modeBadge.textContent = 'relay';
     modeBadge.classList.add('relay');
   }
