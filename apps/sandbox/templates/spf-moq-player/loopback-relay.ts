@@ -494,176 +494,200 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
   const log = (message: string) => onLog?.(message);
   const stats: LoopbackRelayStats = { subscriptions: [], objectsPublished: 0, bytesPublished: 0 };
 
-  let uniController: ReadableStreamDefaultController<ReadableStream<Uint8Array>> | undefined;
-  const producers = new Set<() => void>();
-  let destroyed = false;
-
+  // One media timeline for the whole relay: a reconnect continues the same
+  // live stream instead of restarting it.
   const epochMs = performance.now();
-  const host: ProducerHost = {
-    nowUs: () => Math.round((performance.now() - epochMs) * 1000),
-    publish: (bytes) => publishObject(bytes),
-    log,
-  };
+  const nowUs = () => Math.round((performance.now() - epochMs) * 1000);
 
-  /**
-   * Publish one object on its own unidirectional stream. The FIN matters:
-   * a subgroup stream is read until end-of-stream, so an unclosed stream
-   * would leave the last object unterminated.
-   */
-  function publishObject(bytes: Uint8Array): void {
-    if (destroyed || !uniController) return;
-    const pipe = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = pipe.writable.getWriter();
-    void writer.write(bytes).then(
-      () => writer.close(),
-      () => {}
-    );
-    uniController.enqueue(pipe.readable);
-    stats.objectsPublished++;
-    stats.bytesPublished += bytes.length;
-  }
-
-  /**
-   * The server's control stream. It stays open for the session's lifetime —
-   * closing it ends the session (§3.3), so the writer is held until destroy.
-   */
-  let controlWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
-
-  function sendServerSetup(): void {
-    if (destroyed || !uniController) return;
-    const pipe = new TransformStream<Uint8Array, Uint8Array>();
-    controlWriter = pipe.writable.getWriter();
-    void controlWriter.write(encodeSetup());
-    uniController.enqueue(pipe.readable);
-  }
-
+  let destroyed = false;
   let nextTrackAlias = 1;
 
-  async function handleRequestStream(stream: {
-    readable: ReadableStream<Uint8Array>;
-    writable: WritableStream<Uint8Array>;
-  }): Promise<void> {
-    const writer = stream.writable.getWriter();
-    const reader = stream.readable.getReader();
-    let buffer = new Uint8Array(0);
-    let stopProducer: (() => void) | undefined;
-    let subscribedTrack: string | undefined;
-
-    /** Accumulate until a whole framed control message is available. */
-    const takeMessage = (): { type: number; body: Uint8Array } | null => {
-      if (buffer.length < 3) return null;
-      const header = new Reader(buffer);
-      const type = header.varint();
-      const bodyStart = header.offset + 2;
-      if (buffer.length < bodyStart) return null;
-      const length = buffer[header.offset]! * 256 + buffer[header.offset + 1]!;
-      const total = bodyStart + length;
-      if (buffer.length < total) return null;
-      const body = buffer.subarray(bodyStart, total);
-      buffer = buffer.slice(total);
-      return { type, body };
-    };
-
-    const onSubscribe = (body: Uint8Array): void => {
-      const reader = new Reader(body);
-      reader.varint(); // request id — correlation is per-stream here
-      const namespaceFields = reader.varint();
-      for (let i = 0; i < namespaceFields; i++) reader.string();
-      const trackName = reader.string();
-
-      const trackAlias = nextTrackAlias++;
-      void writer.write(encodeSubscribeOk(trackAlias));
-      subscribedTrack = trackName;
-      stats.subscriptions.push(trackName);
-      log(`subscribe ${trackName} → alias ${trackAlias}`);
-
-      if (trackName === CATALOG_TRACK) {
-        publishObject(encodeObjectStream(trackAlias, 0, 0, 0, new TextEncoder().encode(buildCatalog())));
-        return;
-      }
-
-      const video = VIDEO_TRACKS.find((track) => track.name === trackName);
-      if (!video && trackName !== AUDIO_TRACK.name) {
-        log(`subscribe for unknown track ${trackName}`);
-        return;
-      }
-
-      // Reported here rather than thrown: the request-stream loop treats a
-      // throw as the subscriber aborting, so a failed `configure()` would
-      // otherwise close the subscription with nothing to explain the silence.
-      try {
-        stopProducer = video ? startVideoProducer(video, trackAlias, host) : startAudioProducer(trackAlias, host);
-      } catch (error) {
-        log(`cannot publish ${trackName}: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      producers.add(stopProducer);
-    };
-
-    try {
-      while (true) {
-        const message = takeMessage();
-        if (message) {
-          if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
-            onSubscribe(message.body);
-          } else if (message.type === MESSAGE_TYPE.FETCH) {
-            // No history is retained: the engine falls back to joining the
-            // live catalog track, which is what a fresh live stream does.
-            await writer.write(encodeRequestError(ERROR_INVALID_RANGE, 'nothing published'));
-            await writer.close();
-            return;
-          }
-          continue;
-        }
-
-        const { value, done } = await reader.read();
-        // Cancellation *is* the stream lifecycle (§3.3.3): the subscriber
-        // aborting its sending direction ends the subscription.
-        if (done) break;
-        const merged = new Uint8Array(buffer.length + value.length);
-        merged.set(buffer);
-        merged.set(value, buffer.length);
-        buffer = merged;
-      }
-    } catch {
-      // Aborted request stream — same teardown as a graceful end.
-    } finally {
-      if (stopProducer) {
-        stopProducer();
-        producers.delete(stopProducer);
-      }
-      if (subscribedTrack) {
-        const index = stats.subscriptions.indexOf(subscribedTrack);
-        if (index >= 0) stats.subscriptions.splice(index, 1);
-        log(`unsubscribe ${subscribedTrack}`);
-      }
-      writer.close().catch(() => {});
-    }
-  }
-
-  /** Per-transport close resolvers, so `destroy()` can settle every live one. */
-  const transportClosers = new Set<() => void>();
+  /** One entry per live transport, so `destroy()` can release them all. */
+  const closeTransports = new Set<() => void>();
 
   const createMoqTransport: CreateMoqTransport = () => {
-    // Per transport, not per relay: `setupMoqSession` recreates its transport
-    // whenever the preload gate reopens, and a shared promise would hand the
-    // replacement an already-resolved `closed` — the new session would go
-    // straight to closed instead of connecting.
+    // Everything below belongs to *this* transport. `setupMoqSession` builds a
+    // new one whenever the preload gate reopens, and relay-wide state leaked
+    // the previous session every time: a shared `closed` promise arrived
+    // already resolved, and shared stream handles left the old accept loops
+    // pending with nothing able to release them.
+    let uniController: ReadableStreamDefaultController<ReadableStream<Uint8Array>> | undefined;
+    let controlWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
+    const stopProducers = new Set<() => void>();
+    const abortRequestStreams = new Set<() => void>();
+    let sessionOpen = true;
+
     let resolveClosed!: () => void;
     const closed = new Promise<void>((resolve) => {
       resolveClosed = resolve;
     });
-    const settleClosed = () => {
-      transportClosers.delete(settleClosed);
+
+    /**
+     * Publish one object on its own unidirectional stream. The FIN matters:
+     * a subgroup stream is read until end-of-stream, so an unclosed stream
+     * would leave the last object unterminated.
+     */
+    const publishObject = (bytes: Uint8Array): void => {
+      if (!sessionOpen || destroyed || !uniController) return;
+      const pipe = new TransformStream<Uint8Array, Uint8Array>();
+      const writer = pipe.writable.getWriter();
+      void writer.write(bytes).then(
+        () => writer.close(),
+        () => {}
+      );
+      uniController.enqueue(pipe.readable);
+      stats.objectsPublished++;
+      stats.bytesPublished += bytes.length;
+    };
+
+    const host: ProducerHost = { nowUs, publish: publishObject, log };
+
+    /**
+     * The server's control stream. It stays open for the session's lifetime —
+     * closing it ends the session (§3.3) — so the writer is held until this
+     * transport closes.
+     */
+    const sendServerSetup = (): void => {
+      if (!sessionOpen || destroyed || !uniController) return;
+      const pipe = new TransformStream<Uint8Array, Uint8Array>();
+      controlWriter = pipe.writable.getWriter();
+      void controlWriter.write(encodeSetup());
+      uniController.enqueue(pipe.readable);
+    };
+
+    async function handleRequestStream(stream: {
+      readable: ReadableStream<Uint8Array>;
+      writable: WritableStream<Uint8Array>;
+    }): Promise<void> {
+      const writer = stream.writable.getWriter();
+      const reader = stream.readable.getReader();
+      let buffer = new Uint8Array(0);
+      let stopProducer: (() => void) | undefined;
+      let subscribedTrack: string | undefined;
+
+      const abort = () => {
+        void reader.cancel().catch(() => {});
+      };
+      abortRequestStreams.add(abort);
+
+      /** Accumulate until a whole framed control message is available. */
+      const takeMessage = (): { type: number; body: Uint8Array } | null => {
+        if (buffer.length < 3) return null;
+        const header = new Reader(buffer);
+        const type = header.varint();
+        const bodyStart = header.offset + 2;
+        if (buffer.length < bodyStart) return null;
+        const length = buffer[header.offset]! * 256 + buffer[header.offset + 1]!;
+        const total = bodyStart + length;
+        if (buffer.length < total) return null;
+        const body = buffer.subarray(bodyStart, total);
+        buffer = buffer.slice(total);
+        return { type, body };
+      };
+
+      const onSubscribe = (body: Uint8Array): void => {
+        const fields = new Reader(body);
+        fields.varint(); // request id — correlation is per-stream here
+        const namespaceFields = fields.varint();
+        for (let i = 0; i < namespaceFields; i++) fields.string();
+        const trackName = fields.string();
+
+        const trackAlias = nextTrackAlias++;
+        void writer.write(encodeSubscribeOk(trackAlias));
+        subscribedTrack = trackName;
+        stats.subscriptions.push(trackName);
+        log(`subscribe ${trackName} → alias ${trackAlias}`);
+
+        if (trackName === CATALOG_TRACK) {
+          publishObject(encodeObjectStream(trackAlias, 0, 0, 0, new TextEncoder().encode(buildCatalog())));
+          return;
+        }
+
+        const video = VIDEO_TRACKS.find((track) => track.name === trackName);
+        if (!video && trackName !== AUDIO_TRACK.name) {
+          log(`subscribe for unknown track ${trackName}`);
+          return;
+        }
+
+        // Reported here rather than thrown: the request-stream loop treats a
+        // throw as the subscriber aborting, so a failed `configure()` would
+        // otherwise close the subscription with nothing to explain the silence.
+        try {
+          stopProducer = video ? startVideoProducer(video, trackAlias, host) : startAudioProducer(trackAlias, host);
+        } catch (error) {
+          log(`cannot publish ${trackName}: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
+        stopProducers.add(stopProducer);
+      };
+
+      try {
+        while (true) {
+          const message = takeMessage();
+          if (message) {
+            if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
+              onSubscribe(message.body);
+            } else if (message.type === MESSAGE_TYPE.FETCH) {
+              // No history is retained: the engine falls back to joining the
+              // live catalog track, which is what a fresh live stream does.
+              await writer.write(encodeRequestError(ERROR_INVALID_RANGE, 'nothing published'));
+              await writer.close();
+              return;
+            }
+            continue;
+          }
+
+          const { value, done } = await reader.read();
+          // Cancellation *is* the stream lifecycle (§3.3.3): the subscriber
+          // aborting its sending direction ends the subscription.
+          if (done) break;
+          const merged = new Uint8Array(buffer.length + value.length);
+          merged.set(buffer);
+          merged.set(value, buffer.length);
+          buffer = merged;
+        }
+      } catch {
+        // Aborted request stream — same teardown as a graceful end.
+      } finally {
+        abortRequestStreams.delete(abort);
+        if (stopProducer) {
+          stopProducer();
+          stopProducers.delete(stopProducer);
+        }
+        if (subscribedTrack) {
+          const index = stats.subscriptions.indexOf(subscribedTrack);
+          if (index >= 0) stats.subscriptions.splice(index, 1);
+          log(`unsubscribe ${subscribedTrack}`);
+        }
+        writer.close().catch(() => {});
+      }
+    }
+
+    const close = () => {
+      if (!sessionOpen) return;
+      sessionOpen = false;
+      closeTransports.delete(close);
+      for (const stop of [...stopProducers]) stop();
+      stopProducers.clear();
+      // Cancelling each request stream ends its read loop, which in turn
+      // reports the unsubscribe and stops any straggling producer.
+      for (const abortStream of [...abortRequestStreams]) abortStream();
+      abortRequestStreams.clear();
+      controlWriter?.close().catch(() => {});
+      controlWriter = undefined;
+      // Ending the accept stream lets the session's read loop finish rather
+      // than staying pending on a transport nobody will use again.
+      try {
+        uniController?.close();
+      } catch {
+        // Already closed or errored — nothing to release.
+      }
+      uniController = undefined;
       resolveClosed();
     };
-    transportClosers.add(settleClosed);
+    closeTransports.add(close);
 
     const transport = {
-      // A replacement transport takes over delivery. Objects still in flight
-      // from the previous session's producers carry track aliases the new
-      // session doesn't know, so it drops them — and those producers stop as
-      // soon as their request streams abort.
       incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
         start(controller) {
           uniController = controller;
@@ -679,7 +703,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
         void handleRequestStream({ readable: clientToServer.readable, writable: serverToClient.writable });
         return { readable: serverToClient.readable, writable: clientToServer.writable };
       },
-      close: settleClosed,
+      close,
       closed,
     };
 
@@ -699,11 +723,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     stats,
     destroy() {
       destroyed = true;
-      for (const stop of producers) stop();
-      producers.clear();
-      controlWriter?.close().catch(() => {});
-      controlWriter = undefined;
-      for (const settle of [...transportClosers]) settle();
+      for (const close of [...closeTransports]) close();
     },
   };
 }
