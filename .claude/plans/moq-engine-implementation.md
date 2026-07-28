@@ -186,12 +186,18 @@ promotion). Zero page errors.
 
 ## Sandbox review triage (2026-07-28, PR #2 bot reviews)
 
-7 bot findings across three rounds plus 3 self-review fixes — all valid,
-all fixed, one Codex re-post dismissed as stale (it named a symbol the
-commit under review had removed; replied on the PR with the before/after
-evidence). Every finding was in the harness page rather than the engine:
-the sandbox is where untrusted input (query params) and lifecycle churn
-(mode/skin switching) live.
+10 bot findings across four rounds plus 3 self-review fixes — all valid,
+all fixed. Three further Codex comments were stale re-posts of
+already-fixed findings (each named `loadLatestSkin`, a symbol the commit
+under review had removed); every thread got a reply with the resolution
+or the before/after evidence.
+
+Every finding was in the harness page, not the engine — the sandbox is
+where untrusted input (query params) and lifecycle churn (mode/skin
+switching) live. The recurring theme is worth remembering: **the page
+kept approximating contracts the engine already owns**, and each
+approximation was wrong in a way that produced a mounted-but-silent
+player rather than an error.
 
 - Query params were cast, not validated: `?skin=bogus` resolved to an
   undefined skin tag (so `document.createElement(undefined)` produced an
@@ -216,9 +222,28 @@ the sandbox is where untrusted input (query params) and lifecycle churn
   received a fragment-less source and only logged a dev warning behind an
   empty player. The page now recombines its own `#msf:` fragment and
   reports a relay URL that still isn't a valid MSF source.
+- The relay-URL guard approximated the source contract (scheme plus
+  `#msf:`), so URLs `parseMoqSource` rejects — no `--` delimiter, bad
+  name escapes, `connection=bogus` — passed the page and failed later
+  inside the engine. It now calls `parseMoqSource`, which is newly
+  exported from `@videojs/spf/moq` for the purpose (10 bytes: already
+  bundled, only the export is new).
+- Codec support was inferred from the WebCodecs constructors existing. A
+  platform that rejects the publisher's VP8/Opus configs passed the
+  check, then `configure()` threw inside the subscribe handler, where the
+  request-stream loop's catch absorbed it as a subscriber abort — a
+  subscription that closed with nothing explaining the silence. Both
+  directions of every published config are probed with
+  `isConfigSupported()` (a throwing probe counts as unsupported), and a
+  producer that fails to start is reported.
 - A11y: `#logs` gained `role="log"` and a label so appended entries
   announce, and the relay input — the page's only unlabelled control —
   gained a real `<label for>`.
+
+Measured while fixing: **the MoQ entry is at 97.7% of its 20 KB budget
+(19.55 KB, 465 B left)**, not the 18.16 KB recorded above — the drift is
+from this branch's earlier fix rounds, not the sandbox. Worth knowing
+before the next MoQ change.
 
 ## Live-relay interop: relay.mux.dev (2026-07-30)
 
