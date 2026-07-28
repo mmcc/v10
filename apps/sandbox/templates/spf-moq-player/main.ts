@@ -22,8 +22,8 @@ import type { Skin } from '@app/types';
 import '@videojs/html/live-video/player';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import { effect, snapshot, untrack } from '@videojs/spf';
-import { isMoqSourceUrl, isResolvedPresentation } from '@videojs/spf/moq';
-import { createLoopbackRelay, type LoopbackRelay } from './loopback-relay';
+import { isMoqSourceUrl, isResolvedPresentation, parseMoqSource } from '@videojs/spf/moq';
+import { createLoopbackRelay, type LoopbackRelay, unsupportedLoopbackCodecs } from './loopback-relay';
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const mount = document.getElementById('player-mount') as HTMLDivElement;
@@ -103,13 +103,22 @@ function readRelayParam(): string {
 }
 
 /**
- * What `parseMoqSource` requires of a source, checked here so a bad URL is
- * reported on the page instead of only as a dev warning from inside the engine.
+ * Whether the engine will accept this source, reported on the page instead of
+ * only as a dev warning from inside the engine. Delegates to the engine's own
+ * `parseMoqSource` so the page cannot drift from what the pipeline accepts —
+ * a hand-rolled approximation would pass URLs the parser then rejects
+ * (`#msf:` present but no `--` delimiter, bad escapes, `connection=bogus`, …),
+ * which is exactly the empty-player case this guard exists to avoid.
  */
 function relayProblem(url: string): string | undefined {
   if (!isMoqSourceUrl(url)) return 'must start with moqt://';
   if (!url.includes('#msf:')) {
     return "is missing its '#msf:<namespace>--<track>' fragment (percent-encode the '#' as %23 in ?relay=)";
+  }
+  try {
+    parseMoqSource(url);
+  } catch (error) {
+    return `is not a valid MSF source — ${error instanceof Error ? error.message : String(error)}`;
   }
   return undefined;
 }
@@ -400,13 +409,15 @@ function unmount(): void {
 async function render(): Promise<void> {
   const generation = ++renderGeneration;
 
-  // Re-checked per render, not once at boot: the required APIs depend on the
+  // Re-checked per render, not once at boot: what's required depends on the
   // mode, and the mode is switchable at runtime.
-  const missing = missingApis(state.mode);
+  const missing = await missingSupport(state.mode);
+  // The codec probe awaits, so this is a suspension point like the skin load.
+  if (generation !== renderGeneration) return;
   if (missing.length > 0) {
     unmount();
     unsupported.hidden = false;
-    unsupported.textContent = `This browser is missing: ${missing.join(', ')}. MoQ playback needs all of them.`;
+    unsupported.textContent = `This browser cannot run: ${missing.join(', ')}. MoQ playback needs all of them.`;
     return;
   }
   unsupported.hidden = true;
@@ -546,7 +557,7 @@ skinSelect.addEventListener('change', () => {
  * only a remote relay needs WebTransport — so a browser that can play a real
  * relay must not be turned away for lacking encoders.
  */
-function missingApis(mode: Mode): string[] {
+async function missingSupport(mode: Mode): Promise<string[]> {
   const missing: string[] = [];
   if (typeof VideoDecoder === 'undefined' || typeof AudioDecoder === 'undefined') missing.push('WebCodecs decoders');
 
@@ -555,6 +566,10 @@ function missingApis(mode: Mode): string[] {
       missing.push('WebCodecs encoders (loopback publisher)');
     }
     if (typeof OffscreenCanvas === 'undefined') missing.push('OffscreenCanvas (loopback publisher)');
+    // Present constructors don't mean the platform can run these codecs, and
+    // a rejected `configure()` would surface only as a stream that never
+    // delivers — so probe the exact configurations the publisher uses.
+    if (missing.length === 0) missing.push(...(await unsupportedLoopbackCodecs()));
   } else if (typeof WebTransport === 'undefined') {
     missing.push('WebTransport');
   }

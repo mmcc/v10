@@ -212,6 +212,68 @@ const AUDIO_TRACK = {
 /** Objects per audio group, so a group boundary (`objectId === 0`) lands every second. */
 const AUDIO_GROUP_OBJECTS = 50;
 
+function videoEncoderConfig(track: VideoTrackSpec): VideoEncoderConfig {
+  return {
+    codec: 'vp8',
+    width: track.width,
+    height: track.height,
+    bitrate: track.bitrate,
+    framerate: FPS,
+    latencyMode: 'realtime',
+  };
+}
+
+function audioEncoderConfig(): AudioEncoderConfig {
+  return {
+    codec: 'opus',
+    sampleRate: AUDIO_TRACK.sampleRate,
+    numberOfChannels: AUDIO_TRACK.channels,
+    bitrate: AUDIO_TRACK.bitrate,
+  };
+}
+
+/**
+ * Which of the publisher's codec configurations this browser can't handle.
+ *
+ * The constructors existing is not enough — `configure()` rejects a codec the
+ * platform lacks, and the failure would otherwise surface as a subscription
+ * that quietly never delivers. Both directions are probed: the publisher
+ * encodes and the engine decodes the same streams.
+ */
+export async function unsupportedLoopbackCodecs(): Promise<string[]> {
+  const unsupported: string[] = [];
+
+  const check = async (label: string, probe: () => Promise<{ supported?: boolean }>) => {
+    try {
+      const { supported } = await probe();
+      if (!supported) unsupported.push(label);
+    } catch {
+      // A config this platform rejects outright throws instead of reporting.
+      unsupported.push(label);
+    }
+  };
+
+  for (const track of VIDEO_TRACKS) {
+    const label = `VP8 ${track.width}×${track.height}`;
+    await check(`${label} encoding`, () => VideoEncoder.isConfigSupported(videoEncoderConfig(track)));
+    await check(`${label} decoding`, () =>
+      VideoDecoder.isConfigSupported({ codec: 'vp8', codedWidth: track.width, codedHeight: track.height })
+    );
+  }
+
+  const audio = audioEncoderConfig();
+  await check('Opus encoding', () => AudioEncoder.isConfigSupported(audio));
+  await check('Opus decoding', () =>
+    AudioDecoder.isConfigSupported({
+      codec: 'opus',
+      sampleRate: audio.sampleRate,
+      numberOfChannels: audio.numberOfChannels,
+    })
+  );
+
+  return unsupported;
+}
+
 function buildCatalog(): string {
   return JSON.stringify({
     version: '1',
@@ -307,14 +369,7 @@ function startVideoProducer(spec: VideoTrackSpec, trackAlias: number, host: Prod
     error: (error) => host.log(`${spec.name} encoder error: ${error.message}`),
   });
 
-  encoder.configure({
-    codec: 'vp8',
-    width: spec.width,
-    height: spec.height,
-    bitrate: spec.bitrate,
-    framerate: FPS,
-    latencyMode: 'realtime',
-  });
+  encoder.configure(videoEncoderConfig(spec));
 
   const interval = setInterval(() => {
     if (encoder.state !== 'configured') return;
@@ -333,7 +388,7 @@ function startVideoProducer(spec: VideoTrackSpec, trackAlias: number, host: Prod
 }
 
 function startAudioProducer(trackAlias: number, host: ProducerHost): () => void {
-  const { sampleRate, channels, bitrate, frameSamples } = AUDIO_TRACK;
+  const { sampleRate, channels, frameSamples } = AUDIO_TRACK;
   const frameDurationUs = Math.round((frameSamples / sampleRate) * 1_000_000);
 
   let groupId = 0;
@@ -355,7 +410,7 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
     error: (error) => host.log(`audio encoder error: ${error.message}`),
   });
 
-  encoder.configure({ codec: 'opus', sampleRate, numberOfChannels: channels, bitrate });
+  encoder.configure(audioEncoderConfig());
 
   // A quiet arpeggio over a sine carrier — audible enough to tell whether the
   // master clock is running, soft enough to leave on.
@@ -528,12 +583,18 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
       }
 
       const video = VIDEO_TRACKS.find((track) => track.name === trackName);
-      if (video) {
-        stopProducer = startVideoProducer(video, trackAlias, host);
-      } else if (trackName === AUDIO_TRACK.name) {
-        stopProducer = startAudioProducer(trackAlias, host);
-      } else {
+      if (!video && trackName !== AUDIO_TRACK.name) {
         log(`subscribe for unknown track ${trackName}`);
+        return;
+      }
+
+      // Reported here rather than thrown: the request-stream loop treats a
+      // throw as the subscriber aborting, so a failed `configure()` would
+      // otherwise close the subscription with nothing to explain the silence.
+      try {
+        stopProducer = video ? startVideoProducer(video, trackAlias, host) : startAudioProducer(trackAlias, host);
+      } catch (error) {
+        log(`cannot publish ${trackName}: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
       producers.add(stopProducer);
