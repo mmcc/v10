@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sandbox — MoQ Player</title>
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <style>
+      body {
+        max-width: 1100px;
+        padding: 20px;
+        margin: 0 auto;
+        font-family: monospace;
+        color: #18181b;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 20px;
+      }
+      h2 {
+        margin: 0 0 6px;
+        font-size: 12px
+      }
+      p {
+        margin: 0 0 12px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #52525b;
+      }
+      code {
+        padding: 1px 4px;
+        background: #f4f4f5;
+        border-radius: 3px;
+      }
+
+      /* ── Source ── */
+      #source {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+      #mode-badge {
+        padding: 2px 8px;
+        font-weight: bold;
+        color: #fff;
+        background: #16a34a;
+        border-radius: 999px;
+      }
+      #mode-badge.relay {
+        background: #0070f3;
+      }
+      #relay-input {
+        flex: 1;
+        min-width: 320px;
+        padding: 6px 10px;
+        font-family: monospace;
+        font-size: 12px;
+        border: 1px solid #a1a1aa;
+        border-radius: 4px;
+      }
+      button {
+        padding: 6px 12px;
+        font-family: monospace;
+        font-size: 12px;
+        cursor: pointer;
+        background: #f4f4f5;
+        border: 1px solid #52525b;
+        border-radius: 4px;
+      }
+      button:hover {
+        background: #e4e4e7;
+      }
+      button[aria-pressed='true'] {
+        color: #fff;
+        background: #18181b;
+      }
+
+      /* ── Player ── */
+      #player-mount {
+        max-width: 900px;
+        aspect-ratio: 16 / 9;
+        margin: 0 auto 14px;
+      }
+      /* Player shell and skin host fill the mount so the skin's
+         `height: 100%` media container has a definite height to resolve. */
+      #player-mount live-video-player,
+      #player-mount live-video-player > * {
+        display: block;
+        height: 100%;
+      }
+      #unsupported {
+        padding: 12px 15px;
+        margin-bottom: 14px;
+        font-size: 12px;
+        color: #7f1d1d;
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        border-radius: 4px;
+      }
+
+      /* ── Config ── */
+      #config {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+        margin-bottom: 14px;
+        font-size: 12px;
+      }
+      #config label {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+      }
+      #config select,
+      #config input[type='number'] {
+        padding: 3px 6px;
+        font-family: monospace;
+        font-size: 12px;
+        border: 1px solid #a1a1aa;
+        border-radius: 4px;
+      }
+      .field-group {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+      }
+
+      /* ── Panels ── */
+      #panels {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .panel {
+        padding: 10px 12px;
+        font-size: 12px;
+        background: #fafafa;
+        border: 1px solid #e4e4e7;
+        border-radius: 4px;
+      }
+      .panel h2 {
+        color: #71717a;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        padding: 1px 0;
+      }
+      .row dt {
+        color: #71717a;
+      }
+      .row dd {
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: right;
+        white-space: nowrap;
+      }
+      dl {
+        margin: 0;
+      }
+      .ok {
+        font-weight: bold;
+        color: #16a34a;
+      }
+      .warn {
+        color: #d97706;
+      }
+      .bad {
+        color: #dc2626;
+      }
+
+      /* ── Capabilities ── */
+      table {
+        width: 100%;
+        font-size: 12px;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 3px 6px;
+        text-align: left;
+        border-bottom: 1px solid #e4e4e7;
+      }
+      th {
+        color: #71717a;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      td.state {
+        width: 90px;
+        font-weight: bold;
+      }
+
+      /* ── Log ── */
+      #logs {
+        height: 180px;
+        padding: 8px 10px;
+        overflow-y: auto;
+        font-size: 11px;
+        line-height: 1.5;
+        background: #18181b;
+        border-radius: 4px;
+      }
+      #logs div {
+        color: #d4d4d8;
+      }
+      #logs div.event {
+        color: #7dd3fc;
+      }
+      #logs div.error {
+        color: #fca5a5;
+      }
+      details {
+        margin-bottom: 14px;
+      }
+      summary {
+        margin-bottom: 6px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MoQ Player</h1>
+    <p>
+      <code>&lt;simple-moq-video&gt;</code> inside the real
+      <code>&lt;live-video-player&gt;</code> shell and skin — the MoQ engine driving actual Video.js controls. Defaults
+      to a <strong>loopback relay</strong>: an in-page MSF publisher speaking draft-19 bytes over an in-memory
+      transport, so playback works with no server. Pass <code>?relay=moqt://…#msf:…</code> to point at a real relay
+      instead.
+    </p>
+
+    <div id="unsupported" hidden></div>
+
+    <div id="source">
+      <span id="mode-badge">loopback</span>
+      <input id="relay-input" spellcheck="false" placeholder="moqt://relay.example.com/live#msf:live--catalog" />
+      <button id="apply-relay" type="button">Load relay</button>
+      <button id="use-loopback" type="button">Use loopback</button>
+    </div>
+
+    <div id="player-mount"></div>
+
+    <div id="config">
+      <span class="field-group">
+        <span>Video track:</span>
+        <button id="track-auto" type="button" aria-pressed="true">Auto (ABR)</button>
+        <span id="track-buttons" class="field-group"></span>
+      </span>
+      <label>
+        Target latency (s):
+        <input id="latency-input" type="number" min="0.1" max="10" step="0.1" />
+      </label>
+      <label>
+        Preload:
+        <select id="preload-select">
+          <option value="auto">auto</option>
+          <option value="metadata">metadata</option>
+          <option value="none">none</option>
+        </select>
+      </label>
+      <label>
+        Skin:
+        <select id="skin-select">
+          <option value="default">default</option>
+          <option value="minimal">minimal</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="panels">
+      <div class="panel">
+        <h2>Session</h2>
+        <dl id="panel-session"></dl>
+      </div>
+      <div class="panel">
+        <h2>Catalog &amp; selection</h2>
+        <dl id="panel-selection"></dl>
+      </div>
+      <div class="panel">
+        <h2>Playout</h2>
+        <dl id="panel-playout"></dl>
+      </div>
+      <div class="panel">
+        <h2>Renderers</h2>
+        <dl id="panel-renderers"></dl>
+      </div>
+      <div class="panel">
+        <h2>Publisher</h2>
+        <dl id="panel-publisher"></dl>
+      </div>
+    </div>
+
+    <details>
+      <summary>Media capabilities the player store probes for</summary>
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th class="state">State</th>
+            <th>Player UI it drives</th>
+          </tr>
+        </thead>
+        <tbody id="capabilities"></tbody>
+      </table>
+    </details>
+
+    <div id="logs"></div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
