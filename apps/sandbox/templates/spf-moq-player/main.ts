@@ -16,7 +16,6 @@ import '@app/styles.css';
 //   preload=none|metadata|auto
 //   muted=true           Start muted
 import { SKINS } from '@app/constants';
-import { createLatestLoader } from '@app/shared/html/sandbox-state';
 import { loadVideoSkinTag } from '@app/shared/html/skins';
 import { PRELOAD_VALUES, type PreloadValue } from '@app/shared/sandbox-listener';
 import type { Skin } from '@app/types';
@@ -373,8 +372,12 @@ function syncTrackButtons(media: SimpleMoqVideoElement): void {
 // ── Mount ────────────────────────────────────────────────────────────────────
 let teardown: (() => void) | undefined;
 
-/** Serializes skin loads so a superseded `render()` can't clobber a newer one. */
-const loadLatestSkin = createLatestLoader();
+/**
+ * Bumped on every `render()` entry — including the ones that bail early on
+ * missing APIs — so a call still awaiting its skin import cannot resume and
+ * mount over a newer decision (or into a mode that was just rejected).
+ */
+let renderGeneration = 0;
 
 function currentSrc(): string {
   return state.mode === 'loopback' ? (activeRelay?.src ?? '') : state.relaySrc;
@@ -395,6 +398,8 @@ function unmount(): void {
 }
 
 async function render(): Promise<void> {
+  const generation = ++renderGeneration;
+
   // Re-checked per render, not once at boot: the required APIs depend on the
   // mode, and the mode is switchable at runtime.
   const missing = missingApis(state.mode);
@@ -406,9 +411,15 @@ async function render(): Promise<void> {
   }
   unsupported.hidden = true;
 
-  const skinTag = await loadLatestSkin(() => loadVideoSkinTag(state.skin, 'css', { live: true }));
+  let skinTag: string;
+  try {
+    skinTag = await loadVideoSkinTag(state.skin, 'css', { live: true });
+  } catch (error) {
+    log(`failed to load the ${state.skin} skin: ${String(error)}`, 'error');
+    return;
+  }
   // A newer render() superseded this one while the skin loaded.
-  if (!skinTag) return;
+  if (generation !== renderGeneration) return;
 
   unmount();
 

@@ -184,6 +184,37 @@ promotion). Zero page errors.
   while the server runs changes nothing until `tsx scripts/setup.ts`
   re-runs.
 
+## Sandbox review triage (2026-07-28, PR #2 bot reviews)
+
+6 findings across two rounds, all valid, all fixed. Every one was in the
+harness page rather than the engine — the sandbox is where untrusted
+input (query params) and lifecycle churn (mode/skin switching) live.
+
+- Query params were cast, not validated: `?skin=bogus` resolved to an
+  undefined skin tag (so `document.createElement(undefined)` produced an
+  `<undefined>` wrapper with no chrome) and `?latency=foo` wrote NaN into
+  the latency controller. Both now fall back.
+- `checkSupport()` demanded encoders and `OffscreenCanvas` in *both*
+  modes, so a browser able to play a real relay was turned away for
+  lacking publisher-only APIs. The check is mode-scoped and moved into
+  `render()` so it tracks runtime mode switches.
+- Two lifecycle leaks on unmount: the module-level relay reference, and
+  the rendition buttons, whose handlers close over the media element and
+  stayed clickable against a destroyed engine until the next catalog
+  resolved.
+- `render()` had a supersede gap the latest-loader could not see: the
+  missing-APIs early return never advanced the loader version, so a call
+  still awaiting its skin import resumed afterward and mounted for the
+  just-rejected mode — verified by reproducing it, a `simple-moq-video`
+  mounted *underneath* the "missing WebTransport" banner. Replaced with a
+  render generation bumped on every entry, early returns included.
+- The documented `?relay=moqt://…#msf:…` form could never work: the
+  browser takes everything from `#` as the page fragment, so the engine
+  received a fragment-less source and only logged a dev warning behind an
+  empty player. The page now recombines its own `#msf:` fragment and
+  reports a relay URL that still isn't a valid MSF source.
+- `#logs` gained `role="log"` and a label so appended entries announce.
+
 ## Live-relay interop: relay.mux.dev (2026-07-30)
 
 First real Phase 0 data point — a moq-dev relay deployment reachable at
