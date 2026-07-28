@@ -78,6 +78,22 @@ describe('SimpleMoqVideo', () => {
     expect(el.shadowRoot?.querySelector('canvas')).not.toBeNull();
   });
 
+  it('sizes the canvas from a stylesheet so skin style hooks apply', () => {
+    const tag = defineElement();
+    const el = document.createElement(tag) as SimpleMoqVideo;
+
+    // Inline styles would win over the skin's CSS vars; the canvas must be
+    // styled by the sheet, and the host must generate no box so the canvas
+    // fills the skin's media container like a slotted `<video>` does.
+    const canvas = el.shadowRoot!.querySelector('canvas')!;
+    expect(canvas.getAttribute('style')).toBeNull();
+
+    const styles = el.shadowRoot!.querySelector('style')!.textContent!;
+    expect(styles).toContain('display: contents');
+    expect(styles).toContain('object-fit: var(--media-object-fit, contain)');
+    expect(styles).toContain('border-radius: var(--media-video-border-radius)');
+  });
+
   it('attaches the canvas as the render surface on connect', () => {
     const el = createConnectedElement();
 

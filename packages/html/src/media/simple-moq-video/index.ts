@@ -1,3 +1,4 @@
+import { VideoCSSVars } from '@videojs/core/dom/media/custom-media-element';
 import { effect } from '@videojs/spf';
 import { isResolvedPresentation, MoqMediaMixin, type MoqMediaProps } from '@videojs/spf/moq';
 import { isNull } from '@videojs/utils/predicate';
@@ -10,6 +11,28 @@ const MoqMediaBase = MoqMediaMixin(HTMLElementBase);
 
 /** Native `timeupdate` cadence — poll the audio master clock at the same rate. */
 const TIME_POLL_INTERVAL_MS = 250;
+
+/**
+ * Layout parity with `CustomMediaElement`'s video template: the host
+ * generates no box, so the canvas fills the skin's media container the same
+ * way a slotted `<video>` does and honors the same style hooks. Without
+ * this the canvas resolves `height: 100%` against an inline host and
+ * collapses to its intrinsic bitmap height inside a skin.
+ */
+const SHADOW_STYLES = /*css*/ `
+  :host {
+    display: contents;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: var(${VideoCSSVars.borderRadius});
+    object-fit: var(${VideoCSSVars.objectFit}, contain);
+    object-position: var(${VideoCSSVars.objectPosition}, center);
+  }
+`;
 
 // `HTMLMediaElement` readyState constants — this element doesn't extend it,
 // so the values are restated here (store features compare against them).
@@ -46,9 +69,10 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
   constructor(...args: ConstructorParameters<typeof MoqMediaBase>) {
     super(...args);
     this.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = SHADOW_STYLES;
     this.#canvas = document.createElement('canvas');
-    this.#canvas.style.cssText = 'display: block; width: 100%; height: 100%;';
-    this.shadowRoot!.append(this.#canvas);
+    this.shadowRoot!.append(style, this.#canvas);
   }
 
   connectedCallback(): void {
