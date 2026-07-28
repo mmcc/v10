@@ -135,6 +135,55 @@ google-cast provider precedent), not in SPF:
 - Engine error slot still missing → wrapper claims the error capability
   with a constant `null`; wire it once the engine surfaces errors.
 
+## First browser bring-up (2026-07-28)
+
+`apps/sandbox/templates/spf-moq-player/` — `<simple-moq-video>` inside a
+real `<live-video-player>` + `live-video-skin`, with an engine-state
+diagnostics panel, a capability readout, and an event log. Verified in
+Chromium: session ready → catalog resolved (2 video + 1 audio) → ABR
+pick → subscribe → decode → canvas + audio master clock, `readyState` 4,
+`currentTime` advancing, play/pause/mute driving the store, LIVE badge,
+and a rendition switch completing make-before-break (canvas resizes on
+promotion). Zero page errors.
+
+- **Loopback publisher** (`loopback-relay.ts`): there is no MSF-catalog
+  relay to point at, so the page ships a synthetic one — hand-rolled
+  draft-19 bytes (vi64, SETUP/SUBSCRIBE_OK/REQUEST_ERROR, subgroup +
+  LOC framing) over an in-memory `MoqtTransport`, publishing real
+  WebCodecs-encoded VP8 (two renditions) + Opus. Written from the specs
+  rather than reusing `network/moqt`'s encoders: it is a second
+  independent implementation, so it checks the decoder rather than
+  round-tripping against ourselves. `?relay=moqt://…#msf:…` swaps in a
+  real relay.
+- **Adapter seam**: `MoqMediaOptions.engineConfig` forwards engine config
+  (transport factory, ABR/latency tuning) through the element
+  constructor; the adapter still owns `onSignalsReady`. Without it there
+  was no way to reach `createMoqTransport` from outside SPF.
+- **Skin layout parity**: the wrapper's canvas is now styled by a shadow
+  stylesheet with `:host { display: contents }` and the same
+  `--media-object-fit` / `--media-video-border-radius` hooks
+  `CustomMediaElement` gives a `<video>`. Previously the inline
+  `height: 100%` resolved against an inline host and the picture
+  collapsed to the canvas's intrinsic height inside a skin.
+- **Two bugs the bring-up caught**, both from writing the publisher
+  independently: an empty KVP block is *length-bounded, not counted*
+  (a zero count byte made SETUP undecodable), and the server's control
+  stream must stay open for the session's lifetime (closing it after
+  SETUP trips "peer closed its control stream", §3.3).
+- **Pre-existing bug fixed**: all four `live-*` define entries
+  (`live-video`/`live-audio`, full + minimal) registered `TooltipElement`
+  but never `TooltipLabelElement`/`TooltipShortcutElement`, so every
+  tooltip in a live skin threw `setSyncedText is not a function`.
+  Reproduced on the existing HLS-live sandbox page, so it predates MoQ.
+- Rough edge, not addressed: the PiP button renders and is clickable but
+  does nothing (canvas-backed media has no `requestPictureInPicture`) —
+  core's PiP availability keys off `document.pictureInPictureEnabled`,
+  not the media's capability. Harmless no-op, no error.
+- Sandbox gotcha for future sessions: `templates/` mirrors to the
+  gitignored `src/` only at dev-server `buildStart`. Editing a template
+  while the server runs changes nothing until `tsx scripts/setup.ts`
+  re-runs.
+
 ## Live-relay interop: relay.mux.dev (2026-07-30)
 
 First real Phase 0 data point — a moq-dev relay deployment reachable at
