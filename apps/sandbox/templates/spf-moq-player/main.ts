@@ -7,10 +7,13 @@ import '@app/styles.css';
 // loopback publisher (`./loopback-relay.ts`) because no public relay serves
 // MSF catalogs yet.
 //
-// Supported query params:
-//   relay=<moqt url>     Point at a real relay instead of the loopback
+// Supported query params (unrecognized values fall back to the defaults):
+//   relay=<moqt url>     Point at a real relay instead of the loopback. The
+//                        '#' needs percent-encoding as %23, or it is read as
+//                        the page fragment (which this page puts back).
 //   latency=<seconds>    Initial target latency
 //   skin=default|minimal
+//   preload=none|metadata|auto
 //   muted=true           Start muted
 import { SKINS } from '@app/constants';
 import { createLatestLoader } from '@app/shared/html/sandbox-state';
@@ -20,7 +23,7 @@ import type { Skin } from '@app/types';
 import '@videojs/html/live-video/player';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import { effect, snapshot, untrack } from '@videojs/spf';
-import { isResolvedPresentation } from '@videojs/spf/moq';
+import { isMoqSourceUrl, isResolvedPresentation } from '@videojs/spf/moq';
 import { createLoopbackRelay, type LoopbackRelay } from './loopback-relay';
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -77,7 +80,6 @@ interface PageState {
 }
 
 const params = new URLSearchParams(window.location.search);
-const relayParam = params.get('relay') ?? '';
 
 /** Query params are user input: an unrecognized value falls back, never through. */
 function oneOf<Value extends string>(raw: string | null, allowed: readonly Value[], fallback: Value): Value {
@@ -89,9 +91,36 @@ function positiveSeconds(raw: string | null, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * A pasted `?relay=moqt://host/path#msf:ns--catalog` loses everything from the
+ * `#` onward to the page's own fragment, so an MSF fragment sitting there
+ * belongs to the relay URL — put it back rather than fail on a truncated source.
+ */
+function readRelayParam(): string {
+  const relay = params.get('relay') ?? '';
+  if (!relay || relay.includes('#')) return relay;
+  const hash = window.location.hash;
+  return hash.startsWith('#msf:') ? `${relay}${hash}` : relay;
+}
+
+/**
+ * What `parseMoqSource` requires of a source, checked here so a bad URL is
+ * reported on the page instead of only as a dev warning from inside the engine.
+ */
+function relayProblem(url: string): string | undefined {
+  if (!isMoqSourceUrl(url)) return 'must start with moqt://';
+  if (!url.includes('#msf:')) {
+    return "is missing its '#msf:<namespace>--<track>' fragment (percent-encode the '#' as %23 in ?relay=)";
+  }
+  return undefined;
+}
+
+const relayParam = readRelayParam();
+const relayParamProblem = relayParam ? relayProblem(relayParam) : undefined;
+
 const state: PageState = {
-  mode: relayParam ? 'relay' : 'loopback',
-  relaySrc: relayParam,
+  mode: relayParam && !relayParamProblem ? 'relay' : 'loopback',
+  relaySrc: relayParamProblem ? '' : relayParam,
   skin: oneOf(params.get('skin'), SKINS, 'default'),
   preload: oneOf(params.get('preload'), PRELOAD_VALUES, 'auto'),
   targetLatency: positiveSeconds(params.get('latency'), 0.5),
@@ -456,6 +485,11 @@ applyRelayButton.addEventListener('click', () => {
     log('enter a moqt:// URL first', 'error');
     return;
   }
+  const problem = relayProblem(value);
+  if (problem) {
+    log(`relay URL ${problem}`, 'error');
+    return;
+  }
   state.mode = 'relay';
   state.relaySrc = value;
   void render();
@@ -517,5 +551,6 @@ function missingApis(mode: Mode): string[] {
   return missing;
 }
 
+if (relayParamProblem) log(`ignoring ?relay= — it ${relayParamProblem}`, 'error');
 log('press play — the AudioContext (and with it the master clock) resumes on a user gesture');
 void render();

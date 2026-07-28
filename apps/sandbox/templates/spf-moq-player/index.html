@@ -236,8 +236,8 @@
       <code>&lt;simple-moq-video&gt;</code> inside the real
       <code>&lt;live-video-player&gt;</code> shell and skin — the MoQ engine driving actual Video.js controls. Defaults
       to a <strong>loopback relay</strong>: an in-page MSF publisher speaking draft-19 bytes over an in-memory
-      transport, so playback works with no server. Pass <code>?relay=moqt://…#msf:…</code> to point at a real relay
-      instead.
+      transport, so playback works with no server. Pass <code>?relay=moqt://…%23msf:…</code> to point at a real relay
+      instead — percent-encode the <code>#</code>, or the browser reads it as this page's fragment.
     </p>
 
     <div id="unsupported" hidden></div>
