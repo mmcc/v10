@@ -463,11 +463,16 @@ async function render(): Promise<void> {
   player.append(skin);
   mount.append(player);
 
-  // Assign after connection so the engine sees a mounted render surface, and
+  // Before the source: the `src` setter dispatches the load cycle
+  // (`loadstart`, `durationchange`, `streamtypechange`,
+  // `targetlivewindowchange`) synchronously, and that lifecycle is the point
+  // of the event log — listeners attached afterward would miss all of it.
+  connectDiagnostics(media);
+
+  // Assigned after connection so the engine sees a mounted render surface, and
   // as a property so relay URLs need no attribute escaping.
   media.src = currentSrc();
 
-  connectDiagnostics(media);
   log(`mounted ${tagName} in <live-video-player>/<${skinTag}> — src ${media.src}`);
 }
 

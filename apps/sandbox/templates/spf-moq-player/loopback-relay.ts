@@ -512,6 +512,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     // already resolved, and shared stream handles left the old accept loops
     // pending with nothing able to release them.
     let uniController: ReadableStreamDefaultController<ReadableStream<Uint8Array>> | undefined;
+    let bidiController: ReadableStreamDefaultController<never> | undefined;
     let controlWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
     const stopProducers = new Set<() => void>();
     const abortRequestStreams = new Set<() => void>();
@@ -675,14 +676,18 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
       abortRequestStreams.clear();
       controlWriter?.close().catch(() => {});
       controlWriter = undefined;
-      // Ending the accept stream lets the session's read loop finish rather
-      // than staying pending on a transport nobody will use again.
-      try {
-        uniController?.close();
-      } catch {
-        // Already closed or errored — nothing to release.
+      // Ending both accept streams lets the session's read loops finish rather
+      // than staying pending on a transport nobody will use again. `closed`
+      // resolving does not unblock them on its own.
+      for (const controller of [uniController, bidiController]) {
+        try {
+          controller?.close();
+        } catch {
+          // Already closed or errored — nothing to release.
+        }
       }
       uniController = undefined;
+      bidiController = undefined;
       resolveClosed();
     };
     closeTransports.add(close);
@@ -693,7 +698,14 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
           uniController = controller;
         },
       }),
-      incomingBidirectionalStreams: new ReadableStream<never>({ start() {} }),
+      // Nothing is ever published here — this relay never initiates a request
+      // — but the session still parks a reader on it, so its controller has to
+      // be retained or that accept loop never finishes.
+      incomingBidirectionalStreams: new ReadableStream<never>({
+        start(controller) {
+          bidiController = controller;
+        },
+      }),
       // The subscriber's own control stream: SETUP and GOAWAY land here and
       // nothing in this relay reacts to them.
       createUnidirectionalStream: async () => new WritableStream<Uint8Array>(),
