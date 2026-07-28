@@ -50,6 +50,13 @@ export interface MoqMediaOptions {
    * without a live audio device. Defaults to `new AudioContext()`.
    */
   createAudioContext?: () => MoqAudioContext;
+  /**
+   * Engine config forwarded to `createMoqEngine` — reaches the transport
+   * factory (`createMoqTransport`) and the ABR/latency tuning seams from
+   * outside the element, which a relay-less harness needs. The adapter owns
+   * `onSignalsReady`, so it is not overridable.
+   */
+  engineConfig?: Omit<MoqEngineConfig, 'onSignalsReady'>;
 }
 
 export interface MoqMediaProps {
@@ -112,9 +119,10 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     constructor(...args: any[]) {
       super(...args);
-      const { createAudioContext } = (args?.[0] ?? {}) as MoqMediaOptions;
+      const { createAudioContext, engineConfig } = (args?.[0] ?? {}) as MoqMediaOptions;
       this.#createAudioContext = createAudioContext ?? (() => new AudioContext());
       const config: MoqEngineConfig = {
+        ...engineConfig,
         onSignalsReady: (refs) => {
           this.#signals = refs;
         },

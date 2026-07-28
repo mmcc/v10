@@ -119,4 +119,40 @@ describe('MoqMediaMixin', () => {
 
     media.destroy();
   });
+
+  it('forwards engineConfig to the engine', async () => {
+    const createMoqTransport = vi.fn((_connectUrl: string, _protocols: string[]) => ({
+      // Never delivers server SETUP: the factory call is what's under test.
+      transport: {
+        incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({ start() {} }),
+        incomingBidirectionalStreams: new ReadableStream({ start() {} }),
+        createUnidirectionalStream: async () => new WritableStream<Uint8Array>(),
+        createBidirectionalStream: async () => ({
+          readable: new ReadableStream<Uint8Array>({ start() {} }),
+          writable: new WritableStream<Uint8Array>(),
+        }),
+        close: () => {},
+        closed: new Promise<void>(() => {}),
+      },
+      ready: Promise.resolve(),
+    }));
+
+    const media = new MoqMediaElement({
+      createAudioContext: () => createFakeAudioContext('running'),
+      engineConfig: { createMoqTransport },
+    });
+
+    // `preload: 'auto'` opens the session behavior's load gate without an
+    // element to activate it.
+    media.preload = 'auto';
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+
+    await vi.waitFor(() => expect(createMoqTransport).toHaveBeenCalledTimes(1));
+    // moqt: → https: with the fragment stripped (moq-transport §3.1.4).
+    expect(createMoqTransport.mock.calls[0]?.[0]).toBe('https://relay.test/live');
+    // The adapter's own `onSignalsReady` survived the config spread.
+    expect(media.engine.state.presentation.get()?.url).toBe('moqt://relay.test/live#msf:live--catalog');
+
+    media.destroy();
+  });
 });
