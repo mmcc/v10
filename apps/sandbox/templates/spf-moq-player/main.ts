@@ -22,7 +22,7 @@ import type { Skin } from '@app/types';
 import '@videojs/html/live-video/player';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import { effect, snapshot, untrack } from '@videojs/spf';
-import { isMoqSourceUrl, isResolvedPresentation, parseMoqSource } from '@videojs/spf/moq';
+import { isMoqSourceUrl, isResolvedPresentation, type MoqSource, parseMoqSource } from '@videojs/spf/moq';
 import { createLoopbackRelay, type LoopbackRelay, unsupportedLoopbackCodecs } from './loopback-relay';
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -115,10 +115,17 @@ function relayProblem(url: string): string | undefined {
   if (!url.includes('#msf:')) {
     return "is missing its '#msf:<namespace>--<track>' fragment (percent-encode the '#' as %23 in ?relay=)";
   }
+  let source: MoqSource;
   try {
-    parseMoqSource(url);
+    source = parseMoqSource(url);
   } catch (error) {
     return `is not a valid MSF source — ${error instanceof Error ? error.message : String(error)}`;
+  }
+  // Relay mode mounts the plain element, whose only transport is WebTransport.
+  // `createMoqSessionActor` refuses a native-QUIC mandate without a
+  // QUIC-capable factory, so accepting one here would mount a dead player.
+  if (source.connection === 'quic') {
+    return 'mandates a native QUIC connection (connection=q), which a browser cannot provide';
   }
   return undefined;
 }

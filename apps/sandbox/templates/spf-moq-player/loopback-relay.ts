@@ -641,13 +641,29 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     }
   }
 
-  let resolveClosed: (() => void) | undefined;
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  });
+  /** Per-transport close resolvers, so `destroy()` can settle every live one. */
+  const transportClosers = new Set<() => void>();
 
   const createMoqTransport: CreateMoqTransport = () => {
+    // Per transport, not per relay: `setupMoqSession` recreates its transport
+    // whenever the preload gate reopens, and a shared promise would hand the
+    // replacement an already-resolved `closed` — the new session would go
+    // straight to closed instead of connecting.
+    let resolveClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    const settleClosed = () => {
+      transportClosers.delete(settleClosed);
+      resolveClosed();
+    };
+    transportClosers.add(settleClosed);
+
     const transport = {
+      // A replacement transport takes over delivery. Objects still in flight
+      // from the previous session's producers carry track aliases the new
+      // session doesn't know, so it drops them — and those producers stop as
+      // soon as their request streams abort.
       incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
         start(controller) {
           uniController = controller;
@@ -663,7 +679,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
         void handleRequestStream({ readable: clientToServer.readable, writable: serverToClient.writable });
         return { readable: serverToClient.readable, writable: clientToServer.writable };
       },
-      close: () => resolveClosed?.(),
+      close: settleClosed,
       closed,
     };
 
@@ -687,7 +703,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
       producers.clear();
       controlWriter?.close().catch(() => {});
       controlWriter = undefined;
-      resolveClosed?.();
+      for (const settle of [...transportClosers]) settle();
     },
   };
 }
