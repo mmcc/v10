@@ -10,6 +10,8 @@ import { PlayButtonElement } from '../../ui/play-button/play-button-element';
 import { PopoverElement } from '../../ui/popover/popover-element';
 import { TooltipElement } from '../../ui/tooltip/tooltip-element';
 import { TooltipGroupElement } from '../../ui/tooltip/tooltip-group-element';
+import { TooltipLabelElement } from '../../ui/tooltip/tooltip-label-element';
+import { TooltipShortcutElement } from '../../ui/tooltip/tooltip-shortcut-element';
 import { safeDefine } from '../safe-define';
 import { defineErrorDialog, defineTime, defineTimeSlider, defineVolumeSlider } from '../ui/compounds';
 
@@ -33,5 +35,7 @@ safeDefine(LiveButtonElement);
 safeDefine(MuteButtonElement);
 safeDefine(PlayButtonElement);
 safeDefine(PopoverElement);
+safeDefine(TooltipLabelElement);
+safeDefine(TooltipShortcutElement);
 safeDefine(TooltipElement);
 safeDefine(TooltipGroupElement);

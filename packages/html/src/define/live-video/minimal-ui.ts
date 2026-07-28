@@ -19,6 +19,8 @@ import { PopoverElement } from '../../ui/popover/popover-element';
 import { PosterElement } from '../../ui/poster/poster-element';
 import { TooltipElement } from '../../ui/tooltip/tooltip-element';
 import { TooltipGroupElement } from '../../ui/tooltip/tooltip-group-element';
+import { TooltipLabelElement } from '../../ui/tooltip/tooltip-label-element';
+import { TooltipShortcutElement } from '../../ui/tooltip/tooltip-shortcut-element';
 import { safeDefine } from '../safe-define';
 import {
   defineControls,
@@ -62,5 +64,7 @@ safeDefine(PiPButtonElement);
 safeDefine(PlayButtonElement);
 safeDefine(PopoverElement);
 safeDefine(PosterElement);
+safeDefine(TooltipLabelElement);
+safeDefine(TooltipShortcutElement);
 safeDefine(TooltipElement);
 safeDefine(TooltipGroupElement);
