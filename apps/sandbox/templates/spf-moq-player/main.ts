@@ -12,7 +12,10 @@ import '@app/styles.css';
 //   latency=<seconds>    Initial target latency
 //   skin=default|minimal
 //   muted=true           Start muted
+import { SKINS } from '@app/constants';
+import { createLatestLoader } from '@app/shared/html/sandbox-state';
 import { loadVideoSkinTag } from '@app/shared/html/skins';
+import { PRELOAD_VALUES, type PreloadValue } from '@app/shared/sandbox-listener';
 import type { Skin } from '@app/types';
 import '@videojs/html/live-video/player';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
@@ -63,13 +66,12 @@ const BRIDGED_EVENTS = [
 
 // ── State ────────────────────────────────────────────────────────────────────
 type Mode = 'loopback' | 'relay';
-type Preload = 'auto' | 'metadata' | 'none';
 
 interface PageState {
   mode: Mode;
   relaySrc: string;
   skin: Skin;
-  preload: Preload;
+  preload: PreloadValue;
   targetLatency: number;
   muted: boolean;
 }
@@ -77,12 +79,22 @@ interface PageState {
 const params = new URLSearchParams(window.location.search);
 const relayParam = params.get('relay') ?? '';
 
+/** Query params are user input: an unrecognized value falls back, never through. */
+function oneOf<Value extends string>(raw: string | null, allowed: readonly Value[], fallback: Value): Value {
+  return allowed.includes(raw as Value) ? (raw as Value) : fallback;
+}
+
+function positiveSeconds(raw: string | null, fallback: number): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const state: PageState = {
   mode: relayParam ? 'relay' : 'loopback',
   relaySrc: relayParam,
-  skin: (params.get('skin') as Skin) ?? 'default',
-  preload: (params.get('preload') as Preload) ?? 'auto',
-  targetLatency: Number(params.get('latency') ?? '0.5'),
+  skin: oneOf(params.get('skin'), SKINS, 'default'),
+  preload: oneOf(params.get('preload'), PRELOAD_VALUES, 'auto'),
+  targetLatency: positiveSeconds(params.get('latency'), 0.5),
   muted: params.get('muted') === 'true',
 };
 
@@ -332,16 +344,36 @@ function syncTrackButtons(media: SimpleMoqVideoElement): void {
 // ── Mount ────────────────────────────────────────────────────────────────────
 let teardown: (() => void) | undefined;
 
+/** Serializes skin loads so a superseded `render()` can't clobber a newer one. */
+const loadLatestSkin = createLatestLoader();
+
 function currentSrc(): string {
   return state.mode === 'loopback' ? (activeRelay?.src ?? '') : state.relaySrc;
 }
 
-async function render(): Promise<void> {
-  const skinTag = await loadVideoSkinTag(state.skin, 'css', { live: true });
-
+function unmount(): void {
   teardown?.();
   teardown = undefined;
   mount.replaceChildren();
+}
+
+async function render(): Promise<void> {
+  // Re-checked per render, not once at boot: the required APIs depend on the
+  // mode, and the mode is switchable at runtime.
+  const missing = missingApis(state.mode);
+  if (missing.length > 0) {
+    unmount();
+    unsupported.hidden = false;
+    unsupported.textContent = `This browser is missing: ${missing.join(', ')}. MoQ playback needs all of them.`;
+    return;
+  }
+  unsupported.hidden = true;
+
+  const skinTag = await loadLatestSkin(() => loadVideoSkinTag(state.skin, 'css', { live: true }));
+  // A newer render() superseded this one while the skin loaded.
+  if (!skinTag) return;
+
+  unmount();
 
   if (state.mode === 'loopback') {
     activeRelay = createLoopbackRelay({ onLog: (message) => log(`relay: ${message}`) });
@@ -444,34 +476,39 @@ latencyInput.addEventListener('change', () => {
 });
 
 preloadSelect.addEventListener('change', () => {
-  state.preload = preloadSelect.value as Preload;
+  state.preload = oneOf(preloadSelect.value, PRELOAD_VALUES, state.preload);
   mediaElement()?.setAttribute('preload', state.preload);
   log(`preload → ${state.preload}`);
 });
 
 skinSelect.addEventListener('change', () => {
-  state.skin = skinSelect.value as Skin;
+  state.skin = oneOf(skinSelect.value, SKINS, state.skin);
   void render();
 });
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-function checkSupport(): boolean {
+
+/**
+ * Playback needs the WebCodecs decoders in both modes. Everything else is
+ * mode-specific: only the in-page publisher encodes and draws offscreen, and
+ * only a remote relay needs WebTransport — so a browser that can play a real
+ * relay must not be turned away for lacking encoders.
+ */
+function missingApis(mode: Mode): string[] {
   const missing: string[] = [];
   if (typeof VideoDecoder === 'undefined' || typeof AudioDecoder === 'undefined') missing.push('WebCodecs decoders');
-  if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') {
-    missing.push('WebCodecs encoders (needed by the loopback publisher)');
+
+  if (mode === 'loopback') {
+    if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') {
+      missing.push('WebCodecs encoders (loopback publisher)');
+    }
+    if (typeof OffscreenCanvas === 'undefined') missing.push('OffscreenCanvas (loopback publisher)');
+  } else if (typeof WebTransport === 'undefined') {
+    missing.push('WebTransport');
   }
-  if (typeof OffscreenCanvas === 'undefined') missing.push('OffscreenCanvas');
-  if (state.mode === 'relay' && typeof WebTransport === 'undefined') missing.push('WebTransport');
 
-  if (missing.length === 0) return true;
-
-  unsupported.hidden = false;
-  unsupported.textContent = `This browser is missing: ${missing.join(', ')}. MoQ playback needs all of them.`;
-  return false;
+  return missing;
 }
 
-if (checkSupport()) {
-  log('press play — the AudioContext (and with it the master clock) resumes on a user gesture');
-  void render();
-}
+log('press play — the AudioContext (and with it the master clock) resumes on a user gesture');
+void render();
