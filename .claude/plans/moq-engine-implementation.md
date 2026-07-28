@@ -186,9 +186,12 @@ promotion). Zero page errors.
 
 ## Sandbox review triage (2026-07-28, PR #2 bot reviews)
 
-6 findings across two rounds, all valid, all fixed. Every one was in the
-harness page rather than the engine — the sandbox is where untrusted
-input (query params) and lifecycle churn (mode/skin switching) live.
+7 bot findings across three rounds plus 3 self-review fixes — all valid,
+all fixed, one Codex re-post dismissed as stale (it named a symbol the
+commit under review had removed; replied on the PR with the before/after
+evidence). Every finding was in the harness page rather than the engine:
+the sandbox is where untrusted input (query params) and lifecycle churn
+(mode/skin switching) live.
 
 - Query params were cast, not validated: `?skin=bogus` resolved to an
   undefined skin tag (so `document.createElement(undefined)` produced an
@@ -213,7 +216,9 @@ input (query params) and lifecycle churn (mode/skin switching) live.
   received a fragment-less source and only logged a dev warning behind an
   empty player. The page now recombines its own `#msf:` fragment and
   reports a relay URL that still isn't a valid MSF source.
-- `#logs` gained `role="log"` and a label so appended entries announce.
+- A11y: `#logs` gained `role="log"` and a label so appended entries
+  announce, and the relay input — the page's only unlabelled control —
+  gained a real `<label for>`.
 
 ## Live-relay interop: relay.mux.dev (2026-07-30)
 
