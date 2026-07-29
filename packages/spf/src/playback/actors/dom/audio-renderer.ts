@@ -264,7 +264,13 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
         // buffered for a later decoder instead of being silently dropped.
         active.decode(
           new EncodedAudioChunk({
-            type: next.isKey ? 'key' : 'delta',
+            // Every audio sample is independently decodable — `isKey` is a
+            // LOC group-boundary marker (meaningful for video's GOP
+            // gating), not a decodability signal here. A live-edge
+            // (largest-object) join almost never lands on group object 0,
+            // and WebCodecs requires the first post-configure chunk to be
+            // 'key', so gating on `next.isKey` would reject it.
+            type: 'key',
             timestamp: next.timestampUs,
             data: next.payload,
           })

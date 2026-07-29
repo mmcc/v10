@@ -160,6 +160,27 @@ describe('createAudioRendererActor', () => {
     renderer.destroy();
   });
 
+  it('decodes a live-edge join whose first frame is mid-group (isKey: false)', async () => {
+    const frames = await encodeTestFrames(3);
+    // A `largest-object` subscribe joins live, so the first delivered frame
+    // is whatever object is newest right now — essentially never a LOC
+    // group's object 0 (`isKey: true`). The regression: decode() gated the
+    // WebCodecs chunk type on `isKey`, and WebCodecs rejects a 'delta'
+    // chunk as the first one fed to a fresh decoder.
+    frames[0] = { ...frames[0]!, groupId: 3, objectId: 7, isKey: false };
+    const audioContext = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
+
+    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+    expect(renderer.snapshot.get().context.status).toBe('rendering');
+
+    renderer.destroy();
+  });
+
   it('applies rate changes forward-only: already-scheduled audio keeps its clock mapping', async () => {
     const frames = await encodeTestFrames(5);
     const audioContext = createFakeAudioContext();
