@@ -58,7 +58,8 @@
     "test:watch": "vitest",
     "clean": "rimraf --glob dist types '*.tsbuildinfo'",
     "size": "node scripts/measure-size.js --hls",
-    "size:all": "node scripts/measure-size.js --all"
+    "size:all": "node scripts/measure-size.js --all",
+    "moq:probe": "node scripts/moq-probe.js"
   },
   "dependencies": {
     "@videojs/utils": "workspace:*",
