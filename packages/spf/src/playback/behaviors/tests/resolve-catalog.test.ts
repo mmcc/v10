@@ -233,6 +233,25 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
+  // A relay can answer FETCH_OK and then never open its data stream, so
+  // onEnd/onError/onReset never fire and the session's request timeout has
+  // nothing to catch. Without a settle deadline the catalog buffers live
+  // deltas forever and never resolves.
+  it('falls back to live-only when the joining fetch never settles', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup({ ...deps, config: { catalogFetchTimeoutMs: 10 } });
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+    expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
+
+    reactor.destroy();
+  });
+
   it('stays idle for non-moqt sources and before the session is ready', async () => {
     const { actor, subscriptions } = createFakeSessionActor();
     const httpDeps = makeDeps(actor, { url: 'https://example.com/live.m3u8' });

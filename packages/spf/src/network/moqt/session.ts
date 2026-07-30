@@ -195,6 +195,14 @@ export interface MoqtSessionConfig {
    * allows brief buffering; expired streams are dropped. Default 2000ms.
    */
   unknownAliasTimeoutMs?: number;
+  /**
+   * How long to wait for a request's first response (SUBSCRIBE_OK /
+   * FETCH_OK / REQUEST_OK / REQUEST_ERROR) before failing it. Draft-19
+   * expects implementations to bound control exchanges (§3.5's
+   * CONTROL_MESSAGE_TIMEOUT); without this a relay that accepts the stream
+   * and then goes quiet leaves the request pending forever. Default 10000ms.
+   */
+  requestTimeoutMs?: number;
   callbacks?: MoqtSessionCallbacks;
 }
 
@@ -233,28 +241,47 @@ export interface MoqtSession {
 }
 
 const DEFAULT_UNKNOWN_ALIAS_TIMEOUT_MS = 2000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_IMPLEMENTATION_NAME = '@videojs/spf moqt';
+
+/**
+ * A request failure that arrives as a *stream* event — FIN before any
+ * response, a transport reset, or the response timeout — rather than as a
+ * REQUEST_ERROR message. Shaped as a `RequestError` so consumers have one
+ * failure path regardless of how the request died.
+ */
+function streamFailure(reason: string, errorCode: number = REQUEST_ERROR_CODE.INTERNAL_ERROR): RequestError {
+  return { errorCode, retryInterval: 0, reason };
+}
 
 // ============================================================================
 // Internal records
 // ============================================================================
 
-interface SubscriptionRecord {
-  requestId: number;
-  handlers: SubscriptionHandlers;
-  stream?: RequestStream;
-  trackAlias?: number;
+/** Bookkeeping `#openRequest` manages for every request kind. */
+interface RequestRecordBase {
   cancelled: boolean;
   pendingCancelReason?: unknown;
+  stream?: RequestStream;
+  /**
+   * The request's first response (an OK or a REQUEST_ERROR) arrived. Until
+   * it does, a FIN / reset / timeout on the stream is a failure; after it,
+   * those are ordinary end-of-request events.
+   */
+  settled: boolean;
+  responseTimer?: ReturnType<typeof setTimeout>;
 }
 
-interface FetchRecord {
+interface SubscriptionRecord extends RequestRecordBase {
+  requestId: number;
+  handlers: SubscriptionHandlers;
+  trackAlias?: number;
+}
+
+interface FetchRecord extends RequestRecordBase {
   requestId: number;
   handlers: FetchHandlers;
-  stream?: RequestStream;
   groupOrder: 'ascending' | 'descending';
-  cancelled: boolean;
-  pendingCancelReason?: unknown;
 }
 
 interface AliasWaiter {
@@ -356,6 +383,29 @@ class MoqtSessionImpl implements MoqtSession {
       }
     }
     this.#aliasWaiters.clear();
+
+    // Requests still awaiting their first response die with the session. An
+    // unexpected close (transport drop) is a failure each of them has to
+    // hear about — otherwise a dropped transport leaves subscribers pending
+    // forever. A deliberate `close()` is ordinary teardown, and cancelled
+    // requests already have their answer.
+    const pending = expected
+      ? []
+      : [...this.#subscriptions.values(), ...this.#fetches.values()].filter((r) => !r.settled && !r.cancelled);
+    for (const record of [...this.#subscriptions.values(), ...this.#fetches.values()]) {
+      this.#settleRequest(record);
+      record.stream?.cancel(error);
+    }
+    this.#subscriptions.clear();
+    this.#fetches.clear();
+    this.#aliasRoutes.clear();
+    this.#controlWriter = undefined;
+
+    const failure = streamFailure(
+      error instanceof Error ? error.message : 'session closed before the request was answered'
+    );
+    for (const record of pending) record.handlers.onError?.(failure);
+
     // A transport that drops before server SETUP is a session failure even
     // when the close itself was clean — callback-only consumers observing
     // `onClosed` alone must see the error too. A deliberate local `close()`
@@ -392,7 +442,7 @@ class MoqtSessionImpl implements MoqtSession {
 
   subscribe(options: MoqtSubscribeOptions, handlers: SubscriptionHandlers = {}): Subscription {
     const requestId = this.#allocateRequestId();
-    const record: SubscriptionRecord = { requestId, handlers, cancelled: false };
+    const record: SubscriptionRecord = { requestId, handlers, cancelled: false, settled: false };
     this.#subscriptions.set(requestId, record);
 
     const message = encodeSubscribe({
@@ -402,7 +452,15 @@ class MoqtSessionImpl implements MoqtSession {
       parameters: options.parameters,
     });
 
-    void this.#openRequest(message, record, (msg) => this.#handleSubscriptionMessage(record, msg));
+    void this.#openRequest(
+      message,
+      record,
+      (msg) => this.#handleSubscriptionMessage(record, msg),
+      (error) => {
+        this.#removeSubscription(record);
+        handlers.onError?.(error);
+      }
+    );
 
     return {
       requestId,
@@ -420,6 +478,7 @@ class MoqtSessionImpl implements MoqtSession {
       handlers,
       groupOrder: options.parameters?.groupOrder ?? 'ascending',
       cancelled: false,
+      settled: false,
     };
     this.#fetches.set(requestId, record);
 
@@ -434,7 +493,15 @@ class MoqtSessionImpl implements MoqtSession {
             parameters: options.parameters,
           };
 
-    void this.#openRequest(encodeFetch(request), record, (msg) => this.#handleFetchMessage(record, msg));
+    void this.#openRequest(
+      encodeFetch(request),
+      record,
+      (msg) => this.#handleFetchMessage(record, msg),
+      (error) => {
+        this.#fetches.delete(requestId);
+        handlers.onError?.(error);
+      }
+    );
 
     return {
       requestId,
@@ -444,7 +511,7 @@ class MoqtSessionImpl implements MoqtSession {
 
   trackStatus(options: MoqtSubscribeOptions, handlers: TrackStatusHandlers = {}): void {
     const requestId = this.#allocateRequestId();
-    const record = { cancelled: false } as { cancelled: boolean; stream?: RequestStream };
+    const record: RequestRecordBase = { cancelled: false, settled: false };
 
     const message = encodeTrackStatus({
       requestId,
@@ -453,37 +520,88 @@ class MoqtSessionImpl implements MoqtSession {
       parameters: options.parameters,
     });
 
-    void this.#openRequest(message, record, (msg) => {
-      if (msg.kind === 'request-ok') {
-        handlers.onOk?.({ parameters: msg.parameters, trackProperties: msg.trackProperties });
-        record.stream?.finWrite().catch(() => {});
-      } else if (msg.kind === 'request-error') {
-        handlers.onError?.(msg);
-        record.stream?.finWrite().catch(() => {});
-      }
-    });
+    void this.#openRequest(
+      message,
+      record,
+      (msg) => {
+        if (msg.kind === 'request-ok') {
+          this.#settleRequest(record);
+          handlers.onOk?.({ parameters: msg.parameters, trackProperties: msg.trackProperties });
+          record.stream?.finWrite().catch(() => {});
+        } else if (msg.kind === 'request-error') {
+          this.#settleRequest(record);
+          handlers.onError?.(msg);
+          record.stream?.finWrite().catch(() => {});
+        }
+      },
+      (error) => handlers.onError?.(error)
+    );
   }
 
+  /**
+   * Open a request stream and bind its lifecycle to `record`.
+   *
+   * `onFailure` is the caller's "this request died without answering me"
+   * path — `request-stream` deliberately leaves that judgement here, since
+   * only the session knows which messages a given request kind requires. It
+   * fires for a FIN before any response, a non-protocol stream error
+   * (transport reset), and the response timeout; a protocol error still
+   * kills the whole session. Once `record.settled` is set the same events
+   * are ordinary end-of-request signals and are ignored.
+   */
   async #openRequest(
     message: Uint8Array,
-    record: { cancelled: boolean; pendingCancelReason?: unknown; stream?: RequestStream },
-    onMessage: (message: ControlMessage) => void
+    record: RequestRecordBase,
+    onMessage: (message: ControlMessage) => void,
+    onFailure: (error: RequestError) => void
   ): Promise<void> {
+    const fail = (error: RequestError): void => {
+      if (record.settled || record.cancelled || this.#destroyed) return;
+      this.#settleRequest(record);
+      onFailure(error);
+    };
+
     let stream: BidirectionalStreamLike;
     try {
       stream = await this.#transport.createBidirectionalStream();
     } catch (error) {
+      // Losing the ability to open streams is a session-level failure, but
+      // this request also has to hear about it.
+      fail(streamFailure(error instanceof Error ? error.message : 'failed to open request stream'));
       if (!this.#destroyed) this.#fatal(error);
       return;
     }
+
+    const timeout = this.#config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (timeout > 0 && !record.settled && !record.cancelled) {
+      record.responseTimer = setTimeout(
+        () => fail(streamFailure('no response before the request timeout', REQUEST_ERROR_CODE.TIMEOUT)),
+        timeout
+      );
+    }
+
     record.stream = openRequestStream(stream, message, {
       onMessage,
+      onFin: () => fail(streamFailure('request stream closed before a response')),
       onError: (error) => {
-        if (isMoqtProtocolError(error)) this.#fatal(error);
+        if (isMoqtProtocolError(error)) {
+          this.#fatal(error);
+          return;
+        }
+        fail(streamFailure(error instanceof Error ? error.message : 'request stream failed'));
       },
     });
     // A cancel that raced the stream opening lands here.
     if (record.cancelled) record.stream.cancel(record.pendingCancelReason);
+  }
+
+  /** Mark a request answered (or dead) and disarm its response timeout. */
+  #settleRequest(record: RequestRecordBase): void {
+    record.settled = true;
+    if (record.responseTimer !== undefined) {
+      clearTimeout(record.responseTimer);
+      record.responseTimer = undefined;
+    }
   }
 
   #handleSubscriptionMessage(record: SubscriptionRecord, message: ControlMessage): void {
@@ -498,6 +616,7 @@ class MoqtSessionImpl implements MoqtSession {
           this.#fatal(new MoqtProtocolError('duplicate track alias', SESSION_ERROR.DUPLICATE_TRACK_ALIAS));
           return;
         }
+        this.#settleRequest(record);
         record.trackAlias = message.trackAlias;
         this.#aliasRoutes.set(message.trackAlias, record);
         const waiters = this.#aliasWaiters.get(message.trackAlias);
@@ -519,6 +638,7 @@ class MoqtSessionImpl implements MoqtSession {
         record.handlers.onUpdateOk?.();
         break;
       case 'request-error':
+        this.#settleRequest(record);
         this.#removeSubscription(record);
         record.handlers.onError?.(message);
         break;
@@ -539,6 +659,7 @@ class MoqtSessionImpl implements MoqtSession {
   #handleFetchMessage(record: FetchRecord, message: ControlMessage): void {
     switch (message.kind) {
       case 'fetch-ok':
+        this.#settleRequest(record);
         record.handlers.onOk?.({
           endOfTrack: message.endOfTrack,
           endLocation: message.endLocation,
@@ -554,6 +675,7 @@ class MoqtSessionImpl implements MoqtSession {
       case 'request-ok':
         break;
       case 'request-error':
+        this.#settleRequest(record);
         this.#fetches.delete(record.requestId);
         record.handlers.onError?.(message);
         break;
@@ -569,6 +691,7 @@ class MoqtSessionImpl implements MoqtSession {
     if (record.cancelled) return;
     record.cancelled = true;
     record.pendingCancelReason = reason;
+    this.#settleRequest(record);
     record.stream?.cancel(reason);
     this.#removeSubscription(record);
   }
@@ -584,6 +707,7 @@ class MoqtSessionImpl implements MoqtSession {
     if (record.cancelled) return;
     record.cancelled = true;
     record.pendingCancelReason = reason;
+    this.#settleRequest(record);
     record.stream?.cancel(reason);
     this.#fetches.delete(record.requestId);
   }

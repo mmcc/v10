@@ -65,7 +65,18 @@ export type ApplyCatalogUpdate = (
 export interface ResolveCatalogConfig {
   /** Override MSF catalog parsing (alternate catalog formats/versions). */
   applyCatalogUpdate?: ApplyCatalogUpdate;
+  /**
+   * Deadline for the joining fetch's replay. The session's request timeout
+   * only covers a fetch that never answers — a relay that sends FETCH_OK
+   * and then never opens (or never finishes) its data stream would leave
+   * `fetchSettled` false forever, buffering live deltas and never resolving
+   * a catalog. On expiry the behavior falls back to live-only, exactly as it
+   * does for an empty or truncated replay. Default 5000ms.
+   */
+  catalogFetchTimeoutMs?: number;
 }
+
+const DEFAULT_CATALOG_FETCH_TIMEOUT_MS = 5000;
 
 type ResolveCatalogFsmState = 'preconditions-unmet' | 'awaiting-session' | 'catalog-active';
 
@@ -83,6 +94,7 @@ function setupResolveCatalog({
   config?: ResolveCatalogConfig;
 }): Reactor<ResolveCatalogFsmState | 'destroying' | 'destroyed'> {
   const applyUpdate = config?.applyCatalogUpdate ?? applyMoqCatalogUpdate;
+  const fetchTimeoutMs = config?.catalogFetchTimeoutMs ?? DEFAULT_CATALOG_FETCH_TIMEOUT_MS;
 
   const derivedStateSignal = computed<ResolveCatalogFsmState>(() => {
     const presentation = state.presentation.get();
@@ -124,6 +136,7 @@ function setupResolveCatalog({
           let authRetried = false;
           let subscription: Subscription | undefined;
           let fetchHandle: FetchHandle | undefined;
+          let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
           const apply = (text: string, objectId: number): void => {
             // A delta with no prior catalog can't be interpreted (§5.1.6);
@@ -141,6 +154,8 @@ function setupResolveCatalog({
           const settleFetch = (): void => {
             if (fetchSettled) return;
             fetchSettled = true;
+            clearTimeout(settleTimer);
+            settleTimer = undefined;
             bufferedLive.sort((a, b) => a.groupId - b.groupId || a.objectId - b.objectId);
             for (const { text, objectId } of bufferedLive) apply(text, objectId);
             bufferedLive.length = 0;
@@ -151,6 +166,8 @@ function setupResolveCatalog({
             // group again, so live deltas must buffer until it settles.
             fetchSettled = false;
             bufferedLive.length = 0;
+            clearTimeout(settleTimer);
+            settleTimer = fetchTimeoutMs > 0 ? setTimeout(settleFetch, fetchTimeoutMs) : undefined;
 
             subscription = session.subscribe(
               {
@@ -226,6 +243,8 @@ function setupResolveCatalog({
 
           return () => {
             cancelled = true;
+            clearTimeout(settleTimer);
+            settleTimer = undefined;
             fetchHandle?.cancel();
             subscription?.cancel();
           };

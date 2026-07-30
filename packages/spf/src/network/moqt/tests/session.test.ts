@@ -317,6 +317,92 @@ describe('createMoqtSession', () => {
     harness.session.destroy();
   });
 
+  // §3.3.2 leaves "was this FIN premature?" to the caller; the session is the
+  // only layer that knows a SUBSCRIBE needs a SUBSCRIBE_OK. Without these the
+  // subscription sits pending forever with neither response nor error.
+  it('fails a subscription when the peer FINs before SUBSCRIBE_OK', async () => {
+    const harness = createSessionHarness();
+    harness.sendServerSetup();
+
+    const onError = vi.fn();
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError });
+    const request = await harness.nextRequestStream();
+    await request.firstMessage;
+    await request.fin();
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'request stream closed before a response' })
+    );
+    harness.session.destroy();
+  });
+
+  it('fails a subscription when the request stream is reset before SUBSCRIBE_OK', async () => {
+    const harness = createSessionHarness();
+    harness.sendServerSetup();
+
+    const onError = vi.fn();
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError });
+    const request = await harness.nextRequestStream();
+    await request.firstMessage;
+    request.reset(new Error('stream reset'));
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+    harness.session.destroy();
+  });
+
+  it('does not fail a subscription when the FIN follows SUBSCRIBE_OK', async () => {
+    const harness = createSessionHarness();
+    harness.sendServerSetup();
+
+    const onOk = vi.fn();
+    const onError = vi.fn();
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onOk, onError });
+    const request = await harness.nextRequestStream();
+    await request.firstMessage;
+    await request.send(encodeSubscribeOk(7));
+    await vi.waitFor(() => expect(onOk).toHaveBeenCalled());
+    await request.fin();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onError).not.toHaveBeenCalled();
+    harness.session.destroy();
+  });
+
+  it('fails a subscription that gets no response before the request timeout', async () => {
+    const fake = createFakeTransport();
+    const session = createMoqtSession(fake.transport, { requestTimeoutMs: 10 });
+    fake.sendServerSetup();
+
+    const onError = vi.fn();
+    session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError });
+    const request = await fake.nextRequestStream();
+    await request.firstMessage;
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ errorCode: REQUEST_ERROR_CODE.TIMEOUT }));
+    session.destroy();
+  });
+
+  it('fails pending requests when the transport drops, but not on a local close()', async () => {
+    const dropped = createSessionHarness();
+    dropped.sendServerSetup();
+    const onDropError = vi.fn();
+    dropped.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError: onDropError });
+    await (await dropped.nextRequestStream()).firstMessage;
+    dropped.dropTransport();
+    await vi.waitFor(() => expect(onDropError).toHaveBeenCalled());
+
+    const closed = createSessionHarness();
+    closed.sendServerSetup();
+    const onCloseError = vi.fn();
+    closed.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError: onCloseError });
+    await (await closed.nextRequestStream()).firstMessage;
+    closed.session.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onCloseError).not.toHaveBeenCalled();
+  });
+
   it('surfaces PUBLISH_DONE and keeps late subgroups flowing until cancel', async () => {
     const harness = createSessionHarness();
     harness.sendServerSetup();
