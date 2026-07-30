@@ -7,7 +7,9 @@
  *   subscriber. The audio renderer owns the **master clock**, so this
  *   behavior also owns `state.currentTime`: a playout-cadence interval
  *   publishes the clock as seconds (the MoQ engine has no HTMLMediaElement
- *   to read time from).
+ *   to read time from). With no audio scheduled it falls back to the video
+ *   renderer's last presented timestamp, so a video-only catalog still
+ *   reports progress.
  * - `setupVideoRenderer` — owns `context.videoRendererActor` (created when
  *   `context.renderSurface` appears), points it at the active video
  *   subscriber, and slaves its presentation to the audio renderer's clock
@@ -79,6 +81,8 @@ function setupAudioRendererSetup({
     audioContext: ReadonlySignal<AudioContextLike | undefined>;
     audioSubscriberActor: ReadonlySignal<TrackSubscriberActor | undefined>;
     audioRendererActor: Signal<AudioRendererActor | undefined>;
+    /** Read-only, for the video-only clock fallback below. */
+    videoRendererActor: ReadonlySignal<VideoRendererActor | undefined>;
   };
 }): Reactor<'preconditions-unmet' | 'renderer-active' | 'destroying' | 'destroyed'> {
   const derivedStateSignal = computed(() =>
@@ -113,7 +117,18 @@ function setupAudioRendererSetup({
           () => {
             const timer = setInterval(() => {
               const clockUs = peek(context.audioRendererActor)?.getClockTimeUs();
-              if (clockUs !== undefined) state.currentTime.set(clockUs / 1_000_000);
+              if (clockUs !== undefined) {
+                state.currentTime.set(clockUs / 1_000_000);
+                return;
+              }
+              // No audio scheduled — a video-only catalog, or audio that
+              // hasn't started. The video renderer's last presented frame is
+              // then the only progress signal, and `currentTime` is the only
+              // thing the media-element facade derives readiness from: without
+              // this fallback video-only playback renders fine but never
+              // leaves HAVE_METADATA, so the shell buffers forever.
+              const presentedUs = peek(context.videoRendererActor)?.snapshot.get().context.lastPresentedTimestampUs;
+              if (presentedUs !== undefined) state.currentTime.set(presentedUs / 1_000_000);
             }, CLOCK_PUBLISH_INTERVAL_MS);
             return () => clearInterval(timer);
           },
@@ -141,7 +156,7 @@ function setupAudioRendererSetup({
  */
 export const setupAudioRenderer = defineBehavior({
   stateKeys: ['playoutRate', 'currentTime'],
-  contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor'],
+  contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupAudioRendererSetup,
 });
 

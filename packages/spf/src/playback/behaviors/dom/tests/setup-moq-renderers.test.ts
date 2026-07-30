@@ -47,6 +47,7 @@ describe('setupAudioRenderer', () => {
       audioContext: signal<AudioContextLike | undefined>({} as AudioContextLike),
       audioSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
       audioRendererActor: signal<AudioRendererActor | undefined>(undefined),
+      videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
     };
     const reactor = setupAudioRenderer.setup({ state, context });
     return { state, context, reactor };
@@ -64,6 +65,52 @@ describe('setupAudioRenderer', () => {
     // schedule an infinite clock segment (duration ÷ 0) and dead sources.
     state.playoutRate.set(1.05);
     expect(getPlaybackRate!()).toBe(1.05);
+
+    reactor.destroy();
+  });
+
+  // `currentTime` is the only thing the media-element facade derives
+  // readiness from. With no audio the master clock never advances, so
+  // without this fallback a video-only catalog renders fine but stays at
+  // HAVE_METADATA and the shell buffers forever.
+  it('publishes the video renderer timestamp as currentTime when there is no audio clock', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const { state, context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    expect(state.currentTime.get()).toBeUndefined();
+
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { lastPresentedTimestampUs: 2_500_000 } }),
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(2.5));
+
+    reactor.destroy();
+  });
+
+  it('prefers the audio master clock over the video fallback', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(
+      () =>
+        ({
+          snapshot: signal({ context: {} }),
+          setTrack: vi.fn(),
+          getClockTimeUs: vi.fn(() => 4_000_000),
+          destroy: vi.fn(),
+        }) as unknown as AudioRendererActor
+    );
+    const { state, context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { lastPresentedTimestampUs: 9_000_000 } }),
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(4));
 
     reactor.destroy();
   });
