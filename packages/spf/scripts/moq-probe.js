@@ -120,8 +120,9 @@ if (!existsSync(DIST)) {
 const { createMoqEngine } = await import(DIST);
 
 let WebTransport;
+let quicheLoaded;
 try {
-  ({ WebTransport } = await import(WEBTRANSPORT_MODULE));
+  ({ WebTransport, quicheLoaded } = await import(WEBTRANSPORT_MODULE));
 } catch (error) {
   fail(
     `Cannot load ${WEBTRANSPORT_MODULE}: ${error.message}`,
@@ -131,17 +132,19 @@ try {
   );
 }
 
-// Preflight the native HTTP/3 transport before touching the network. Awaiting the
-// import here does double duty: it surfaces a dlopen failure with the real cause
-// (instead of a 30s catalog timeout further down), and it removes the race where
-// constructing a WebTransport too early throws "Lib quiche loading attempt did
-// not end".
+// Preflight the native HTTP/3 transport before touching the network. Two separate
+// checks are needed — neither substitutes for the other, both verified against a
+// real relay:
 //
-// Verified signals on a glibc-2.35 host, where the binary cannot load:
-//   this import       -> throws ERR_DLOPEN_FAILED with the glibc version
-//   `quicheLoaded`    -> RESOLVES anyway
-//   supportsReliableOnly -> not yet meaningful at construction time
-// So this is the check. Do not "simplify" it to `quicheLoaded`.
+//   1. Importing the transport module surfaces a dlopen failure with its real
+//      cause (a glibc mismatch) instead of a 30s catalog timeout later.
+//      `quicheLoaded` cannot do this job: on a host where the binary fails to
+//      load it RESOLVES anyway, and WebTransport quietly drops to HTTP/2.
+//   2. Awaiting `quicheLoaded` waits for that module's own async init. Without
+//      it the first `new WebTransport()` throws "Lib quiche loading attempt did
+//      not end" even when the binary is perfectly good.
+//
+// Removing either one reintroduces a failure that looks like a broken relay.
 try {
   await import(QUICHE_MODULE);
 } catch (error) {
@@ -154,6 +157,7 @@ try {
       '  glibc >= 2.38 (Ubuntu 24.04 "noble" or newer).'
   );
 }
+await quicheLoaded;
 
 // ============================================================================
 // Probe
