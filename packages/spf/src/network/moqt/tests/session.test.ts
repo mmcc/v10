@@ -519,6 +519,48 @@ describe('createMoqtSession', () => {
     harness.session.destroy();
   });
 
+  // REQUEST_OK *is* the response on such a relay, so it has to disarm the
+  // response timer. If it doesn't, the deadline fires on an answered fetch,
+  // deletes the record, and `#runFetchStream` then cancels the data stream
+  // instead of delivering it — the replay vanishes with no protocol error.
+  it('settles a fetch answered with REQUEST_OK so the request timeout cannot fail it', async () => {
+    const fake = createFakeTransport();
+    const session = createMoqtSession(fake.transport, { requestTimeoutMs: 10, unknownAliasTimeoutMs: 200 });
+    fake.sendServerSetup();
+
+    const subscription = session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+    await fake.nextRequestStream();
+
+    const onError = vi.fn();
+    const entries: unknown[] = [];
+    session.fetch(
+      { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
+      { onEntry: (entry) => entries.push(entry), onError }
+    );
+    const fetchStream = await fake.nextRequestStream();
+    await fetchStream.firstMessage;
+    await fetchStream.send(encodeRequestOk());
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(onError).not.toHaveBeenCalled();
+
+    // The data stream arrives after the deadline would have passed.
+    const writer = new ByteWriter();
+    writer.writeVarint(0x05);
+    writer.writeVarint(2); // fetch request id
+    writer.writeVarint(0x1c); // group delta + object delta + priority present
+    writer.writeVarint(41); // group (absolute)
+    writer.writeVarint(0); // object (absolute)
+    writer.writeUint8(128);
+    const payload = utf8Encode('{"version":"1"}');
+    writer.writeVarint(payload.length);
+    writer.writeBytes(payload);
+    fake.openDataStream(writer.toBytes());
+
+    await vi.waitFor(() => expect(entries).toHaveLength(1));
+    session.destroy();
+  });
+
   it('rejects ready when the session closes before the server SETUP', async () => {
     const harness = createSessionHarness();
     harness.session.close();

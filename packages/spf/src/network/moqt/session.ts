@@ -671,8 +671,12 @@ class MoqtSessionImpl implements MoqtSession {
       // instead of the FETCH_OK moq-transport-19 §10.12.3 mandates. It
       // carries no End Location/End Of Track, so `onOk` can't fire — the
       // fetch's actual completion still surfaces via onEntry/onEnd on the
-      // data stream, which this response has no bearing on.
+      // data stream, which this response has no bearing on. It is still
+      // the response, so it has to settle the request: leaving the timer
+      // armed would fail an answered fetch (and drop its data stream)
+      // once the deadline passed.
       case 'request-ok':
+        this.#settleRequest(record);
         break;
       case 'request-error':
         this.#settleRequest(record);
