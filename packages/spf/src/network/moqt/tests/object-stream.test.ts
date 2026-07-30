@@ -4,6 +4,8 @@ import { MoqtProtocolError } from '../errors';
 import {
   type FetchStreamEntry,
   isSubgroupHeaderType,
+  MAX_OBJECT_PAYLOAD_LENGTH,
+  MAX_OBJECT_PROPERTIES_LENGTH,
   type MoqtObject,
   readFetchEntries,
   readFetchHeader,
@@ -193,6 +195,49 @@ describe('readSubgroupObjects', () => {
     await expect(collect(readSubgroupObjects(reader, header))).rejects.toThrow(MoqtProtocolError);
   });
 
+  // The declared lengths below are followed by NO bytes: reaching the read
+  // would surface a RangeError from the stream, so a MoqtProtocolError proves
+  // the declaration is rejected before anything is allocated.
+  it('rejects a payload length beyond MAX_OBJECT_PAYLOAD_LENGTH before allocating', async () => {
+    const writer = new ByteWriter();
+    writer.writeVarint(0x38);
+    writer.writeVarint(1); // track alias
+    writer.writeVarint(7); // group id
+    writer.writeVarint(0); // object id delta
+    writer.writeVarint(MAX_OBJECT_PAYLOAD_LENGTH + 1);
+    const reader = new StreamReader(streamOf(writer.toBytes()));
+    await reader.readVarint();
+    const header = await readSubgroupHeader(reader, 0x38);
+    await expect(collect(readSubgroupObjects(reader, header))).rejects.toThrow(/payload length .* exceeds/);
+  });
+
+  it('rejects a properties length beyond MAX_OBJECT_PROPERTIES_LENGTH before allocating', async () => {
+    const writer = new ByteWriter();
+    writer.writeVarint(0x39); // 0x38 | PROPERTIES
+    writer.writeVarint(1);
+    writer.writeVarint(7);
+    writer.writeVarint(0); // object id delta
+    writer.writeVarint(MAX_OBJECT_PROPERTIES_LENGTH + 1);
+    const reader = new StreamReader(streamOf(writer.toBytes()));
+    await reader.readVarint();
+    const header = await readSubgroupHeader(reader, 0x39);
+    await expect(collect(readSubgroupObjects(reader, header))).rejects.toThrow(/properties length .* exceeds/);
+  });
+
+  it('accepts a payload exactly at MAX_OBJECT_PAYLOAD_LENGTH', async () => {
+    const bytes = encodeSubgroupStream({
+      type: 0x38,
+      trackAlias: 1,
+      groupId: 7,
+      objects: [{ objectIdDelta: 0, payload: new Uint8Array(MAX_OBJECT_PAYLOAD_LENGTH) }],
+    });
+    const reader = new StreamReader(streamOf(bytes));
+    await reader.readVarint();
+    const header = await readSubgroupHeader(reader, 0x38);
+    const objects = await collect(readSubgroupObjects(reader, header));
+    expect(objects[0]!.payload.length).toBe(MAX_OBJECT_PAYLOAD_LENGTH);
+  });
+
   it('parses per-object properties when the header PROPERTIES bit is set', async () => {
     // Properties KVP: type 0x06 (Timestamp), varint value 90000.
     const props = new ByteWriter();
@@ -257,6 +302,20 @@ describe('readFetchEntries', () => {
       [10, 1],
       [11, 0],
     ]);
+  });
+
+  it('rejects a payload length beyond MAX_OBJECT_PAYLOAD_LENGTH before allocating', async () => {
+    const bytes = encodeFetchStream((w) => {
+      w.writeVarint(0x1c); // GROUP_ID_DELTA | OBJECT_ID_DELTA | PRIORITY
+      w.writeVarint(10); // group id
+      w.writeVarint(0); // object id
+      w.writeUint8(100); // priority
+      w.writeVarint(MAX_OBJECT_PAYLOAD_LENGTH + 1); // no bytes follow
+    });
+    const reader = new StreamReader(streamOf(bytes));
+    await reader.readVarint();
+    await readFetchHeader(reader);
+    await expect(collect(readFetchEntries(reader))).rejects.toThrow(/payload length .* exceeds/);
   });
 
   it('yields end-of-range markers', async () => {

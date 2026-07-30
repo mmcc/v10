@@ -42,6 +42,28 @@ export function isSubgroupHeaderType(type: number): boolean {
 // Object model
 // ============================================================================
 
+/**
+ * Ceiling on a single object's payload, and on its Properties block.
+ *
+ * Unlike control messages — bounded by their 16-bit frame length — a data
+ * stream's payload length is an unbounded varint that feeds straight into
+ * `StreamReader.readBytes`, which buffers until satisfied. A malformed or
+ * hostile relay declaring 2^53 would exhaust memory before the read ever
+ * completed, so the declaration is rejected before any allocation.
+ *
+ * 16 MiB clears any real LOC frame (a 4K keyframe is low single-digit MB);
+ * Properties carry frame metadata, so 64 KiB is already generous.
+ */
+export const MAX_OBJECT_PAYLOAD_LENGTH = 16 * 1024 * 1024;
+export const MAX_OBJECT_PROPERTIES_LENGTH = 64 * 1024;
+
+function checkPayloadLength(length: number): number {
+  if (length > MAX_OBJECT_PAYLOAD_LENGTH) {
+    throw new MoqtProtocolError(`object payload length ${length} exceeds ${MAX_OBJECT_PAYLOAD_LENGTH} bytes`);
+  }
+  return length;
+}
+
 export type ObjectStatus = 'normal' | 'end-of-group' | 'end-of-track';
 
 const OBJECT_STATUS_WIRE: Record<number, ObjectStatus> = {
@@ -124,6 +146,9 @@ export async function readSubgroupHeader(reader: StreamReader, type: number): Pr
 async function readObjectProperties(reader: StreamReader): Promise<KeyValuePair[]> {
   const length = await reader.readVarint();
   if (length === 0) return [];
+  if (length > MAX_OBJECT_PROPERTIES_LENGTH) {
+    throw new MoqtProtocolError(`object properties length ${length} exceeds ${MAX_OBJECT_PROPERTIES_LENGTH} bytes`);
+  }
   const bytes = await reader.readBytes(length);
   return decodeKeyValuePairs(new ByteReader(bytes), length);
 }
@@ -159,7 +184,7 @@ export async function* readSubgroupObjects(reader: StreamReader, header: Subgrou
     previousObjectId = objectId;
 
     const properties = header.hasProperties ? await readObjectProperties(reader) : [];
-    const payloadLength = await reader.readVarint();
+    const payloadLength = checkPayloadLength(await reader.readVarint());
     const status = payloadLength === 0 ? readObjectStatus(await reader.readVarint()) : 'normal';
     const payload = payloadLength > 0 ? await reader.readBytes(payloadLength) : new Uint8Array(0);
 
@@ -302,7 +327,7 @@ export async function* readFetchEntries(
     }
 
     const properties = (flags & FETCH_FLAG.PROPERTIES_PRESENT) !== 0 ? await readObjectProperties(reader) : [];
-    const payloadLength = await reader.readVarint();
+    const payloadLength = checkPayloadLength(await reader.readVarint());
     const payload = payloadLength > 0 ? await reader.readBytes(payloadLength) : new Uint8Array(0);
 
     prior = { groupId, objectId, subgroupId: subgroupId ?? prior?.subgroupId, priority };
