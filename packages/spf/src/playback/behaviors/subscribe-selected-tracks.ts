@@ -21,12 +21,16 @@
  * 'preconditions-unmet' → 'session-ready'
  * ```
  *
- * `'session-ready'` requires the session actor to be ready *and* the load
+ * `'session-ready'` requires the session actor to be ready, the load
  * gate to be open (`loadActivated || preload === 'auto'` — the same gate
- * as HLS `load-segments`' full-range loading). Catalog resolution stays
- * ungated in `resolve-catalog`, so `preload: 'metadata'` still resolves
- * tracks without downloading media. Closing the gate exits the state and
- * tears both subscribers down.
+ * as HLS `load-segments`' full-range loading), *and* media delivery not
+ * suspended (`mediaSuspended`, set by `suspend-media-while-paused` when a
+ * pause outlives its hold window). Catalog resolution stays ungated in
+ * `resolve-catalog`, so `preload: 'metadata'` still resolves tracks
+ * without downloading media — and a suspended pause keeps receiving
+ * catalog updates. Closing either gate exits the state and tears both
+ * subscribers down; reopening re-subscribes the current selection through
+ * the initial-join filters (a live-edge rejoin, not a handoff).
  *
  * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor`
  * slots (renderers and latency/bandwidth behaviors only read). Slot reads
@@ -54,6 +58,8 @@ export interface SubscribeSelectedTracksState {
   selectedAudioTrackId?: string;
   preload?: 'auto' | 'metadata' | 'none';
   loadActivated?: boolean;
+  /** Sustained-pause gate written by `suspend-media-while-paused`. */
+  mediaSuspended?: boolean;
   /** Playout clock (media seconds) — gates make-before-break promotion. */
   currentTime?: number;
 }
@@ -97,6 +103,7 @@ type VariantStateMap<S extends SelectionKey> = {
   presentation: ReadonlySignal<SubscribeSelectedTracksState['presentation']>;
   preload: ReadonlySignal<SubscribeSelectedTracksState['preload']>;
   loadActivated: ReadonlySignal<SubscribeSelectedTracksState['loadActivated']>;
+  mediaSuspended: ReadonlySignal<SubscribeSelectedTracksState['mediaSuspended']>;
   currentTime: ReadonlySignal<SubscribeSelectedTracksState['currentTime']>;
 } & { [P in S]: ReadonlySignal<string | undefined> };
 
@@ -136,7 +143,10 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     // Same gate as HLS load-segments' full-range loading: default preload
     // ('metadata') must not download live media before load activation.
     const loadGateOpen = state.loadActivated.get() || state.preload.get() === 'auto';
-    return sessionReady && loadGateOpen ? 'session-ready' : 'preconditions-unmet';
+    // Sustained pause: release the media subscriptions (the catalog stays
+    // subscribed); resume rejoins at the live edge via the initial filters.
+    const suspended = state.mediaSuspended.get() === true;
+    return sessionReady && loadGateOpen && !suspended ? 'session-ready' : 'preconditions-unmet';
   });
 
   const clearSlots = (): void => {
@@ -248,7 +258,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
  * const reactor = subscribeSelectedVideoTrack.setup({ state, context });
  */
 export const subscribeSelectedVideoTrack = defineBehavior({
-  stateKeys: ['presentation', 'selectedVideoTrackId', 'preload', 'loadActivated', 'currentTime'],
+  stateKeys: ['presentation', 'selectedVideoTrackId', 'preload', 'loadActivated', 'mediaSuspended', 'currentTime'],
   contextKeys: ['moqSessionActor', 'videoSubscriberActor', 'pendingVideoSubscriberActor'],
   setup: (deps: {
     state: VariantStateMap<'selectedVideoTrackId'>;
@@ -275,7 +285,7 @@ export const subscribeSelectedVideoTrack = defineBehavior({
  * const reactor = subscribeSelectedAudioTrack.setup({ state, context });
  */
 export const subscribeSelectedAudioTrack = defineBehavior({
-  stateKeys: ['presentation', 'selectedAudioTrackId', 'preload', 'loadActivated', 'currentTime'],
+  stateKeys: ['presentation', 'selectedAudioTrackId', 'preload', 'loadActivated', 'mediaSuspended', 'currentTime'],
   contextKeys: ['moqSessionActor', 'audioSubscriberActor', 'pendingAudioSubscriberActor'],
   setup: (deps: {
     state: VariantStateMap<'selectedAudioTrackId'>;

@@ -97,6 +97,7 @@ function makeDeps() {
       selectedVideoTrackId: signal<string | undefined>(undefined),
       preload: signal<'auto' | 'metadata' | 'none' | undefined>(undefined),
       loadActivated: signal<boolean | undefined>(true),
+      mediaSuspended: signal<boolean | undefined>(undefined),
       currentTime: signal<number | undefined>(undefined),
     },
     context: {
@@ -224,6 +225,53 @@ describe('subscribeSelectedVideoTrack', () => {
 
     deps.state.loadActivated.set(false);
     await vi.waitFor(() => expect(created[0]!.destroyed).toBe(true));
+    expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+    expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
+
+    reactor.destroy();
+  });
+
+  it('releases subscribers while media is suspended and rejoins at the live edge on resume', async () => {
+    const deps = makeDeps();
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+
+    // Sustained pause: the media subscription releases; the session (and
+    // with it the catalog subscription) is untouched by this behavior.
+    deps.state.mediaSuspended.set(true);
+    await vi.waitFor(() => expect(created[0]!.destroyed).toBe(true));
+    expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+    expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
+
+    // Resume: a fresh initial join (next-group-start), not a handoff.
+    deps.state.mediaSuspended.set(undefined);
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+    expect(created[1]!.options).toMatchObject({
+      track: { id: HD.id },
+      locationFilter: { type: 'next-group-start' },
+    });
+    expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
+    expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
+
+    reactor.destroy();
+  });
+
+  it('releases a suspended in-flight handoff without leaking the pending subscriber', async () => {
+    const deps = makeDeps();
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    deps.state.selectedVideoTrackId.set(SD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+
+    deps.state.mediaSuspended.set(true);
+    await vi.waitFor(() => expect(created[0]!.destroyed).toBe(true));
+    expect(created[1]!.destroyed).toBe(true);
     expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
     expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
 

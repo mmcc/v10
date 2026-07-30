@@ -309,6 +309,76 @@ describe('createMoqEngine', () => {
     await engine.destroy();
   });
 
+  it('releases media subscriptions after a sustained pause and rejoins at the live edge on resume', async () => {
+    const relay = createFakeRelay();
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      pauseHoldSeconds: 0.05,
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+
+    await vi.waitFor(
+      () => {
+        expect(relay.subscriptions.map((s) => s.message.trackName)).toContain('video');
+      },
+      { timeout: 5000 }
+    );
+
+    // A pause that outlives the hold window releases the media
+    // subscription…
+    signals.state.paused.set(true);
+    await vi.waitFor(() => expect(signals.state.mediaSuspended.get()).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeUndefined());
+
+    // …while the catalog subscription stays live: an update served during
+    // the suspension still reaches the presentation.
+    const updatedCatalog = JSON.stringify({
+      version: '1',
+      tracks: [
+        ...JSON.parse(CATALOG).tracks,
+        {
+          name: 'video2',
+          packaging: 'loc',
+          isLive: true,
+          role: 'video',
+          codec: 'vp8',
+          width: 32,
+          height: 32,
+          bitrate: 100_000,
+        },
+      ],
+    });
+    const catalogSubscription = relay.subscriptions.find((s) => s.message.trackName === 'catalog')!;
+    relay.openUni(encodeLocObjectStream(catalogSubscription.trackAlias, 1, 0, 0, utf8Encode(updatedCatalog)));
+    const trackIds = () =>
+      (signals.state.presentation.get()?.selectionSets ?? []).flatMap((selectionSet) =>
+        selectionSet.switchingSets.flatMap((switchingSet) => switchingSet.tracks.map((track) => track.id))
+      );
+    await vi.waitFor(() => expect(trackIds()).toContain('live/video2'), { timeout: 5000 });
+
+    // Resume: a fresh live-edge join (next-group-start), no catalog churn.
+    signals.state.paused.set(false);
+    await vi.waitFor(
+      () => {
+        expect(relay.subscriptions.filter((s) => s.message.trackName === 'video')).toHaveLength(2);
+      },
+      { timeout: 5000 }
+    );
+    expect(relay.subscriptions.filter((s) => s.message.trackName === 'catalog')).toHaveLength(1);
+    expect(relay.subscriptions.at(-1)!.message.parameters).toMatchObject({
+      locationFilter: { type: 'next-group-start' },
+    });
+    await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined());
+
+    await engine.destroy();
+  });
+
   it('subscribes to the catalog with the largest-object filter', async () => {
     const relay = createFakeRelay();
     let signals!: MoqEngineSignals;

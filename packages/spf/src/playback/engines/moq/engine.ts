@@ -17,6 +17,7 @@ import type { ApplyCatalogUpdate } from '../../behaviors/resolve-catalog';
 import { resolveCatalog } from '../../behaviors/resolve-catalog';
 import { setupMoqSession } from '../../behaviors/setup-moq-session';
 import { subscribeSelectedAudioTrack, subscribeSelectedVideoTrack } from '../../behaviors/subscribe-selected-tracks';
+import { suspendMediaWhilePaused } from '../../behaviors/suspend-media-while-paused';
 import { type LatencyControlConfig, type PlayoutState, syncLatency } from '../../behaviors/sync-latency';
 import { DEFAULT_MOQ_BANDWIDTH_CONFIG, trackMoqBandwidth } from '../../behaviors/track-moq-bandwidth';
 import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behaviors/track-switching';
@@ -54,6 +55,13 @@ export interface MoqEngineState {
    * `undefined` means playing, so engine-only drivers never pause by default.
    */
   paused?: boolean;
+  /**
+   * Set by `suspendMediaWhilePaused` once a pause outlives its hold
+   * window; the subscribe behaviors release the media subscriptions while
+   * set (the catalog subscription stays open) and rejoin at the live edge
+   * on resume.
+   */
+  mediaSuspended?: boolean;
   /** Consumer-set target latency in seconds (input slot). */
   targetLatency?: number;
   measuredLatency?: number;
@@ -107,6 +115,13 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
   moqBandwidth?: Partial<BandwidthConfig>;
   /** Latency-controller tuning (`syncLatency`). */
   latency?: Partial<LatencyControlConfig>;
+  /**
+   * Continuous pause duration, in seconds, before media subscriptions
+   * release (`suspendMediaWhilePaused`). Defaults to target latency +
+   * `latency.catchUpThreshold` — the point where the latency controller
+   * starts discarding the paused buffer anyway.
+   */
+  pauseHoldSeconds?: number;
   preferredSubtitleLanguage?: string;
   includeForcedTracks?: boolean;
   enableDefaultTrack?: boolean;
@@ -186,6 +201,11 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
       // behavior yet; do not expose a textTracks facade on the adapter until
       // one exists.
       switchTextTrack,
+
+      // Sustained-pause gate the subscribe behaviors read: a pause that
+      // outlives its hold window releases the media subscriptions (the
+      // catalog subscription above stays open).
+      suspendMediaWhilePaused,
 
       // Selection → make-before-break subscription handoff.
       subscribeSelectedVideoTrack,
