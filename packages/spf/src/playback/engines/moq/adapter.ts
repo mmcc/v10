@@ -142,6 +142,16 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       if (value === this.#src) return;
       this.#src = value;
       this.#signals.state.paused.set(true);
+      // Close the load gate with it. Nothing else writes this slot false
+      // (the MoQ engine deliberately omits `trackLoadTriggers`), so without
+      // this a single earlier play() would make every later src change
+      // bypass `preload` and open a session + subscriptions immediately.
+      this.#signals.state.loadActivated.set(false);
+      // The other half of `pause()`: the audio renderer has no rate-0 gate —
+      // suspending the context *is* the pause — so without this the old
+      // source's already-scheduled audio keeps playing audibly while
+      // `paused` reports true.
+      this.#audioContext?.suspend().catch(() => {});
       this.#signals.state.presentation.set(value ? { url: value } : undefined);
     }
 
@@ -170,9 +180,9 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // before attach() would otherwise stay permanently silent), while
       // one created inside a gesture can start 'running' while paused.
       if (!this.paused && audioContext.state === 'suspended') {
-        void audioContext.resume();
+        audioContext.resume().catch(() => {});
       } else if (this.paused && audioContext.state === 'running') {
-        void audioContext.suspend();
+        audioContext.suspend().catch(() => {});
       }
       this.#signals.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
     }
@@ -209,17 +219,28 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // The engine-side pause gate: renderers hold their playout rate at 0
       // while set, which is what actually freezes video-only playback.
       this.#signals.state.paused.set(false);
-      // The autoplay-policy gate: resuming inside the user gesture that
-      // triggered play() is what unlocks the audio clock.
-      if (this.#audioContext && this.#audioContext.state === 'suspended') {
-        await this.#audioContext.resume();
-      }
+      // Set before the resume below: play() is the load intent regardless of
+      // whether the audio device comes up, and a rejection must not leave
+      // the engine unable to load at all.
       this.#signals.state.loadActivated.set(true);
+      // The autoplay-policy gate: resuming inside the user gesture that
+      // triggered play() is what unlocks the audio clock. A rejection —
+      // Safari outside a gesture, or an already-closed context — means
+      // playback did not start, so restore `paused` rather than leaving the
+      // player reporting playing over a frozen clock.
+      if (this.#audioContext && this.#audioContext.state === 'suspended') {
+        try {
+          await this.#audioContext.resume();
+        } catch (error) {
+          this.#signals.state.paused.set(true);
+          throw error;
+        }
+      }
     }
 
     pause(): void {
       this.#signals.state.paused.set(true);
-      void this.#audioContext?.suspend();
+      this.#audioContext?.suspend().catch(() => {});
     }
 
     get paused(): boolean {
@@ -264,11 +285,19 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     }
 
     destroy(): void {
-      void this.#engine.destroy();
-      void this.#audioContext?.close();
+      const audioContext = this.#audioContext;
       this.#audioContext = undefined;
       this.#gain = undefined;
       this.#renderContext = undefined;
+      // Close the context only after the composition has torn the renderers
+      // down: an in-flight renderer tick still calls `createBuffer` /
+      // `createBufferSource`, which throw `InvalidStateError` on a closed
+      // context. Both arms close so a failed teardown still releases the
+      // audio device.
+      const closeAudio = () => {
+        audioContext?.close().catch(() => {});
+      };
+      this.#engine.destroy().then(closeAudio, closeAudio);
     }
   }
 

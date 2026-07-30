@@ -95,6 +95,53 @@ describe('MoqMediaMixin', () => {
     media.destroy();
   });
 
+  it('restores paused when resume() rejects, so a blocked play() is not reported as playing', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    audioContext.resume.mockRejectedValueOnce(new Error('NotAllowedError'));
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    await expect(media.play()).rejects.toThrow('NotAllowedError');
+    expect(media.paused).toBe(true);
+    expect(media.engine.state.paused.get()).toBe(true);
+    // play() is still the load intent — a silent audio device must not leave
+    // the engine unable to load at all.
+    expect(media.engine.state.loadActivated.get()).toBe(true);
+
+    media.destroy();
+  });
+
+  it('closes the load gate and suspends audio on a src change', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    await media.play();
+    expect(media.engine.state.loadActivated.get()).toBe(true);
+    audioContext.suspend.mockClear();
+
+    media.src = 'moqt://relay.test/other#msf:live--catalog';
+    // Otherwise one earlier play() makes every later src bypass `preload`.
+    expect(media.engine.state.loadActivated.get()).toBe(false);
+    expect(media.engine.state.paused.get()).toBe(true);
+    // The audio renderer has no rate-0 gate, so the suspend *is* the pause.
+    expect(audioContext.suspend).toHaveBeenCalledTimes(1);
+
+    media.destroy();
+  });
+
+  it('closes the audio context only after the engine has torn down', async () => {
+    const audioContext = createFakeAudioContext('running');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.destroy();
+    // Renderer ticks still call createBuffer/createBufferSource until the
+    // composition has stopped them; closing first throws InvalidStateError.
+    expect(audioContext.close).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(audioContext.close).toHaveBeenCalledTimes(1));
+  });
+
   it('applies volume and muted to the render gain, including values set before attach()', () => {
     const audioContext = createFakeAudioContext('running');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
