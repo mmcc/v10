@@ -28,17 +28,35 @@ export function toVideoDecoderConfig(track: MoqVideoTrack): VideoDecoderConfig |
   return config;
 }
 
-/** Decoder config for a catalog audio track, or `null` without a codec. */
+/**
+ * Decoder config for a catalog audio track, or `null` when the catalog does
+ * not describe it well enough to decode.
+ *
+ * The sample rate comes from the catalog's own `samplerate` (§5.2.20), not
+ * from `AudioTrack.sampleRate` — the projection has to substitute a value
+ * there because the shared type requires a number, and configuring an
+ * AAC decoder at 48 kHz for a 44.1 kHz stream corrupts every frame rather
+ * than failing loudly. Opus is the one exception: RFC 6716 decoders always
+ * operate at 48 kHz, so its rate needs no declaration.
+ */
 export function toAudioDecoderConfig(track: MoqAudioTrack): AudioDecoderConfig | null {
   const codec = track.codecs[0];
   if (!codec) return null;
+  const sampleRate = track.moq.samplerate ?? (isOpus(codec) ? OPUS_SAMPLE_RATE : undefined);
+  if (sampleRate === undefined) return null;
   const config: AudioDecoderConfig = {
     codec,
-    sampleRate: track.sampleRate,
+    sampleRate,
     numberOfChannels: track.channels,
   };
   if (track.moq.initData !== undefined) {
     config.description = track.moq.initData.slice().buffer;
   }
   return config;
+}
+
+const OPUS_SAMPLE_RATE = 48_000;
+
+function isOpus(codec: string): boolean {
+  return codec.toLowerCase().startsWith('opus');
 }

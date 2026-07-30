@@ -7,6 +7,7 @@ import {
   type MoqVideoTrack,
   moqCatalogToPresentation,
   moqTrackId,
+  parseChannelConfig,
   parseMoqCatalog,
 } from '../parse-catalog';
 
@@ -83,6 +84,18 @@ describe('parseMoqCatalog', () => {
       channels: 2,
       codecs: ['opus'],
     });
+    // Raw values ride along so `toAudioDecoderConfig` can tell a declared
+    // rate from the projection's substituted one.
+    expect(audio.moq).toMatchObject({ samplerate: 48_000, channelConfig: '2' });
+  });
+
+  it('sums dotted surround channel configurations', () => {
+    expect(parseChannelConfig('2')).toBe(2);
+    // `parseInt('5.1')` reads 5 and silently drops the LFE channel.
+    expect(parseChannelConfig('5.1')).toBe(6);
+    expect(parseChannelConfig('7.1.4')).toBe(12);
+    expect(parseChannelConfig(undefined)).toBe(2);
+    expect(parseChannelConfig('stereo')).toBe(2);
   });
 
   it('derives stable track ids from full track names', () => {

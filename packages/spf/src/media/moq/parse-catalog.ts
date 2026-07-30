@@ -94,6 +94,15 @@ export interface MoqTrackFields {
   dependencies?: string[];
   initData?: Uint8Array;
   authInfo?: Record<string, unknown>;
+  /**
+   * Raw audio values as published (§5.2.20-21), carried verbatim so their
+   * *absence* survives the projection. `AudioTrack.sampleRate`/`channels`
+   * are required numbers, so the projection has to substitute conventional
+   * values there; `codec-mapping` needs to tell a declared rate from a
+   * substituted one to avoid configuring a decoder at the wrong rate.
+   */
+  samplerate?: number;
+  channelConfig?: string;
 }
 
 export type MoqVideoTrack = LiveVideoTrack & { moq: MoqTrackFields };
@@ -413,6 +422,8 @@ function moqFieldsOf(track: MoqCatalogTrack): MoqTrackFields {
   if (track.dependencies !== undefined) fields.dependencies = track.dependencies;
   if (track.initData !== undefined) fields.initData = track.initData;
   if (track.authInfo !== undefined) fields.authInfo = track.authInfo;
+  if (track.samplerate !== undefined) fields.samplerate = track.samplerate;
+  if (track.channelConfig !== undefined) fields.channelConfig = track.channelConfig;
   return fields;
 }
 
@@ -420,10 +431,18 @@ function trackUrl(sessionUri: string, track: MoqCatalogTrack): string {
   return `${sessionUri}#msf:${encodeNamespaceName(track.namespace, track.name)}`;
 }
 
-function parseChannels(channelConfig: string | undefined): number {
+/**
+ * Channel count from a catalog `channelConfig` (§5.2.21). Accepts a plain
+ * count (`'2'`) and the dotted surround form (`'5.1'` → 6, `'7.1.4'` → 12);
+ * `parseInt` alone would read `'5.1'` as 5 and silently drop the LFE.
+ * Unrecognized values fall back to stereo.
+ */
+export function parseChannelConfig(channelConfig: string | undefined): number {
   if (!channelConfig) return 2;
-  const leading = Number.parseInt(channelConfig, 10);
-  return Number.isFinite(leading) && leading > 0 ? leading : 2;
+  const trimmed = channelConfig.trim();
+  if (!/^\d+(\.\d+)*$/.test(trimmed)) return 2;
+  const total = trimmed.split('.').reduce((sum, part) => sum + Number(part), 0);
+  return total > 0 ? total : 2;
 }
 
 /**
@@ -472,10 +491,13 @@ export function moqCatalogToPresentation(
         codecs: track.codec ? [track.codec] : [],
         groupId: track.altGroup !== undefined ? `alt-${track.altGroup}` : 'audio',
         name: track.label ?? track.name,
-        // Decoder-facing values come from codec-mapping; these are
-        // selection metadata with conventional defaults when absent.
+        // `AudioTrack` requires both, so an absent catalog value has to
+        // become a conventional one here. That substitution is invisible
+        // downstream, which is why `moq.samplerate`/`moq.channelConfig`
+        // carry the raw values — `toAudioDecoderConfig` reads those rather
+        // than trusting these for decoder configuration.
         sampleRate: track.samplerate ?? 48_000,
-        channels: parseChannels(track.channelConfig),
+        channels: parseChannelConfig(track.channelConfig),
       });
     } else {
       text.push({

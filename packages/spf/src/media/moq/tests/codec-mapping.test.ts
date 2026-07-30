@@ -69,4 +69,24 @@ describe('toAudioDecoderConfig', () => {
   it('returns null without a codec', () => {
     expect(toAudioDecoderConfig(audioTrack({ codecs: [] }))).toBeNull();
   });
+
+  // `AudioTrack.sampleRate` is required, so the projection substitutes 48000
+  // when the catalog omits it. Trusting that would configure a 44.1 kHz AAC
+  // decoder at 48 kHz and corrupt every frame instead of failing loudly.
+  it('prefers the catalog samplerate over the projection substitute', () => {
+    const track = audioTrack({
+      codecs: ['mp4a.40.2'],
+      sampleRate: 48_000,
+      moq: { namespace: ['ns'], name: 'audio', packaging: 'loc', isLive: true, samplerate: 44_100 },
+    });
+    expect(toAudioDecoderConfig(track)).toMatchObject({ sampleRate: 44_100 });
+  });
+
+  it('returns null when a non-Opus catalog declares no samplerate', () => {
+    expect(toAudioDecoderConfig(audioTrack({ codecs: ['mp4a.40.2'] }))).toBeNull();
+  });
+
+  it('pins Opus to 48 kHz without a declared samplerate (RFC 6716 decode rate)', () => {
+    expect(toAudioDecoderConfig(audioTrack({ codecs: ['Opus'] }))).toMatchObject({ sampleRate: 48_000 });
+  });
 });
