@@ -13,6 +13,7 @@ import {
   encodeLocationFilter,
   encodeMessageParameters,
   encodePublishDone,
+  encodePublishNamespace,
   encodeRequestError,
   encodeSetup,
   encodeSubscribe,
@@ -180,6 +181,20 @@ describe('encodeGoaway', () => {
   it('encodes a zero-length URI (client rule) and round-trips the timeout', () => {
     const [message] = decodeAll(encodeGoaway(500));
     expect(message).toEqual({ kind: 'goaway', newSessionUri: '', timeout: 500 });
+  });
+});
+
+describe('encodePublishNamespace', () => {
+  it('round-trips through the decoder', () => {
+    const [message] = decodeAll(
+      encodePublishNamespace({ requestId: 1, trackNamespace: ['anon'], parameters: { forward: 1 } })
+    );
+    expect(message).toMatchObject({
+      kind: 'publish-namespace',
+      requestId: 1,
+      trackNamespace: ['anon'],
+      parameters: { forward: 1 },
+    });
   });
 });
 

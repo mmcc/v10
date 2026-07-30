@@ -808,6 +808,21 @@ export function encodePublish(
   return frameMessage(MESSAGE_TYPE.PUBLISH, body);
 }
 
+export interface PublishNamespaceRequest {
+  requestId: number;
+  trackNamespace: TrackNamespace;
+  parameters?: MessageParameters;
+}
+
+/** PUBLISH_NAMESPACE (§10.15) — a publisher announcing a namespace. */
+export function encodePublishNamespace(request: PublishNamespaceRequest): Uint8Array {
+  const body = new ByteWriter();
+  body.writeVarint(request.requestId);
+  writeTrackNamespace(body, request.trackNamespace);
+  encodeMessageParameters(body, request.parameters);
+  return frameMessage(MESSAGE_TYPE.PUBLISH_NAMESPACE, body);
+}
+
 // ============================================================================
 // Decoders (publisher → subscriber)
 // ============================================================================
@@ -856,6 +871,7 @@ export type ControlMessage =
       parameters: MessageParameters;
       trackProperties: KeyValuePair[];
     }
+  | { kind: 'publish-namespace'; requestId: number; trackNamespace: TrackNamespace; parameters: MessageParameters }
   | {
       kind: 'fetch-ok';
       endOfTrack: boolean;
@@ -946,6 +962,11 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
         parameters,
         trackProperties: decodeKeyValuePairs(reader, end),
       };
+    }
+    case MESSAGE_TYPE.PUBLISH_NAMESPACE: {
+      const requestId = reader.readVarint();
+      const trackNamespace = readTrackNamespace(reader);
+      return { kind: 'publish-namespace', requestId, trackNamespace, parameters: decodeMessageParameters(reader) };
     }
     case MESSAGE_TYPE.FETCH_OK: {
       const endOfTrackWire = reader.readUint8();

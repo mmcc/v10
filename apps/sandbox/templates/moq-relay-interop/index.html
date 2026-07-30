@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sandbox — MoQ Relay Interop</title>
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <style>
+      body {
+        padding: 1rem;
+        margin: 0;
+        font-family: 'Inter', sans-serif;
+        color: #eee;
+        background: #111;
+      }
+      #layout {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      #player-col {
+        flex: 1 1 480px;
+      }
+      simple-moq-video {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #000;
+      }
+      #controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        margin-top: 0.5rem;
+      }
+      #controls input[type='text'] {
+        flex: 1 1 260px;
+        font-family: monospace;
+        font-size: 12px;
+      }
+      #panels {
+        display: flex;
+        flex: 1 1 420px;
+        flex-direction: column;
+        gap: 1rem;
+        min-width: 320px;
+      }
+      #state,
+      #logs {
+        padding: 0.5rem;
+        overflow-y: auto;
+        font-family: monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        background: #000;
+        border: 1px solid #333;
+        border-radius: 4px;
+      }
+      #state {
+        max-height: 220px;
+      }
+      #logs {
+        flex: 1;
+        max-height: 320px;
+      }
+      #logs div.error {
+        color: #f66;
+      }
+      #logs div.success {
+        color: #6f6;
+      }
+      #logs div.warning {
+        color: #fc6;
+      }
+      h2 {
+        margin: 0 0 0.25rem;
+        font-size: 13px;
+        color: #999;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      button {
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="layout">
+      <div id="player-col">
+        <simple-moq-video id="player" playsinline></simple-moq-video>
+        <div id="controls">
+          <input id="src-input" type="text" spellcheck="false" />
+          <button id="load-btn" type="button">Load</button>
+          <button id="play-btn" type="button">Play</button>
+          <button id="pause-btn" type="button">Pause</button>
+          <label><input id="mute-toggle" type="checkbox" checked /> Muted</label>
+        </div>
+      </div>
+      <div id="panels">
+        <div>
+          <h2>Engine state</h2>
+          <div id="state">—</div>
+        </div>
+        <div>
+          <h2>Log</h2>
+          <div id="logs"></div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

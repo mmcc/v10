@@ -135,13 +135,54 @@ google-cast provider precedent), not in SPF:
 - Engine error slot still missing → wrapper claims the error capability
   with a constant `null`; wire it once the engine surfaces errors.
 
+## Live-relay interop: relay.mux.dev (2026-07-30)
+
+First real Phase 0 data point — a moq-dev relay deployment reachable at
+`relay.mux.dev`, broadcasting a live test pattern at
+`moqt://relay.mux.dev/#msf:anon--catalog`. Drove `SimpleMoqVideo`
+end-to-end against it (new sandbox template
+`apps/sandbox/templates/moq-relay-interop/`, a debug harness with an
+engine-state/log panel — no demo page existed before this). Two real
+protocol gaps found and fixed; playback now works (canvas renders the
+relay's test pattern, bandwidth/clock/playout state all tracking
+correctly):
+
+- **`PUBLISH_NAMESPACE` (0x6) had a defined `MESSAGE_TYPE` constant but
+  no decode case** — `control-messages.ts`'s decode switch fell to
+  `default` and threw, which killed the whole session, because the
+  relay announces its namespace unsolicited right after SETUP (before
+  we ever send SUBSCRIBE_NAMESPACE). Fixed: added the decode case
+  (`kind: 'publish-namespace'`) plus `encodePublishNamespace` for
+  symmetry/tests. No session.ts change needed — `#handleIncomingRequest`'s
+  existing generic fallback (REQUEST_ERROR/NOT_SUPPORTED for any
+  non-`'publish'` incoming request) already does the spec-correct thing
+  once the message decodes instead of throwing.
+- **relay.mux.dev answers FETCH with generic REQUEST_OK, not the
+  spec-mandated FETCH_OK** (draft-19 §10.12.3: "responds ... with
+  either a FETCH_OK or a REQUEST_ERROR"; §10.5's REQUEST_OK list
+  doesn't include FETCH) — a relay-side deviation, not our bug. Was
+  fatal (`#handleFetchMessage`'s catch-all). Fixed with a deliberate
+  leniency case: `'request-ok'` is now a no-op on a fetch stream rather
+  than fatal. Safe because `onOk`'s `endLocation`/`endOfTrack` aren't
+  consumed by any current caller (only `resolveCatalog`'s joining fetch
+  calls `session.fetch()` today, and it only uses
+  `onEntry`/`onEnd`/`onError`/`onReset`) and because the fetch's actual
+  data delivery is a *separate* unidirectional stream, decoupled from
+  whatever the bidi request stream's response says (confirmed by an
+  existing test that never even sends FETCH_OK and still passes).
+
+Both fixes are covered by new tests in `control-messages.test.ts` and
+`session.test.ts`. The sandbox template is a reusable harness for any
+future relay interop check — point `src`/query-param `?src=` at a
+different `moqt://` URL to test another deployment.
+
 ## Owed to Phase 0/5 (cannot be done in-repo)
 
-- Interop matrix + evidence-based draft pin (plan §7 Phase 0). All wire
-  specifics are quarantined in `network/moqt/`; a draft-16 compat
-  profile would land there.
+- Interop matrix + evidence-based draft pin (plan §7 Phase 0) — one
+  live relay now verified (relay.mux.dev, above); still need a broader
+  matrix across other moq-dev/relay implementations.
 - Golden byte traces from real peers (tests currently round-trip
   against our own codec + in-memory fakes).
 - Safari WebCodecs coverage probe; autoplay-gate UX.
-- Live-relay e2e (opt-in flag), GOAWAY migration, CMSF/DRM.
+- GOAWAY migration, CMSF/DRM.
 - §6 prototype (2): MediaStreamTrackGenerator bridge comparison.

@@ -546,6 +546,13 @@ class MoqtSessionImpl implements MoqtSession {
           trackProperties: message.trackProperties,
         });
         break;
+      // Some deployed relays accept a FETCH with the generic REQUEST_OK
+      // instead of the FETCH_OK moq-transport-19 §10.12.3 mandates. It
+      // carries no End Location/End Of Track, so `onOk` can't fire — the
+      // fetch's actual completion still surfaces via onEntry/onEnd on the
+      // data stream, which this response has no bearing on.
+      case 'request-ok':
+        break;
       case 'request-error':
         this.#fetches.delete(record.requestId);
         record.handlers.onError?.(message);
