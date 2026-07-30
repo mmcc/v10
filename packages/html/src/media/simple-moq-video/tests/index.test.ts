@@ -78,6 +78,60 @@ describe('SimpleMoqVideo', () => {
     expect(el.shadowRoot?.querySelector('canvas')).not.toBeNull();
   });
 
+  // A declarative-shadow-DOM host already has a root at upgrade time; a bare
+  // `attachShadow` throws NotSupportedError there and bricks the element.
+  it('reuses an existing shadow root instead of attaching a second one', () => {
+    const tag = defineElement();
+    const host = document.createElement('div');
+    host.innerHTML = `<${tag}></${tag}>`;
+    const el = host.firstElementChild as SimpleMoqVideo;
+    // Simulate the upgrade order declarative shadow DOM produces.
+    const preAttached = document.createElement(tag) as SimpleMoqVideo;
+
+    expect(el.shadowRoot?.querySelector('canvas')).not.toBeNull();
+    expect(preAttached.shadowRoot?.querySelectorAll('canvas')).toHaveLength(1);
+
+    // Never connected, so nothing disconnects them — release both engines
+    // explicitly rather than leaving live compositions behind.
+    el.destroy();
+    preAttached.destroy();
+  });
+
+  it('keeps the engine alive across disconnect when keep-alive is set', async () => {
+    const el = createConnectedElement();
+    el.setAttribute('keep-alive', '');
+    const engine = el.engine;
+
+    el.remove();
+    await flushEffects();
+    document.body.append(el);
+    await flushEffects();
+
+    // Same composition, still attached to the canvas.
+    expect(el.engine).toBe(engine);
+    expect(el.engine.context.renderSurface.get()).toBe(el.shadowRoot!.querySelector('canvas'));
+
+    // `keep-alive` means nothing tears this down for us, and a live
+    // composition left in the registry leaks into later suites.
+    el.removeAttribute('keep-alive');
+    el.remove();
+    await flushEffects();
+  });
+
+  it('refuses to reattach after teardown rather than rendering nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const el = createConnectedElement();
+
+    el.remove();
+    await flushEffects();
+    document.body.append(el);
+    await flushEffects();
+
+    // destroy() reset every slot; re-attaching would leave a black canvas.
+    expect(el.engine.context.renderSurface.get()).toBeUndefined();
+    warn.mockRestore();
+  });
+
   it('sizes the canvas from a stylesheet so skin style hooks apply', () => {
     const tag = defineElement();
     const el = document.createElement(tag) as SimpleMoqVideo;
@@ -88,7 +142,10 @@ describe('SimpleMoqVideo', () => {
     const canvas = el.shadowRoot!.querySelector('canvas')!;
     expect(canvas.getAttribute('style')).toBeNull();
 
-    const styles = el.shadowRoot!.querySelector('style')!.textContent!;
+    // `applyShadowStyles` prefers a constructable sheet over a `<style>` tag.
+    const styles = el
+      .shadowRoot!.adoptedStyleSheets.flatMap((sheet) => Array.from(sheet.cssRules).map((rule) => rule.cssText))
+      .join('\n');
     expect(styles).toContain('display: contents');
     expect(styles).toContain('object-fit: var(--media-object-fit, contain)');
     expect(styles).toContain('border-radius: var(--media-video-border-radius)');
@@ -118,6 +175,34 @@ describe('SimpleMoqVideo', () => {
     el.setAttribute('target-latency', '1.5');
 
     expect(el.targetLatency).toBe(1.5);
+  });
+
+  // Unvalidated, these reach the latency controller as NaN (every comparison
+  // false, so control silently stops) or 0 (continuous catch-up).
+  it('ignores non-positive and unparseable target-latency values', () => {
+    const el = createConnectedElement();
+
+    el.setAttribute('target-latency', '');
+    expect(el.targetLatency).toBeUndefined();
+
+    el.setAttribute('target-latency', 'soon');
+    expect(el.targetLatency).toBeUndefined();
+
+    el.setAttribute('target-latency', '0');
+    expect(el.targetLatency).toBeUndefined();
+
+    el.setAttribute('target-latency', '2');
+    expect(el.targetLatency).toBe(2);
+  });
+
+  it('falls back to the empty preload for values outside the enumeration', () => {
+    const el = createConnectedElement();
+
+    el.setAttribute('preload', 'metadata');
+    expect(el.preload).toBe('metadata');
+
+    el.setAttribute('preload', 'everything');
+    expect(el.preload).toBe('');
   });
 
   it('destroys the engine once actually disconnected', async () => {
@@ -249,8 +334,11 @@ describe('SimpleMoqVideo', () => {
       expect(el.currentTime).toBe(0);
       expect(el.readyState).toBe(0);
       expect(el.currentSrc).toBe('');
-      expect(el.error).toBeNull();
       expect(() => el.load()).not.toThrow();
+      // `error` must stay undefined: `isMediaErrorCapable` only checks for
+      // presence, so a null-returning getter would attach the error feature
+      // to an element that can never dispatch `'error'`.
+      expect('error' in el).toBe(false);
     });
 
     it('derives stream-type and live properties from src', () => {
@@ -275,6 +363,18 @@ describe('SimpleMoqVideo', () => {
 
       expect(el.muted).toBe(true);
       expect(el.defaultMuted).toBe(true);
+    });
+
+    // Per spec `muted` seeds the *default* — removing it must not unmute an
+    // element the user muted.
+    it('does not unmute when the muted attribute is removed', () => {
+      const el = createConnectedElement();
+      el.setAttribute('muted', '');
+
+      el.removeAttribute('muted');
+
+      expect(el.defaultMuted).toBe(false);
+      expect(el.muted).toBe(true);
     });
   });
 });

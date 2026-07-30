@@ -1,6 +1,7 @@
 import { VideoCSSVars } from '@videojs/core/dom/media/custom-media-element';
 import { effect } from '@videojs/spf';
 import { isResolvedPresentation, MoqMediaMixin, type MoqMediaProps } from '@videojs/spf/moq';
+import { applyShadowStyles, createShadowStyle } from '@videojs/utils/dom';
 import { isNull } from '@videojs/utils/predicate';
 import { MediaAttachMixin } from '../../store/media-attach-mixin';
 
@@ -18,6 +19,13 @@ const TIME_POLL_INTERVAL_MS = 250;
  * way a slotted `<video>` does and honors the same style hooks. Without
  * this the canvas resolves `height: 100%` against an inline host and
  * collapses to its intrinsic bitmap height inside a skin.
+ *
+ * Deliberately NOT tagged with the build's `/* css *​/` marker: that plugin
+ * swaps each `${…}` for an `___EXPR_n___` placeholder before running
+ * lightningcss, and these interpolations are custom-property *names* inside
+ * `var()`, so it would emit `var(___EXPR_0___)` and fail to parse. Keeping
+ * the shared `VideoCSSVars` constants is worth more than minifying ~300
+ * bytes of static CSS.
  */
 const SHADOW_STYLES = /*css*/ `
   :host {
@@ -34,12 +42,23 @@ const SHADOW_STYLES = /*css*/ `
   }
 `;
 
+// One constructable sheet shared by every instance, mirroring the skins'
+// `static styles = createShadowStyle(...)`. SSR-safe: `createShadowStyle`
+// falls back to raw CSS where `CSSStyleSheet` is undefined.
+const SHADOW_STYLE_SHEET = createShadowStyle(SHADOW_STYLES);
+
 // `HTMLMediaElement` readyState constants — this element doesn't extend it,
 // so the values are restated here (store features compare against them).
 const HAVE_NOTHING = 0;
 const HAVE_METADATA = 1;
 const HAVE_CURRENT_DATA = 2;
 const HAVE_ENOUGH_DATA = 4;
+
+const PRELOAD_VALUES = ['', 'none', 'metadata', 'auto'] as const;
+
+function isValidPreload(value: string | null): value is MoqMediaProps['preload'] {
+  return !isNull(value) && (PRELOAD_VALUES as readonly string[]).includes(value);
+}
 
 /**
  * `MoqMediaMixin` renders to a canvas + `AudioContext` rather than wrapping
@@ -57,25 +76,49 @@ const HAVE_ENOUGH_DATA = 4;
  */
 class SimpleMoqMediaImpl extends MoqMediaBase {
   static readonly observedAttributes = ['src', 'preload', 'target-latency', 'muted'];
+  static shadowRootOptions: ShadowRootInit = { mode: 'open' };
 
   readonly #canvas: HTMLCanvasElement;
   #bridge: AbortController | null = null;
   #readyState: number = HAVE_NOTHING;
   #lastTime = 0;
+  #lastWidth = 0;
+  #lastHeight = 0;
+  #destroyed = false;
 
   defaultMuted = false;
   loop = false;
 
   constructor(...args: ConstructorParameters<typeof MoqMediaBase>) {
     super(...args);
-    this.attachShadow({ mode: 'open' });
-    const style = document.createElement('style');
-    style.textContent = SHADOW_STYLES;
-    this.#canvas = document.createElement('canvas');
-    this.shadowRoot!.append(style, this.#canvas);
+    if (__DEV__) {
+      console.warn(
+        '<simple-moq-video> is experimental: the MoQ engine has no error slot yet, so transport, ' +
+          'codec, and catalog failures are logged rather than surfaced on the element.'
+      );
+    }
+    // Declarative shadow DOM attaches a root during upgrade — a second bare
+    // `attachShadow` throws NotSupportedError and leaves the element dead.
+    // Mirrors `CustomMediaElement`/`BackgroundVideo`/`SkinElement`.
+    if (!this.shadowRoot) {
+      this.attachShadow((this.constructor as typeof SimpleMoqMediaImpl).shadowRootOptions);
+    }
+    const root = this.shadowRoot!;
+    this.#canvas = root.querySelector('canvas') ?? document.createElement('canvas');
+    if (!this.#canvas.isConnected) root.append(this.#canvas);
+    applyShadowStyles(root, [SHADOW_STYLE_SHEET]);
   }
 
   connectedCallback(): void {
+    // A reconnect after teardown would attach into a destroyed composition,
+    // whose slots have all been reset — the canvas would stay black with no
+    // error anywhere. Refuse instead of failing silently.
+    if (this.#destroyed) {
+      if (__DEV__) {
+        console.warn('<simple-moq-video> was reconnected after destroy(); create a new element instead.');
+      }
+      return;
+    }
     this.attach(this.#canvas);
     this.#connectEventBridge();
   }
@@ -84,10 +127,15 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     this.#bridge?.abort();
     this.#bridge = null;
     this.detach();
+    // `keep-alive` opts out of teardown entirely (same escape hatch as
+    // `CustomMediaElement`), for hosts that reparent asynchronously.
+    if (this.hasAttribute('keep-alive')) return;
     // Defer so a synchronous reparent (remove + insert) doesn't tear down
     // the engine — mirrors `CustomMediaElement`'s disconnect guard.
     queueMicrotask(() => {
-      if (!this.isConnected) this.destroy();
+      if (this.isConnected || this.#destroyed) return;
+      this.#destroyed = true;
+      this.destroy();
     });
   }
 
@@ -96,12 +144,18 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     if (name === 'src') {
       this.src = newValue ?? '';
     } else if (name === 'preload') {
-      this.preload = (newValue ?? '') as MoqMediaProps['preload'];
+      this.preload = isValidPreload(newValue) ? newValue : '';
     } else if (name === 'target-latency') {
-      this.targetLatency = isNull(newValue) ? undefined : Number(newValue);
+      // A bare attribute or garbage would otherwise reach the latency
+      // controller as 0 (continuous catch-up) or NaN (every comparison
+      // false, so latency control silently stops).
+      const parsed = isNull(newValue) ? Number.NaN : Number(newValue);
+      this.targetLatency = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
     } else if (name === 'muted') {
+      // `muted` is the *default* muted state per spec: removing the
+      // attribute must not unmute an element the user muted.
       this.defaultMuted = !isNull(newValue);
-      this.muted = !isNull(newValue);
+      if (!isNull(newValue)) this.muted = true;
     }
   }
 
@@ -122,6 +176,10 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
         const paused = this.engine.state.paused.get() ?? true;
         if (paused === lastPaused) return;
         lastPaused = paused;
+        // The clock does not advance while paused, so a stale `#lastTime`
+        // would make the first tick after resuming look like a stall and
+        // flash the spinner on a perfectly healthy stream.
+        if (!paused) this.#lastTime = this.currentTime;
         this.#dispatch(paused ? 'pause' : 'play');
       })
     );
@@ -141,6 +199,14 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     // it at the native timeupdate cadence; a stalled clock while playing
     // means the jitter buffer ran dry (`waiting`).
     const tick = () => {
+      // The canvas bitmap is sized on first decode and on every resolution
+      // switch; consumers track dimensions through `resize`, so without this
+      // `videoWidth`/`videoHeight` readers never refresh.
+      if (this.#canvas.width !== this.#lastWidth || this.#canvas.height !== this.#lastHeight) {
+        this.#lastWidth = this.#canvas.width;
+        this.#lastHeight = this.#canvas.height;
+        this.#dispatch('resize');
+      }
       if (this.paused) return;
       const time = this.currentTime;
       if (time !== this.#lastTime) {
@@ -268,14 +334,15 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
   }
 
   // --------------------------------------------------------------------
-  // Error + video dimension capabilities
+  // Video dimension capability
   // --------------------------------------------------------------------
 
-  get error(): null {
-    // The engine has no error surfacing slot yet — claim the capability so
-    // the error feature attaches, and report it once the slot exists.
-    return null;
-  }
+  // `error` is deliberately NOT defined. `isMediaErrorCapable` only checks
+  // `!isUndefined(media.error)`, so a `null`-returning getter would make the
+  // error feature attach and then wait forever for an `'error'` event this
+  // element cannot fire — the engine has no error slot yet. Leaving the
+  // property undefined makes the feature skip, which is honest. Define it
+  // (and dispatch `'error'`) once the engine surfaces failures.
 
   get videoWidth(): number {
     return this.#canvas.width;
