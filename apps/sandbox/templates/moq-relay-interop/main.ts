@@ -34,6 +34,22 @@ function log(msg: string, type: 'info' | 'success' | 'error' | 'warning' = 'info
   logsDiv.scrollTop = logsDiv.scrollHeight;
 }
 
+// The engine has no error slot yet (transport/codec/catalog failures are
+// only console.error'd — see the <simple-moq-video> mount warning), so
+// mirror console output into the panel rather than requiring devtools.
+const originalConsoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  originalConsoleError(...args);
+  log(`console.error: ${args.map(String).join(' ')}`, 'error');
+};
+const originalConsoleWarn = console.warn.bind(console);
+console.warn = (...args: unknown[]) => {
+  originalConsoleWarn(...args);
+  log(`console.warn: ${args.map(String).join(' ')}`, 'warning');
+};
+window.addEventListener('error', (event) => log(`uncaught error: ${event.error ?? event.message}`, 'error'));
+window.addEventListener('unhandledrejection', (event) => log(`unhandled rejection: ${event.reason}`, 'error'));
+
 const MEDIA_EVENTS = [
   'loadstart',
   'loadedmetadata',
