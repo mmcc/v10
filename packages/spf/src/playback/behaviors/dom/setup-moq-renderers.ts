@@ -1,35 +1,41 @@
 /**
- * **Wire subscriber jitter buffers into the WebCodecs renderers.** Two
- * behaviors, one per leg:
+ * **Wire subscriber jitter buffers into the WebCodecs renderers.** Three
+ * behaviors:
  *
  * - `setupAudioRenderer` — owns `context.audioRendererActor` (created when
  *   `context.audioContext` appears) and points it at the active audio
- *   subscriber. The audio renderer owns the **master clock**, so this
- *   behavior also owns `state.currentTime`: a playout-cadence interval
- *   publishes the clock as seconds (the MoQ engine has no HTMLMediaElement
- *   to read time from). With no audio scheduled it falls back to the video
- *   renderer's last presented timestamp, so a video-only catalog still
- *   reports progress.
+ *   subscriber. The audio renderer owns the **master clock**.
  * - `setupVideoRenderer` — owns `context.videoRendererActor` (created when
  *   `context.renderSurface` appears), points it at the active video
  *   subscriber, and slaves its presentation to the audio renderer's clock
  *   when one exists (falling back to the renderer's self-clock for
  *   video-only playback).
+ * - `trackPlayoutTime` — owns `state.currentTime`: a playout-cadence
+ *   interval publishes whichever clock is running as seconds (the MoQ
+ *   engine has no HTMLMediaElement to read time from). It is its own
+ *   behavior rather than a second job of the audio side because it must
+ *   run whenever *either* renderer exists: gated on the AudioContext it
+ *   would go silent exactly in the video-only case it exists to cover, and
+ *   `syncLatency` reads `currentTime` as its setpoint, so a starved clock
+ *   is a stopped controller.
  *
- * Both apply `state.playoutRate` (latency-controller nudges) through the
- * renderer's `getPlaybackRate` seam — gated to 0 while `state.paused` is
- * set, so video-only playback actually freezes on pause — and both
- * re-point on subscriber-actor swaps — which is the moment a
+ * The renderers apply `state.playoutRate` (latency-controller nudges)
+ * through the `getPlaybackRate` seam — gated to 0 for video while
+ * `state.paused` is set, so video-only playback actually freezes on pause
+ * — and both re-point on subscriber-actor swaps, which is the moment a
  * make-before-break handoff completes; the renderer's keyframe gate
  * handles the decoder reconfiguration.
  *
- * Both also own the **playout anchor**: with `latency.joinAtEdge` set they
- * hand each renderer the live edge of its own jitter buffer (newest
- * buffered − target latency) as the point playout should start from, at
- * join and after every catch-up skip. The controller in `sync-latency`
- * steers latency once playout is running; the anchor is what decides
- * where "running" begins, which is why it lives here — the renderers own
- * the clocks — rather than in the controller.
+ * Both also aim their clocks at the **delivery edge**: with
+ * `latency.joinAtEdge` set they hand each renderer the live edge of its
+ * own jitter buffer (newest buffered − target latency). The two legs use
+ * it differently, which is why the option is named differently on each —
+ * audio consults it once per join (`getJoinAnchorUs`; audio cannot
+ * fast-forward a backlog without pitch artifacts, so it drops it), while
+ * video consults it continuously (`getTargetClockUs`) and slews its
+ * self-clock onto it. The controller in `sync-latency` steers latency at
+ * coarse scale once playout is running; where the clocks *are* lives here,
+ * because the renderers own them.
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
@@ -84,10 +90,11 @@ export interface MoqRendererConfig {
 
 /**
  * The live edge of `subscriberSignal`'s jitter buffer, `targetLatency`
- * back: where playout should anchor. `undefined` disables edge anchoring —
- * the knob is off, there is no subscriber, or nothing has arrived yet.
+ * back: where the renderer's clock should be. `undefined` disables edge
+ * tracking — the knob is off, there is no subscriber, or nothing has
+ * arrived yet.
  */
-function makeJoinAnchor(
+function makeEdgeTargetUs(
   subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
   targetLatencySignal: ReadonlySignal<number | undefined>,
   latency: LatencyControlConfig
@@ -106,6 +113,35 @@ function makeJoinAnchor(
   };
 }
 
+/**
+ * The audio join anchor: the audio buffer's live edge, but never behind a
+ * video clock that is already running.
+ *
+ * Audio subscriptions can start late — an autoplay deferral unlocks on
+ * first gesture, a sustained pause releases and rejoins — and their edge
+ * is computed from a buffer that has only just started filling. Anchoring
+ * there can land behind the video self-clock, and the video renderer only
+ * re-anchors on *forward* discontinuities, so it would hold on its last
+ * frame until the newly-installed master clock caught up to it. Clamping
+ * forward is the same "never move the clock backwards" rule the video
+ * renderer applies to its own anchor.
+ */
+function makeAudioJoinAnchor(
+  subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
+  targetLatencySignal: ReadonlySignal<number | undefined>,
+  latency: LatencyControlConfig,
+  videoRendererSignal: ReadonlySignal<VideoRendererActor | undefined>
+): (() => number | undefined) | undefined {
+  const edgeTargetUs = makeEdgeTargetUs(subscriberSignal, targetLatencySignal, latency);
+  if (!edgeTargetUs) return undefined;
+  return () => {
+    const anchorUs = edgeTargetUs();
+    if (anchorUs === undefined) return undefined;
+    const videoClockUs = peek(videoRendererSignal)?.getClockTimeUs();
+    return videoClockUs !== undefined && videoClockUs > anchorUs ? videoClockUs : anchorUs;
+  };
+}
+
 // =============================================================================
 // Audio
 // =============================================================================
@@ -118,13 +154,12 @@ function setupAudioRendererSetup({
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
     targetLatency: ReadonlySignal<number | undefined>;
-    currentTime: Signal<number | undefined>;
   };
   context: {
     audioContext: ReadonlySignal<AudioContextLike | undefined>;
     audioSubscriberActor: ReadonlySignal<TrackSubscriberActor | undefined>;
     audioRendererActor: Signal<AudioRendererActor | undefined>;
-    /** Read-only, for the video-only clock fallback below. */
+    /** Read-only, for the join anchor's forward clamp below. */
     videoRendererActor: ReadonlySignal<VideoRendererActor | undefined>;
   };
   config?: MoqRendererConfig;
@@ -140,45 +175,28 @@ function setupAudioRendererSetup({
     states: {
       'preconditions-unmet': {},
       'renderer-active': {
-        entry: [
-          () => {
-            const renderer = createAudioRendererActor({
-              audioContext: context.audioContext.get()!,
-              // No paused gating here: the adapter suspends the
-              // AudioContext on pause, which freezes the hardware clock and
-              // every scheduled source. Rate 0 would instead produce an
-              // infinite clock segment (duration ÷ 0) and sources whose
-              // `playbackRate` stays 0 after resume — a permanent stall.
-              getPlaybackRate: () => peek(state.playoutRate) ?? 1,
-              getJoinAnchorUs: makeJoinAnchor(context.audioSubscriberActor, state.targetLatency, latencyConfig),
-            });
-            context.audioRendererActor.set(renderer);
-            return () => {
-              renderer.destroy();
-              context.audioRendererActor.set(undefined);
-            };
-          },
-          // The audio clock is the master clock: publish it as
-          // `state.currentTime` on a UI-friendly cadence.
-          () => {
-            const timer = setInterval(() => {
-              const clockUs = peek(context.audioRendererActor)?.getClockTimeUs();
-              if (clockUs !== undefined) {
-                state.currentTime.set(clockUs / 1_000_000);
-                return;
-              }
-              // No audio scheduled — a video-only catalog, or audio that
-              // hasn't started. The video renderer's last presented frame is
-              // then the only progress signal, and `currentTime` is the only
-              // thing the media-element facade derives readiness from: without
-              // this fallback video-only playback renders fine but never
-              // leaves HAVE_METADATA, so the shell buffers forever.
-              const presentedUs = peek(context.videoRendererActor)?.snapshot.get().context.lastPresentedTimestampUs;
-              if (presentedUs !== undefined) state.currentTime.set(presentedUs / 1_000_000);
-            }, CLOCK_PUBLISH_INTERVAL_MS);
-            return () => clearInterval(timer);
-          },
-        ],
+        entry: () => {
+          const renderer = createAudioRendererActor({
+            audioContext: context.audioContext.get()!,
+            // No paused gating here: the adapter suspends the
+            // AudioContext on pause, which freezes the hardware clock and
+            // every scheduled source. Rate 0 would instead produce an
+            // infinite clock segment (duration ÷ 0) and sources whose
+            // `playbackRate` stays 0 after resume — a permanent stall.
+            getPlaybackRate: () => peek(state.playoutRate) ?? 1,
+            getJoinAnchorUs: makeAudioJoinAnchor(
+              context.audioSubscriberActor,
+              state.targetLatency,
+              latencyConfig,
+              context.videoRendererActor
+            ),
+          });
+          context.audioRendererActor.set(renderer);
+          return () => {
+            renderer.destroy();
+            context.audioRendererActor.set(undefined);
+          };
+        },
         effects: [
           () => {
             const renderer = peek(context.audioRendererActor);
@@ -201,7 +219,7 @@ function setupAudioRendererSetup({
  * const reactor = setupAudioRenderer.setup({ state, context });
  */
 export const setupAudioRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'targetLatency', 'currentTime'],
+  stateKeys: ['playoutRate', 'targetLatency'],
   contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupAudioRendererSetup,
 });
@@ -251,8 +269,10 @@ function setupVideoRendererSetup({
             // hold point.
             getPlaybackRate: () => (peek(state.paused) ? 0 : (peek(state.playoutRate) ?? 1)),
             // Only consulted on the self-clock path: with audio present the
-            // master clock already carries the edge anchor.
-            getJoinAnchorUs: makeJoinAnchor(context.videoSubscriberActor, state.targetLatency, latencyConfig),
+            // master clock already tracks the edge itself.
+            getTargetClockUs: makeEdgeTargetUs(context.videoSubscriberActor, state.targetLatency, latencyConfig),
+            clockSlewRate: latencyConfig.clockSlewRate,
+            clockSlewToleranceUs: latencyConfig.clockSlewTolerance * 1_000_000,
           });
           context.videoRendererActor.set(renderer);
           return () => {
@@ -285,4 +305,57 @@ export const setupVideoRenderer = defineBehavior({
   stateKeys: ['playoutRate', 'targetLatency', 'paused'],
   contextKeys: ['renderSurface', 'videoSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupVideoRendererSetup,
+});
+
+// =============================================================================
+// Playout clock
+// =============================================================================
+
+function trackPlayoutTimeSetup({
+  state,
+  context,
+}: {
+  state: { currentTime: Signal<number | undefined> };
+  context: {
+    audioRendererActor: ReadonlySignal<AudioRendererActor | undefined>;
+    videoRendererActor: ReadonlySignal<VideoRendererActor | undefined>;
+  };
+}): () => void {
+  const timer = setInterval(() => {
+    const clockUs = peek(context.audioRendererActor)?.getClockTimeUs();
+    if (clockUs !== undefined) {
+      state.currentTime.set(clockUs / 1_000_000);
+      return;
+    }
+    // No audio scheduled — a video-only catalog, an autoplay deferral, or
+    // audio that hasn't started. The video renderer's last presented frame
+    // is then the only progress signal, and it is what `syncLatency`
+    // measures its latency against; `currentTime` is also the only thing
+    // the media-element facade derives readiness from, so without this
+    // fallback video-only playback renders fine but never leaves
+    // HAVE_METADATA and the shell buffers forever.
+    const presentedUs = peek(context.videoRendererActor)?.snapshot.get().context.lastPresentedTimestampUs;
+    if (presentedUs !== undefined) state.currentTime.set(presentedUs / 1_000_000);
+  }, CLOCK_PUBLISH_INTERVAL_MS);
+  return () => clearInterval(timer);
+}
+
+/**
+ * **Publish the playout position as `state.currentTime`** (media seconds),
+ * sampled from the audio master clock when audio is scheduled and from the
+ * video renderer's last presented frame otherwise.
+ *
+ * Ungated on purpose. Its two consumers — the media-element facade's
+ * readiness derivation and `syncLatency`'s setpoint — both need a value in
+ * exactly the configurations a gate would exclude (no AudioContext, audio
+ * deferred behind an autoplay unlock, audio released by a sustained
+ * pause), and sampling two absent renderers costs one no-op interval.
+ *
+ * @example
+ * const cleanup = trackPlayoutTime.setup({ state, context });
+ */
+export const trackPlayoutTime = defineBehavior({
+  stateKeys: ['currentTime'],
+  contextKeys: ['audioRendererActor', 'videoRendererActor'],
+  setup: trackPlayoutTimeSetup,
 });

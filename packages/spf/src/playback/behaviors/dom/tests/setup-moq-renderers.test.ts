@@ -5,7 +5,12 @@ import { createAudioRendererActor } from '../../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../../actors/dom/video-renderer';
 import { createVideoRendererActor } from '../../../actors/dom/video-renderer';
 import type { TrackSubscriberActor } from '../../../actors/track-subscriber';
-import { type MoqRendererConfig, setupAudioRenderer, setupVideoRenderer } from '../setup-moq-renderers';
+import {
+  type MoqRendererConfig,
+  setupAudioRenderer,
+  setupVideoRenderer,
+  trackPlayoutTime,
+} from '../setup-moq-renderers';
 
 // Mock the actor factories: these tests assert the behaviors' wiring (the
 // options each factory receives), not the renderers themselves.
@@ -54,7 +59,6 @@ describe('setupAudioRenderer', () => {
     const state = {
       playoutRate: signal<number | undefined>(undefined),
       targetLatency: signal<number | undefined>(undefined),
-      currentTime: signal<number | undefined>(undefined),
     };
     const context = {
       audioContext: signal<AudioContextLike | undefined>({} as AudioContextLike),
@@ -78,52 +82,6 @@ describe('setupAudioRenderer', () => {
     // schedule an infinite clock segment (duration ÷ 0) and dead sources.
     state.playoutRate.set(1.05);
     expect(getPlaybackRate!()).toBe(1.05);
-
-    reactor.destroy();
-  });
-
-  // `currentTime` is the only thing the media-element facade derives
-  // readiness from. With no audio the master clock never advances, so
-  // without this fallback a video-only catalog renders fine but stays at
-  // HAVE_METADATA and the shell buffers forever.
-  it('publishes the video renderer timestamp as currentTime when there is no audio clock', async () => {
-    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
-    const { state, context, reactor } = setupSetupAudioRenderer();
-
-    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
-    expect(state.currentTime.get()).toBeUndefined();
-
-    context.videoRendererActor.set({
-      snapshot: signal({ context: { lastPresentedTimestampUs: 2_500_000 } }),
-      setTrack: vi.fn(),
-      destroy: vi.fn(),
-    } as unknown as VideoRendererActor);
-
-    await vi.waitFor(() => expect(state.currentTime.get()).toBe(2.5));
-
-    reactor.destroy();
-  });
-
-  it('prefers the audio master clock over the video fallback', async () => {
-    vi.mocked(createAudioRendererActor).mockImplementation(
-      () =>
-        ({
-          snapshot: signal({ context: {} }),
-          setTrack: vi.fn(),
-          getClockTimeUs: vi.fn(() => 4_000_000),
-          destroy: vi.fn(),
-        }) as unknown as AudioRendererActor
-    );
-    const { state, context, reactor } = setupSetupAudioRenderer();
-
-    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
-    context.videoRendererActor.set({
-      snapshot: signal({ context: { lastPresentedTimestampUs: 9_000_000 } }),
-      setTrack: vi.fn(),
-      destroy: vi.fn(),
-    } as unknown as VideoRendererActor);
-
-    await vi.waitFor(() => expect(state.currentTime.get()).toBe(4));
 
     reactor.destroy();
   });
@@ -156,6 +114,63 @@ describe('setupAudioRenderer', () => {
     reactor.destroy();
   });
 
+  // Audio subscriptions can start long after video: an autoplay deferral
+  // unlocks on first gesture, a sustained pause releases and rejoins. The
+  // fresh buffer's edge can sit behind the running video self-clock, and
+  // video only re-anchors on *forward* discontinuities — so an unclamped
+  // anchor would freeze video until the new master clock caught up.
+  it('never anchors audio behind a running video clock', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const { context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    const { getJoinAnchorUs } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
+
+    // Audio's own edge would place the anchor at 9.5s.
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000));
+    expect(getJoinAnchorUs!()).toBe(9_500_000);
+
+    // Video is already presenting past that point: clamp forward to it.
+    let videoClockUs = 11_000_000;
+    context.videoRendererActor.set({
+      snapshot: signal({ context: {} }),
+      getClockTimeUs: () => videoClockUs,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+    expect(getJoinAnchorUs!()).toBe(11_000_000);
+
+    // A video clock behind audio's edge does not drag the anchor back.
+    videoClockUs = 1_000_000;
+    expect(getJoinAnchorUs!()).toBe(9_500_000);
+
+    reactor.destroy();
+  });
+
+  it('places the anchor from audio alone while the video clock is silent', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const { context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    const { getJoinAnchorUs } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
+
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000));
+    // A video renderer that has not started (no decoded frame yet) reports
+    // no clock, and audio-only playback has no video renderer at all.
+    context.videoRendererActor.set({
+      snapshot: signal({ context: {} }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+    expect(getJoinAnchorUs!()).toBe(9_500_000);
+
+    context.videoRendererActor.set(undefined);
+    expect(getJoinAnchorUs!()).toBe(9_500_000);
+
+    reactor.destroy();
+  });
+
   it('supplies no anchor with joinAtEdge off', async () => {
     vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
     const { context, reactor } = setupSetupAudioRenderer({ latency: { joinAtEdge: false } });
@@ -171,8 +186,100 @@ describe('setupAudioRenderer', () => {
   });
 });
 
+describe('trackPlayoutTime', () => {
+  function setupTrackPlayoutTime() {
+    const state = { currentTime: signal<number | undefined>(undefined) };
+    const context = {
+      audioRendererActor: signal<AudioRendererActor | undefined>(undefined),
+      videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
+    };
+    const cleanup = trackPlayoutTime.setup({ state, context });
+    return { state, context, cleanup };
+  }
+
+  // `currentTime` is what the media-element facade derives readiness from
+  // *and* what `syncLatency` measures its latency against. With no audio
+  // the master clock never advances, so without this fallback a video-only
+  // catalog renders fine but stays at HAVE_METADATA — and the latency
+  // controller never gets a setpoint.
+  it('publishes the video renderer timestamp when there is no audio clock', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+    expect(state.currentTime.get()).toBeUndefined();
+
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { lastPresentedTimestampUs: 2_500_000 } }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(2.5));
+
+    cleanup();
+  });
+
+  it('prefers the audio master clock over the video fallback', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+
+    context.audioRendererActor.set({
+      snapshot: signal({ context: {} }),
+      setTrack: vi.fn(),
+      getClockTimeUs: () => 4_000_000,
+      destroy: vi.fn(),
+    } as unknown as AudioRendererActor);
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { lastPresentedTimestampUs: 9_000_000 } }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(4));
+
+    cleanup();
+  });
+
+  // The reason this is its own behavior: gated on the AudioContext, the
+  // clock would go silent in exactly the video-only case it exists for.
+  it('runs with no AudioContext and no audio renderer', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { lastPresentedTimestampUs: 7_000_000 } }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(7));
+    expect(context.audioRendererActor.get()).toBeUndefined();
+
+    cleanup();
+  });
+
+  it('stops publishing after cleanup', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+    let presentedUs = 1_000_000;
+    context.videoRendererActor.set({
+      get snapshot() {
+        return signal({ context: { lastPresentedTimestampUs: presentedUs } });
+      },
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(1));
+    cleanup();
+
+    presentedUs = 5_000_000;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(state.currentTime.get()).toBe(1);
+  });
+});
+
 describe('setupVideoRenderer', () => {
-  function setupSetupVideoRenderer() {
+  function setupSetupVideoRenderer(config?: MoqRendererConfig) {
     const state = {
       playoutRate: signal<number | undefined>(undefined),
       targetLatency: signal<number | undefined>(undefined),
@@ -184,7 +291,7 @@ describe('setupVideoRenderer', () => {
       audioRendererActor: signal<AudioRendererActor | undefined>(undefined),
       videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
     };
-    const reactor = setupVideoRenderer.setup({ state, context });
+    const reactor = setupVideoRenderer.setup({ state, context, config });
     return { state, context, reactor };
   }
 
@@ -208,16 +315,48 @@ describe('setupVideoRenderer', () => {
     reactor.destroy();
   });
 
-  it('anchors the self-clock at the live edge of the video jitter buffer', async () => {
+  it('aims the self-clock at the live edge of the video jitter buffer', async () => {
     vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
     const { context, reactor } = setupSetupVideoRenderer();
 
     await vi.waitFor(() => expect(createVideoRendererActor).toHaveBeenCalledTimes(1));
-    const { getJoinAnchorUs } = vi.mocked(createVideoRendererActor).mock.calls[0]![0];
+    const { getTargetClockUs } = vi.mocked(createVideoRendererActor).mock.calls[0]![0];
 
-    expect(getJoinAnchorUs!()).toBeUndefined();
+    expect(getTargetClockUs!()).toBeUndefined();
     context.videoSubscriberActor.set(makeFakeSubscriber(4_000_000));
-    expect(getJoinAnchorUs!()).toBe(3_500_000);
+    expect(getTargetClockUs!()).toBe(3_500_000);
+
+    // Re-read as the edge advances: this seam is the self-clock's
+    // continuous target, not a value sampled once at join.
+    context.videoSubscriberActor.set(makeFakeSubscriber(6_000_000));
+    expect(getTargetClockUs!()).toBe(5_500_000);
+
+    reactor.destroy();
+  });
+
+  it('passes the configured slew bounds to the renderer', async () => {
+    vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
+    const { reactor } = setupSetupVideoRenderer({ latency: { clockSlewRate: 0.1, clockSlewTolerance: 0.02 } });
+
+    await vi.waitFor(() => expect(createVideoRendererActor).toHaveBeenCalledTimes(1));
+    const options = vi.mocked(createVideoRendererActor).mock.calls[0]![0];
+
+    expect(options.clockSlewRate).toBe(0.1);
+    expect(options.clockSlewToleranceUs).toBe(20_000);
+
+    reactor.destroy();
+  });
+
+  it('supplies no target clock with joinAtEdge off', async () => {
+    vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
+    const { context, reactor } = setupSetupVideoRenderer({ latency: { joinAtEdge: false } });
+
+    await vi.waitFor(() => expect(createVideoRendererActor).toHaveBeenCalledTimes(1));
+    context.videoSubscriberActor.set(makeFakeSubscriber(4_000_000));
+
+    // No target at all, so the self-clock keeps its first-decoded-frame
+    // anchor and never slews.
+    expect(vi.mocked(createVideoRendererActor).mock.calls[0]![0].getTargetClockUs).toBeUndefined();
 
     reactor.destroy();
   });

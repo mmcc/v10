@@ -271,7 +271,7 @@ describe('createVideoRendererActor', () => {
     }
   });
 
-  it('self-clock anchors at the live edge, decoding the backlog it does not present', async () => {
+  it('self-clock anchors at the delivery edge, decoding the backlog it does not present', async () => {
     // 1s of replayed video buffered before the renderer starts.
     const frames = await encodeTestFrames(30);
     const NEWEST_US = frames[frames.length - 1]!.timestampUs;
@@ -291,7 +291,7 @@ describe('createVideoRendererActor', () => {
         return frame;
       },
     };
-    const renderer = createVideoRendererActor({ canvas, getJoinAnchorUs: () => ANCHOR_US });
+    const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => ANCHOR_US });
     const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
 
     try {
@@ -344,7 +344,7 @@ describe('createVideoRendererActor', () => {
     renderer.destroy();
   });
 
-  it('self-clock re-anchors at the live edge across a catch-up discontinuity', async () => {
+  it('self-clock re-anchors at the delivery edge across a catch-up discontinuity', async () => {
     const frames = await encodeTestFrames(6);
     // The catch-up skip kept a keyframe-led group starting at JUMP_US and
     // running two frames further on — the group start is not the edge.
@@ -364,7 +364,7 @@ describe('createVideoRendererActor', () => {
     const source: VideoFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
     const renderer = createVideoRendererActor({
       canvas,
-      getJoinAnchorUs: () => newestBufferedUs - FRAME_DURATION_US,
+      getTargetClockUs: () => newestBufferedUs - FRAME_DURATION_US,
     });
     const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
 
@@ -381,6 +381,155 @@ describe('createVideoRendererActor', () => {
       // Re-anchoring at the jumped-to frame would resume at the group
       // start; the edge anchor resumes a frame short of its newest.
       await vi.waitFor(() => expect(presented()).toBe(EDGE_US), { timeout: 5000 });
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  // The join-burst race: a relay's group replay arrives as a burst, so an
+  // anchor placed on the first read is placed against an edge that had not
+  // finished arriving. Under the old anchor-once self-clock that mistake
+  // was permanent; edge tracking walks it off.
+  it('self-clock slews onto the edge after a short initial anchor', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // A live edge advancing in real time. The burst is still arriving when
+    // the clock anchors, so the edge it sees then is 400ms short of the
+    // truth — and every later reading is 400ms ahead of the clock.
+    let shortfallUs = 0;
+    const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => now * 1000 + shortfallUs });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // The rest of the burst lands. The error is inside the >1s hard-reset
+      // path, so only the slew can reclaim it.
+      shortfallUs = 400_000;
+      // 4s of real time at the default 5% → 200ms of correction, on top of
+      // the 4s the clock advances on its own.
+      now += 4_000;
+
+      // Sampling repeatedly must not multiply the correction: the budget is
+      // per unit of real time, not per read.
+      for (let i = 0; i < 20; i++) renderer.getClockTimeUs();
+      expect(renderer.getClockTimeUs()).toBeCloseTo(4_200_000, -4);
+
+      // …and it keeps closing, rather than settling at a fixed offset.
+      now += 4_000;
+      expect(renderer.getClockTimeUs()).toBeCloseTo(8_400_000, -4);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('bounds the slew, leaving jumps to the discontinuity path', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let targetUs = 0;
+    // 10%/s, tolerate 10ms.
+    const renderer = createVideoRendererActor({
+      canvas,
+      getTargetClockUs: () => targetUs,
+      clockSlewRate: 0.1,
+      clockSlewToleranceUs: 10_000,
+    });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // A 900ms error — under the 1s reset threshold, so the slew owns it.
+      targetUs = 900_000;
+      now += 100;
+      // 100ms elapsed × 0.1 → 10ms of correction, plus the 100ms the clock
+      // ran. Not a jump to the target.
+      expect(renderer.getClockTimeUs()).toBeCloseTo(110_000, -4);
+
+      now += 100;
+      expect(renderer.getClockTimeUs()).toBeCloseTo(220_000, -4);
+
+      // Errors inside the tolerance band are left alone — the edge advances
+      // in frame-sized steps and chasing them would be chasing noise. An
+      // edge 5ms ahead of where the clock is about to be leaves it there.
+      targetUs = 325_000;
+      now += 100;
+      expect(renderer.getClockTimeUs()).toBe(320_000);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('self-clock reclaims the latency a short pause added', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let playbackRate = 1;
+    // A live edge that keeps advancing in real time while playout holds.
+    const startWallMs = 0;
+    const renderer = createVideoRendererActor({
+      canvas,
+      getPlaybackRate: () => playbackRate,
+      getTargetClockUs: () => (now - startWallMs) * 1000,
+    });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // Pause for 500ms of wall time: the clock holds, the edge does not.
+      playbackRate = 0;
+      renderer.getClockTimeUs();
+      now += 500;
+      expect(renderer.getClockTimeUs()).toBe(0);
+
+      // On resume the clock is 500ms behind the edge — under the old
+      // anchor-once clock that offset was permanent. The slew now reclaims
+      // it at 50ms/s, so ~10s of real time closes it.
+      playbackRate = 1;
+      for (let i = 0; i < 200; i++) {
+        now += 100;
+        renderer.getClockTimeUs();
+      }
+      const edgeUs = (now - startWallMs) * 1000;
+      expect(edgeUs - renderer.getClockTimeUs()!).toBeLessThanOrEqual(50_000);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('self-clock never runs backwards while slewing back onto the edge', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // A stalled publisher: the edge stops moving while playout continues,
+    // so the error goes negative and the slew pulls the clock back.
+    const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => 0 });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      let previous = renderer.getClockTimeUs()!;
+      for (let i = 0; i < 20; i++) {
+        now += 100;
+        const clock = renderer.getClockTimeUs()!;
+        // Bounded by a *fraction* of elapsed real time, so the correction
+        // can only slow the clock down, never reverse it.
+        expect(clock).toBeGreaterThan(previous);
+        expect(clock - previous).toBeLessThan(100_000);
+        previous = clock;
+      }
     } finally {
       nowSpy.mockRestore();
       renderer.destroy();

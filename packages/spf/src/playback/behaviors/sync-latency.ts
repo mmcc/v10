@@ -1,17 +1,28 @@
 /**
  * **Latency controller: hold playout at the target latency.** Watches the
- * jitter-buffer depth of the active subscribers against the target
+ * distance from the active subscriber's delivery edge to the position
+ * actually being played out (`state.currentTime`) against the target
  * latency and steers playout:
  *
- * - **stable** — depth within band: `playoutRate` 1.
- * - **rate nudge** — depth drifted above/below the band: small rate
+ * - **stable** — latency within band: `playoutRate` 1.
+ * - **rate nudge** — latency drifted above/below the band: small rate
  *   adjustment (`playoutRate` 1±`rateNudge`) that the renderers apply to
- *   their clocks; playback speeds up/slows down imperceptibly until the
- *   buffer re-centers.
- * - **catch-up** — depth blew past `catchUpThreshold` (e.g. after a
+ *   their clocks; playback speeds up/slows down imperceptibly until
+ *   playout re-centers on the target.
+ * - **catch-up** — latency blew past `catchUpThreshold` (e.g. after a
  *   network stall): skip the subscribers straight to their latest
  *   keyframe-led group and reset the rate. A visible jump beats a
  *   permanently-latent stream.
+ *
+ * **Edge-to-playout, not buffer depth.** Measuring newest-buffered minus
+ * oldest-buffered would understate real latency by everything held outside
+ * the jitter buffer — the video renderer alone keeps `decodeAhead` frames
+ * of decoded lookahead — and the controller would then read a shallow
+ * buffer as "too little latency" and nudge the rate *down*, raising real
+ * latency until enough un-decoded backlog reappeared to satisfy it.
+ * `state.currentTime` is the position actually presented, so the distance
+ * from the delivery edge to it is the honest number; with no playout
+ * position yet there is nothing to control and the controller idles.
  *
  * Owns `state.playoutRate`, `state.measuredLatency`, and
  * `state.playoutState`. The renderers (DOM actors) read `playoutRate`;
@@ -22,13 +33,15 @@
  * (milliseconds, msf-01 §5.2.8), then `config.defaultTargetLatency`.
  *
  * `LatencyControlConfig` spans two layers: this behavior steers playout,
- * and the renderers (`setup-moq-renderers`) place the playout anchor from
- * `joinAtEdge` + the same target. Both read the one config so they cannot
- * aim at different numbers.
+ * and the renderers (`setup-moq-renderers`) anchor and (for video)
+ * continuously slew their clocks onto the delivery edge from `joinAtEdge`
+ * + the same target. Both read the one config so they cannot aim at
+ * different numbers — see `video-renderer`'s `slewTowardEdge` for how the
+ * two mechanisms divide the error between them.
  *
- * Evaluation is periodic (`entry` interval) rather than per-frame: depth
- * changes ~30-60×/s and reacting to every sample would thrash; the
- * half-second cadence matches the rates being controlled.
+ * Evaluation is periodic (`entry` interval) rather than per-frame: the
+ * measurement changes ~30-60×/s and reacting to every sample would thrash;
+ * the half-second cadence matches the rates being controlled.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -42,11 +55,18 @@ export type PlayoutState = 'stable' | 'nudging' | 'catching-up';
 export interface SyncLatencyState {
   /** Consumer-set target latency in seconds. */
   targetLatency?: number;
-  /** Measured buffer depth (newest buffered − oldest buffered) in seconds. */
+  /**
+   * Measured playout latency in seconds: newest buffered − the position
+   * being presented. This is real edge-to-playout latency, not jitter-
+   * buffer depth — it counts everything held past the buffer (decoded
+   * lookahead, scheduled audio) that a depth reading misses.
+   */
   measuredLatency?: number;
   /** Rate multiplier the renderers apply to their playout clocks. */
   playoutRate?: number;
   playoutState?: PlayoutState;
+  /** Playout position in media seconds, published by `trackPlayoutTime`. */
+  currentTime?: number;
 }
 
 export interface SyncLatencyContext {
@@ -61,21 +81,36 @@ export interface SyncLatencyConfig {
 export interface LatencyControlConfig {
   /** Fallback target latency in seconds. */
   defaultTargetLatency: number;
-  /** Depth deviation (seconds) tolerated before a rate nudge. */
+  /** Latency deviation (seconds) tolerated before a rate nudge. */
   deadband: number;
   /** Rate adjustment magnitude (e.g. 0.05 → 5% faster/slower). */
   rateNudge: number;
-  /** Depth (seconds) beyond target that triggers a group skip. */
+  /** Latency (seconds) beyond target that triggers a group skip. */
   catchUpThreshold: number;
   /** Controller evaluation cadence in milliseconds. */
   intervalMs: number;
   /**
-   * Anchor playout at the live edge (newest buffered − target) instead of
-   * at the oldest buffered frame — on join, and again after a catch-up
-   * skip. Read by the renderers, not by this behavior; see
-   * `setup-moq-renderers`.
+   * Place playout at the live edge (newest buffered − target) instead of
+   * at the oldest buffered frame, and keep the video self-clock tracking
+   * that edge for as long as it self-clocks. Read by the renderers, not by
+   * this behavior; see `setup-moq-renderers`.
    */
   joinAtEdge: boolean;
+  /**
+   * Fraction of real time the video self-clock may spend correcting itself
+   * back onto the delivery edge. 0.05 → 50ms/s: below the ~1-frame-per-
+   * 20-frames threshold where a speed change reads as one, so the clock
+   * can walk off an entire mis-placed join anchor unnoticed. Must stay
+   * below 1 or the correction could outrun playback and stall the clock.
+   */
+  clockSlewRate: number;
+  /**
+   * Edge-tracking error (seconds) tolerated before the video self-clock
+   * slews. 50ms is above a frame interval at 30fps, so the clock ignores
+   * the edge's frame-by-frame quantization instead of chasing it, and well
+   * inside `deadband` so the slew has the fine band to itself.
+   */
+  clockSlewTolerance: number;
 }
 
 export const DEFAULT_LATENCY_CONTROL_CONFIG: LatencyControlConfig = {
@@ -85,6 +120,8 @@ export const DEFAULT_LATENCY_CONTROL_CONFIG: LatencyControlConfig = {
   catchUpThreshold: 3,
   intervalMs: 500,
   joinAtEdge: true,
+  clockSlewRate: 0.05,
+  clockSlewTolerance: 0.05,
 };
 
 type FsmState = 'inactive' | 'controlling';
@@ -99,6 +136,7 @@ function setupSyncLatency({
     measuredLatency: Signal<SyncLatencyState['measuredLatency']>;
     playoutRate: Signal<SyncLatencyState['playoutRate']>;
     playoutState: Signal<SyncLatencyState['playoutState']>;
+    currentTime: ReadonlySignal<SyncLatencyState['currentTime']>;
   };
   context: {
     videoSubscriberActor: ReadonlySignal<TrackSubscriberActor | undefined>;
@@ -112,10 +150,14 @@ function setupSyncLatency({
     context.videoSubscriberActor.get() || context.audioSubscriberActor.get() ? 'controlling' : 'inactive'
   );
 
-  const subscriberDepthSeconds = (subscriber: TrackSubscriberActor | undefined): number | undefined => {
-    const buffer = subscriber?.snapshot.get().context;
-    if (!buffer || buffer.newestTimestampUs === undefined || buffer.oldestTimestampUs === undefined) return undefined;
-    return bufferDepthSeconds(buffer.newestTimestampUs, buffer.oldestTimestampUs);
+  /** Delivery edge of `subscriber`'s buffer to `playoutTimestampUs`. */
+  const subscriberLatencySeconds = (
+    subscriber: TrackSubscriberActor | undefined,
+    playoutTimestampUs: number
+  ): number | undefined => {
+    const newestTimestampUs = subscriber?.snapshot.get().context.newestTimestampUs;
+    if (newestTimestampUs === undefined) return undefined;
+    return bufferDepthSeconds(newestTimestampUs, playoutTimestampUs);
   };
 
   const targetSeconds = (subscriber: TrackSubscriberActor | undefined): number =>
@@ -126,12 +168,20 @@ function setupSyncLatency({
     );
 
   const evaluate = (): void => {
+    // Nothing is being presented yet (pre-roll, or a renderer that has not
+    // been handed a surface): there is no playout position to hold, and
+    // guessing one from the buffer is what produced the old understatement.
+    const currentTime = peek(state.currentTime);
+    if (currentTime === undefined) return;
+    const playoutTimestampUs = currentTime * 1_000_000;
+
     // The audio buffer is the master-clock side; prefer it as the
     // controlled quantity and fall back to video for video-only playback.
     const audio = peek(context.audioSubscriberActor);
     const video = peek(context.videoSubscriberActor);
     const subscriber = audio ?? video;
-    const depth = subscriberDepthSeconds(audio) ?? subscriberDepthSeconds(video);
+    const depth =
+      subscriberLatencySeconds(audio, playoutTimestampUs) ?? subscriberLatencySeconds(video, playoutTimestampUs);
     if (depth === undefined) return;
 
     const target = targetSeconds(subscriber);
@@ -177,7 +227,7 @@ function setupSyncLatency({
 }
 
 export const syncLatency = defineBehavior({
-  stateKeys: ['targetLatency', 'measuredLatency', 'playoutRate', 'playoutState'],
+  stateKeys: ['targetLatency', 'measuredLatency', 'playoutRate', 'playoutState', 'currentTime'],
   contextKeys: ['videoSubscriberActor', 'audioSubscriberActor'],
   setup: setupSyncLatency,
 });

@@ -34,14 +34,19 @@ function fakeSubscriber(targetLatencyMs?: number) {
     skipToLatestGroup,
     destroy: () => {},
   };
-  const setBufferDepth = (seconds: number) => {
+  /**
+   * Buffer whose newest frame is `seconds` ahead of playout position 0,
+   * with `bufferedBehindSeconds` of already-consumed media still in the
+   * jitter buffer behind it.
+   */
+  const setBufferDepth = (seconds: number, bufferedBehindSeconds = seconds) => {
     snapshot.set({
       value: 'active',
       context: {
         ...snapshot.get().context,
-        oldestTimestampUs: 0,
+        oldestTimestampUs: (seconds - bufferedBehindSeconds) * 1_000_000,
         newestTimestampUs: seconds * 1_000_000,
-        frameCount: Math.round(seconds * 30),
+        frameCount: Math.round(bufferedBehindSeconds * 30),
       },
     });
   };
@@ -55,6 +60,9 @@ function makeDeps(subscriber: TrackSubscriberActor | undefined) {
       measuredLatency: signal<number | undefined>(undefined),
       playoutRate: signal<number | undefined>(undefined),
       playoutState: signal<PlayoutState | undefined>(undefined),
+      // Playout parked at 0, so `setBufferDepth(n)` reads as n seconds of
+      // edge-to-playout latency.
+      currentTime: signal<number | undefined>(0),
     },
     context: {
       videoSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
@@ -129,6 +137,96 @@ describe('syncLatency', () => {
     setBufferDepth(2.1); // within the 2s target's deadband
     await vi.advanceTimersByTimeAsync(600);
     expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // The renderers hold media past the jitter buffer (video decodes ~8
+  // frames ahead; audio schedules into Web Audio), so newest−oldest
+  // understates real latency by everything already consumed. Measuring to
+  // the playout position is what makes `measuredLatency` honest.
+  it('measures the delivery edge against the playout position, not the buffer', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    // The edge is 2s ahead of playout, but only 0.1s of that is still
+    // un-consumed in the jitter buffer — a depth reading would say 0.1.
+    setBufferDepth(2, 0.1);
+    deps.state.currentTime.set(0);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(2);
+    expect(deps.state.playoutState.get()).toBe('nudging');
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    reactor.destroy();
+  });
+
+  // The old failure: a shallow buffer read as "not enough latency" and the
+  // controller slowed playout down, *raising* real latency until enough
+  // un-decoded backlog reappeared to satisfy the reading.
+  it('holds rate 1 when latency is on target but the jitter buffer is shallow', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    // On target: playout is 0.5s behind the edge. Almost all of it is in
+    // the renderer's decoded lookahead, so the buffer holds ~1 frame.
+    setBufferDepth(0.5, 0.033);
+    deps.state.currentTime.set(0);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(0.5);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  it('idles until a playout position exists', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.currentTime.set(undefined);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(5);
+    await vi.advanceTimersByTimeAsync(600);
+
+    // Nothing is being presented, so there is no latency to hold — and in
+    // particular no catch-up skip fired off a buffer reading.
+    expect(deps.state.measuredLatency.get()).toBeUndefined();
+    expect(deps.state.playoutState.get()).toBeUndefined();
+
+    deps.state.currentTime.set(1);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(4);
+
+    reactor.destroy();
+  });
+
+  it('tracks playout as it advances', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(10);
+    deps.state.currentTime.set(9.6);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(0.4);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    // Playout falls behind an advancing edge: latency grows even though
+    // nothing about the buffer's own span changed.
+    setBufferDepth(14);
+    deps.state.currentTime.set(9.6);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(4.4);
+    expect(deps.state.playoutState.get()).toBe('catching-up');
 
     reactor.destroy();
   });

@@ -12,7 +12,7 @@ import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audi
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
-import { setupAudioRenderer, setupVideoRenderer } from '../../behaviors/dom/setup-moq-renderers';
+import { setupAudioRenderer, setupVideoRenderer, trackPlayoutTime } from '../../behaviors/dom/setup-moq-renderers';
 import type { ApplyCatalogUpdate } from '../../behaviors/resolve-catalog';
 import { resolveCatalog } from '../../behaviors/resolve-catalog';
 import { setupMoqSession } from '../../behaviors/setup-moq-session';
@@ -33,8 +33,8 @@ import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behav
  * Notable differences from the HLS engine: latency-control slots
  * (`targetLatency` / `measuredLatency` / `playoutRate` / `playoutState`)
  * exist because playout is clock-steered rather than element-driven, and
- * `currentTime` is **derived from the audio master clock** (written by the
- * audio renderer behavior, not read from a media element).
+ * `currentTime` is **derived from whichever playout clock is running**
+ * (written by `trackPlayoutTime`, not read from a media element).
  */
 export interface MoqEngineState {
   /** A caller writes `{ url: 'moqt://…#msf:…' }`; `resolveCatalog` populates the rest. */
@@ -72,10 +72,11 @@ export interface MoqEngineState {
   audioSuspended?: boolean;
   /** Consumer-set target latency in seconds (input slot). */
   targetLatency?: number;
+  /** Real edge-to-playout latency in seconds, measured by `syncLatency`. */
   measuredLatency?: number;
   playoutRate?: number;
   playoutState?: PlayoutState;
-  /** Derived from the audio master clock (media seconds). */
+  /** Playout position in media seconds (audio master clock, else video). */
   currentTime?: number;
 }
 
@@ -224,9 +225,12 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
       trackMoqBandwidth,
 
       // Renderers, fed from the subscriber jitter buffers; audio owns the
-      // master clock and currentTime.
+      // master clock.
       setupVideoRenderer,
       setupAudioRenderer,
+      // Whichever clock is running → state.currentTime. Before the
+      // controller: it is the controller's setpoint.
+      trackPlayoutTime,
 
       // Target-latency hold: rate nudges / group-skip catch-up.
       syncLatency,
