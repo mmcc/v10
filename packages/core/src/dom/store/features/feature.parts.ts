@@ -1,5 +1,8 @@
 import { audioTrackFeature } from './audio-track';
 import { bufferFeature } from './buffer';
+import { captureDevicesFeature } from './capture-devices';
+import { captureSourceFeature } from './capture-source';
+import { captureTracksFeature } from './capture-tracks';
 import { controlsFeature } from './controls';
 import { fullscreenFeature } from './fullscreen';
 import { liveFeature } from './live';
@@ -7,6 +10,8 @@ import { orientationLockFeature } from './orientation-lock';
 import { pipFeature } from './pip';
 import { playbackFeature } from './playback';
 import { playbackRateFeature } from './playback-rate';
+import { publishFeature } from './publish';
+import { publishStatsFeature } from './publish-stats';
 import { qualityFeature } from './quality';
 import { remotePlaybackFeature } from './remote-playback';
 import { sourceFeature } from './source';
@@ -21,6 +26,9 @@ export { audioFeatures, backgroundFeatures, videoFeatures } from './presets';
 export {
   audioTrackFeature as audioTrack,
   bufferFeature as buffer,
+  captureDevicesFeature as captureDevices,
+  captureSourceFeature as captureSource,
+  captureTracksFeature as captureTracks,
   controlsFeature as controls,
   fullscreenFeature as fullscreen,
   liveFeature as live,
@@ -28,6 +36,8 @@ export {
   pipFeature as pip,
   playbackFeature as playback,
   playbackRateFeature as playbackRate,
+  publishFeature as publish,
+  publishStatsFeature as publishStats,
   qualityFeature as quality,
   remotePlaybackFeature as remotePlayback,
   sourceFeature as source,
