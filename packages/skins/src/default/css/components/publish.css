@@ -1,0 +1,146 @@
+/* ==========================================================================
+   Publish Controls (publish button, badge, timer, connection indicator)
+   ========================================================================== */
+
+/* Publisher elements signal disabled via `data-disabled` (custom elements
+   can't rely on the native `disabled` attribute); mirror `[disabled]` from
+   button.css. */
+.media-default-skin .media-button[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  filter: grayscale(1);
+}
+
+/* Publish button — the primary call to action. White pill by default
+   ("Go live"), solid red while live ("Stop"). */
+.media-default-skin .media-button--publish {
+  /* Reserve room so the label swap (Go live ↔ Stop) doesn't resize the bar. */
+  min-width: calc(var(--spacing) * 20);
+  font-weight: 500;
+  color: oklch(0 0 0);
+  text-shadow: none;
+  background: oklch(1 0 0);
+  transition-property: background-color, color, opacity, outline-offset, scale;
+
+  &[data-publish-state="live"] {
+    color: oklch(1 0 0);
+    background: var(--media-publish-live-color);
+  }
+
+  /* Transitional states: subdued and non-interactive cursor. */
+  &[data-publish-state="connecting"],
+  &[data-publish-state="stopping"] {
+    cursor: progress;
+    opacity: 0.7;
+
+    &:active {
+      scale: 1;
+    }
+  }
+
+  /* Error: translucent red so it reads as attention without mimicking live. */
+  &[data-publish-state="error"] {
+    color: var(--media-publish-live-color);
+    background: oklch(from var(--media-publish-live-color) l c h / 0.15);
+  }
+}
+
+/* Status row — overlay container for badge + timer + connection indicator.
+   Positioned top-left, mirroring the controls inset. */
+.media-default-skin--publisher .media-publish-status {
+  --inset-factor: 2;
+  --inset: calc(var(--spacing) * var(--inset-factor));
+
+  position: absolute;
+  top: var(--inset);
+  left: var(--inset);
+  z-index: 10;
+  display: flex;
+  gap: calc(var(--spacing) * 2);
+  align-items: center;
+  color: var(--media-color-primary, oklch(1 0 0));
+  text-shadow: 0 1px 0 var(--media-current-shadow-color);
+  pointer-events: none;
+
+  @container media-root (width > 42rem) {
+    --inset-factor: 3;
+  }
+}
+
+/* Publish badge — status pill with a leading dot (mirrors the live button's
+   dot in button.css). Pairs with `.media-badge`. */
+.media-default-skin .media-badge--publish {
+  display: inline-flex;
+  gap: calc(var(--spacing) * 1.5);
+  align-items: center;
+  padding: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+
+  &::before {
+    display: inline-block;
+    flex-shrink: 0;
+    width: calc(var(--spacing) * 2);
+    height: calc(var(--spacing) * 2);
+    content: "";
+    background-color: oklch(from currentColor l c h / 0.4);
+    border-radius: 50%;
+    transition: background-color 150ms ease-out;
+  }
+
+  &[data-publish-state="live"] {
+    color: oklch(1 0 0);
+    background-color: var(--media-publish-live-color);
+
+    &::before {
+      background-color: oklch(1 0 0);
+    }
+  }
+
+  &[data-publish-state="error"] {
+    color: var(--media-publish-live-color);
+    background-color: oklch(from var(--media-publish-live-color) l c h / 0.15);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    &[data-publish-state="live"]::before,
+    &[data-publish-state="connecting"]::before {
+      animation: media-pulse 2s ease-in-out infinite;
+    }
+  }
+}
+
+/* Publish timer — elapsed publish time. Only meaningful while live/stopping. */
+.media-default-skin .media-publish-timer {
+  display: none;
+  font-size: var(--font-size-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.media-default-skin .media-publish-timer[data-publish-state="live"],
+.media-default-skin .media-publish-timer[data-publish-state="stopping"] {
+  display: inline-block;
+}
+
+/* Connection indicator — hosts the `signal` icon, tinted by quality. */
+.media-default-skin .media-connection-indicator {
+  display: inline-flex;
+  align-items: center;
+  transition:
+    color 150ms ease-out,
+    opacity 150ms ease-out;
+
+  &[data-quality="unknown"] {
+    opacity: 0.5;
+  }
+  &[data-quality="good"] {
+    color: var(--media-quality-good-color);
+  }
+  &[data-quality="fair"] {
+    color: var(--media-quality-fair-color);
+  }
+  &[data-quality="poor"] {
+    color: var(--media-quality-poor-color);
+  }
+}

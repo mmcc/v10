@@ -1,0 +1,126 @@
+/* ==========================================================================
+   Capture (placeholder overlay, enable-devices CTA, device toggle buttons)
+   ========================================================================== */
+
+/* Capture placeholder — covers the media area (like poster/overlay) until a
+   local capture stream is active. Visible for idle/acquiring/denied/ended. */
+.media-default-skin .media-capture-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-content: center;
+  color: oklch(1 0 0);
+  text-align: center;
+  background: var(--media-capture-placeholder-background, oklch(0.2 0 0));
+  border-radius: inherit;
+
+  &[data-capture-state="active"] {
+    display: none;
+  }
+}
+
+.media-default-skin .media-capture-placeholder__content {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+  align-items: center;
+  max-width: calc(var(--spacing) * 80);
+  padding: calc(var(--spacing) * 4);
+}
+
+.media-default-skin .media-capture-placeholder__icon {
+  width: calc(var(--media-icon-size) * 2);
+  height: calc(var(--media-icon-size) * 2);
+  opacity: 0.5;
+}
+
+.media-default-skin .media-capture-placeholder__message {
+  font-size: var(--font-size-medium);
+  overflow-wrap: anywhere;
+  opacity: 0.7;
+
+  /* While idle/ended the message would repeat the enable-devices CTA text —
+     let the CTA carry it and only show acquiring/denied guidance here. */
+  &[data-capture-state="idle"],
+  &[data-capture-state="ended"] {
+    display: none;
+  }
+}
+
+/* State-driven overrides (after the base rules for ascending specificity) */
+.media-default-skin .media-capture-placeholder[data-capture-state="acquiring"] .media-capture-placeholder__content {
+  opacity: 0.7;
+}
+
+.media-default-skin .media-capture-placeholder[data-capture-state="denied"] .media-capture-placeholder__message {
+  color: var(--media-publish-live-color);
+  opacity: 1;
+}
+
+/* Enable devices CTA — primary treatment; pairs with `.media-button`. */
+.media-default-skin .media-button--enable-devices {
+  font-weight: 500;
+  color: oklch(0 0 0);
+  text-shadow: none;
+  background: oklch(1 0 0);
+
+  &[data-capture-state="acquiring"] {
+    cursor: progress;
+    opacity: 0.7;
+
+    &:active {
+      scale: 1;
+    }
+  }
+}
+
+/* Device-picker chevron triggers — hide the trigger (and thereby its menu)
+   when the adjacent menu's radio group reports no device choice to make,
+   mirroring how availability hides buttons elsewhere (see button.css). */
+.media-default-skin button:has(+ media-menu media-camera-radio-group[data-availability="unavailable"]),
+.media-default-skin button:has(+ media-menu media-mic-radio-group[data-availability="unavailable"]) {
+  display: none;
+}
+
+/* Screen share toggle — active affordance while sharing (mirrors the
+   `[aria-expanded]` treatment on subtle buttons, slightly stronger). */
+.media-default-skin .media-button--screen-share[data-sharing] {
+  background-color: oklch(from currentColor l c h / 0.15);
+}
+
+/* Self-view mirror — flip the local camera preview horizontally so movement
+   matches what publishers expect from a mirror. Unconditional in v1: it also
+   flips screen-share previews (text reads backwards); a capture-source data
+   attribute can scope this later. Only the local preview is mirrored — the
+   published stream is untouched. */
+.media-default-skin--publisher ::slotted(video),
+.media-default-skin--publisher video {
+  scale: -1 1;
+}
+
+/* --- Camera/mic icon state (mirrors shared/css/video/icon-state.css) --- */
+
+/* All icons hidden by default */
+.media-button--camera .media-icon--camera,
+.media-button--camera .media-icon--camera-off,
+.media-button--mic .media-icon--mic,
+.media-button--mic .media-icon--mic-off {
+  display: none;
+  opacity: 0;
+}
+
+/* Active icon per state */
+.media-button--camera:not([data-muted]) .media-icon--camera,
+.media-button--camera[data-muted] .media-icon--camera-off,
+.media-button--mic:not([data-muted]) .media-icon--mic,
+.media-button--mic[data-muted] .media-icon--mic-off {
+  display: block;
+  opacity: 1;
+}
+
+/* Muted affordance — tint the visible (slashed) icon. */
+.media-button--camera[data-muted] .media-icon,
+.media-button--mic[data-muted] .media-icon {
+  color: var(--media-publish-live-color);
+}
