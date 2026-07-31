@@ -1,4 +1,4 @@
-import { VideoCSSVars } from '@videojs/core/dom/media/custom-media-element';
+import { VideoCSSVars } from '@videojs/media/dom/custom-media-element';
 import { effect } from '@videojs/spf';
 import { isResolvedPresentation, MoqMediaMixin, type MoqMediaProps } from '@videojs/spf/moq';
 import { applyShadowStyles, createShadowStyle } from '@videojs/utils/dom';
