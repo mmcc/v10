@@ -33,21 +33,21 @@ function createFakeAudioContext(initialState: AudioContextState) {
 
 let tagCounter = 0;
 
-function defineElement() {
+function defineElement(createAudioContext: () => MoqAudioContext = () => createFakeAudioContext('suspended')) {
   const tag = `test-simple-moq-video-${++tagCounter}`;
   customElements.define(
     tag,
     class extends SimpleMoqVideo {
       constructor() {
-        super({ createAudioContext: () => createFakeAudioContext('suspended') });
+        super({ createAudioContext });
       }
     }
   );
   return tag;
 }
 
-function createConnectedElement() {
-  const el = document.createElement(defineElement()) as SimpleMoqVideo;
+function createConnectedElement(createAudioContext?: () => MoqAudioContext) {
+  const el = document.createElement(defineElement(createAudioContext)) as SimpleMoqVideo;
   document.body.append(el);
   return el;
 }
@@ -321,6 +321,86 @@ describe('SimpleMoqVideo', () => {
 
       expect(events).toEqual(['seeked']);
       expect(el.seeking).toBe(false);
+    });
+  });
+
+  describe('autoplay', () => {
+    it('reflects the autoplay property onto the attribute', () => {
+      const el = createConnectedElement();
+
+      expect(el.autoplay).toBe(false);
+      el.autoplay = true;
+      expect(el.hasAttribute('autoplay')).toBe(true);
+
+      el.removeAttribute('autoplay');
+      expect(el.autoplay).toBe(false);
+    });
+
+    it('begins playback when a source arrives with autoplay set', async () => {
+      const el = createConnectedElement();
+      const events = recordEvents(el, ['play']);
+
+      el.setAttribute('autoplay', '');
+      el.src = 'moqt://relay.example.com/live#msf:live--catalog';
+
+      expect(el.paused).toBe(false);
+      expect(el.engine.state.loadActivated.get()).toBe(true);
+      await flushEffects();
+      expect(events).toEqual(['play']);
+    });
+
+    it('unlocks deferred audio on the first user gesture', async () => {
+      // Safari's shape: a pre-gesture resume() rejects, so the deferral can
+      // only settle through the gesture listeners.
+      let allowResume = false;
+      const audioContext = createFakeAudioContext('suspended');
+      audioContext.resume.mockImplementation(async () => {
+        if (!allowResume) throw new Error('NotAllowedError');
+        audioContext.state = 'running';
+      });
+      const el = createConnectedElement(() => audioContext);
+
+      el.setAttribute('autoplay', '');
+      el.src = 'moqt://relay.example.com/live#msf:live--catalog';
+      await flushEffects();
+      expect(el.engine.state.audioSuspended.get()).toBe(true);
+      expect(el.paused).toBe(false);
+
+      allowResume = true;
+      document.dispatchEvent(new Event('pointerdown'));
+      await vi.waitFor(() => expect(el.engine.state.audioSuspended.get()).toBeUndefined());
+      expect(el.paused).toBe(false);
+    });
+
+    it('leaves a pause during deferral alone and stops listening once unlocked', async () => {
+      let allowResume = false;
+      const audioContext = createFakeAudioContext('suspended');
+      audioContext.resume.mockImplementation(async () => {
+        if (!allowResume) throw new Error('NotAllowedError');
+        audioContext.state = 'running';
+      });
+      const el = createConnectedElement(() => audioContext);
+      el.setAttribute('autoplay', '');
+      el.src = 'moqt://relay.example.com/live#msf:live--catalog';
+      await flushEffects();
+
+      // Paused during deferral: a stray gesture must not restart playback.
+      el.pause();
+      const play = vi.spyOn(el, 'play');
+      document.dispatchEvent(new Event('pointerdown'));
+      expect(play).not.toHaveBeenCalled();
+      expect(el.engine.state.audioSuspended.get()).toBe(true);
+
+      // An explicit play() (a gesture) settles the deferral itself.
+      allowResume = true;
+      await el.play();
+      await flushEffects();
+      expect(el.engine.state.audioSuspended.get()).toBeUndefined();
+
+      // Deferral over: the unlock listeners are gone.
+      play.mockClear();
+      document.dispatchEvent(new Event('pointerdown'));
+      expect(play).not.toHaveBeenCalled();
     });
   });
 

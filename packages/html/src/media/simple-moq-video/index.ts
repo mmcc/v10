@@ -75,7 +75,7 @@ function isValidPreload(value: string | null): value is MoqMediaProps['preload']
  * `playbackRate` (live-only), and `textTracks` (no text renderer yet).
  */
 class SimpleMoqMediaImpl extends MoqMediaBase {
-  static readonly observedAttributes = ['src', 'preload', 'target-latency', 'muted'];
+  static readonly observedAttributes = ['autoplay', 'src', 'preload', 'target-latency', 'muted'];
   static shadowRootOptions: ShadowRootInit = { mode: 'open' };
 
   readonly #canvas: HTMLCanvasElement;
@@ -141,7 +141,11 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue) return;
-    if (name === 'src') {
+    if (name === 'autoplay') {
+      // The reflected accessors below route through the attribute, so the
+      // engine-facing flag is written here, once per real transition.
+      super.autoplay = !isNull(newValue);
+    } else if (name === 'src') {
       this.src = newValue ?? '';
     } else if (name === 'preload') {
       this.preload = isValidPreload(newValue) ? newValue : '';
@@ -157,6 +161,21 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       this.defaultMuted = !isNull(newValue);
       if (!isNull(newValue)) this.muted = true;
     }
+  }
+
+  /**
+   * Reflects the content attribute like the native IDL attribute. Autoplay
+   * starts video immediately; the audio clock stays gated by autoplay
+   * policy until the first user gesture (see the unlock listeners in the
+   * event bridge), so the stream plays silently until then — pair with
+   * `muted` where silent startup should be explicit.
+   */
+  override get autoplay(): boolean {
+    return this.hasAttribute('autoplay');
+  }
+
+  override set autoplay(value: boolean) {
+    this.toggleAttribute('autoplay', Boolean(value));
   }
 
   // --------------------------------------------------------------------
@@ -192,6 +211,31 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
         this.#readyState = HAVE_METADATA;
         this.#dispatch('loadedmetadata');
         this.#dispatch('durationchange');
+      })
+    );
+
+    // Deferred-audio autoplay: while the engine holds the audio
+    // subscription behind the autoplay-policy gate, the first user gesture
+    // anywhere in the document is the unlock — play() re-runs the context
+    // resume inside that gesture and is a no-op otherwise while already
+    // playing. Chromium settles the engine's queued resume() on its own at
+    // user activation; these listeners make the unlock deterministic on
+    // engines that reject pre-gesture resumes instead (Safari).
+    own(
+      effect(() => {
+        if (this.engine.state.audioSuspended.get() !== true) return;
+        const unlock = () => {
+          // Paused during deferral means the user chose not to play —
+          // leave the unlock to the next explicit play().
+          if (!this.paused) void this.play().catch(() => {});
+        };
+        const doc = this.ownerDocument;
+        doc.addEventListener('pointerdown', unlock, { capture: true, passive: true });
+        doc.addEventListener('keydown', unlock, { capture: true });
+        return () => {
+          doc.removeEventListener('pointerdown', unlock, { capture: true });
+          doc.removeEventListener('keydown', unlock, { capture: true });
+        };
       })
     );
 
