@@ -65,4 +65,24 @@ export interface TranslationParams {
   'menu.auto': never;
   'menu.autoWithLabel': { label: string | number };
   'menu.subtitles': never;
+  'publish.goLive': never;
+  'publish.stopStream': never;
+  'publish.connecting': never;
+  'publish.stopping': never;
+  'publish.offline': never;
+  'publish.streamDuration': never;
+  'publish.camera': never;
+  'publish.microphone': never;
+  'publish.cameraOn': never;
+  'publish.cameraOff': never;
+  'publish.micMute': never;
+  'publish.micUnmute': never;
+  'publish.shareScreen': never;
+  'publish.stopSharing': never;
+  'publish.enableDevices': never;
+  'publish.permissionDenied': never;
+  'publish.connectionUnknown': never;
+  'publish.connectionGood': never;
+  'publish.connectionFair': never;
+  'publish.connectionPoor': never;
 }
