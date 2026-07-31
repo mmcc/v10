@@ -22,7 +22,7 @@ You’ll need the following installed:
 - [Node.js](https://nodejs.org/en/download) (≥ 22.19.0)
 - [Git](https://git-scm.com/downloads)
 - [PNPM](https://pnpm.io/installation) (≥ 10.17.0)
-- [Volta](https://docs.volta.sh/guide), [mise](https://mise.jdx.dev), or [NVM](https://github.com/nvm-sh/nvm) (we recommend Volta for automatic Node management)
+- [mise](https://mise.jdx.dev), or [NVM](https://github.com/nvm-sh/nvm)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (optional, for AI-assisted development)
 
 > [!TIP]
