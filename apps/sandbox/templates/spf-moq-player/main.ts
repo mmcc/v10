@@ -15,6 +15,8 @@ import '@app/styles.css';
 //   skin=default|minimal
 //   preload=none|metadata|auto
 //   muted=true           Start muted
+//   autoplay=true        Start playback immediately — video renders right
+//                        away; audio joins on the first user gesture
 import { SKINS } from '@app/constants';
 import { loadVideoSkinTag } from '@app/shared/html/skins';
 import { PRELOAD_VALUES, type PreloadValue } from '@app/shared/sandbox-listener';
@@ -76,6 +78,7 @@ interface PageState {
   preload: PreloadValue;
   targetLatency: number;
   muted: boolean;
+  autoplay: boolean;
 }
 
 const params = new URLSearchParams(window.location.search);
@@ -140,6 +143,7 @@ const state: PageState = {
   preload: oneOf(params.get('preload'), PRELOAD_VALUES, 'auto'),
   targetLatency: positiveSeconds(params.get('latency'), 0.5),
   muted: params.get('muted') === 'true',
+  autoplay: params.get('autoplay') === 'true',
 };
 
 relayInput.value = state.relaySrc;
@@ -457,6 +461,7 @@ async function render(): Promise<void> {
 
   media.setAttribute('preload', state.preload);
   if (state.muted) media.setAttribute('muted', '');
+  if (state.autoplay) media.setAttribute('autoplay', '');
   media.setAttribute('target-latency', String(state.targetLatency));
 
   skin.append(media);
@@ -590,5 +595,9 @@ async function missingSupport(mode: Mode): Promise<string[]> {
 }
 
 if (relayParamProblem) log(`ignoring ?relay= — it ${relayParamProblem}`, 'error');
-log('press play — the AudioContext (and with it the master clock) resumes on a user gesture');
+log(
+  state.autoplay
+    ? 'autoplay — video starts immediately; audio (the master clock) unlocks on the first gesture'
+    : 'press play — the AudioContext (and with it the master clock) resumes on a user gesture'
+);
 void render();
