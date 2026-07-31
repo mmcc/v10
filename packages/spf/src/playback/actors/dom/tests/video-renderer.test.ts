@@ -427,7 +427,11 @@ describe('createVideoRendererActor', () => {
     }
   });
 
-  it('bounds the slew, leaving jumps to the discontinuity path', async () => {
+  // The two edge-correction paths are driven by different inputs and both
+  // must survive: the slew reads `getTargetClockUs` and is rate-bounded;
+  // the hard re-anchor reads the decoded queue and jumps (covered by the
+  // discontinuity tests above, which still pass with the slew in place).
+  it('bounds the slew rather than jumping to the edge', async () => {
     const frames = await encodeTestFrames(30);
     const canvas = document.createElement('canvas');
     let now = 0;
@@ -501,6 +505,42 @@ describe('createVideoRendererActor', () => {
       }
       const edgeUs = (now - startWallMs) * 1000;
       expect(edgeUs - renderer.getClockTimeUs()!).toBeLessThanOrEqual(50_000);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('banks no slew budget while a master clock is presenting', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let masterUs: number | undefined;
+    // An edge far behind the clock, so any banked budget shows up as a
+    // backwards jump the moment the master clock goes away.
+    const renderer = createVideoRendererActor({
+      canvas,
+      getClockTimeUs: () => masterUs,
+      getTargetClockUs: () => 0,
+    });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // Audio takes over for 10s of wall time, then ends mid-stream.
+      masterUs = 500_000;
+      renderer.getClockTimeUs();
+      now += 10_000;
+      renderer.getClockTimeUs();
+      masterUs = undefined;
+
+      // The first self-clock read after the handover corrects by nothing —
+      // 10s of budget would have been a half-second lurch.
+      const clock = renderer.getClockTimeUs()!;
+      now += 100;
+      expect(renderer.getClockTimeUs()! - clock).toBeCloseTo(95_000, -4);
     } finally {
       nowSpy.mockRestore();
       renderer.destroy();

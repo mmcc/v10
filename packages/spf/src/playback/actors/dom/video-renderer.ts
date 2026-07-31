@@ -317,7 +317,14 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
 
   const clockTimeUs = (): number | undefined => {
     const master = options.getClockTimeUs?.();
-    if (master !== undefined) return master;
+    if (master !== undefined) {
+      // Bank no slew budget while the master clock owns presentation: if it
+      // later goes away (audio ends mid-stream), the first self-clock
+      // evaluation would otherwise cash in the whole master-clock interval
+      // as one correction.
+      lastSlewWallMs = null;
+      return master;
+    }
     const rate = options.getPlaybackRate?.() ?? 1;
     const now = performance.now();
     if (!selfAnchor) {

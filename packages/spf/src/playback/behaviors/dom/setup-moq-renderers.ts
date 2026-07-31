@@ -84,7 +84,7 @@ export interface MoqRendererContext {
 const CLOCK_PUBLISH_INTERVAL_MS = 100;
 
 export interface MoqRendererConfig {
-  /** Shared with `syncLatency`: `joinAtEdge` + the target the anchor is placed against. */
+  /** Shared with `syncLatency`: `joinAtEdge`, the target the clocks aim at, and the slew bounds. */
   latency?: Partial<LatencyControlConfig>;
 }
 
