@@ -85,6 +85,13 @@ export {
   useAudioTrackOptions,
 } from './ui/audio-track';
 export { BufferingIndicator, type BufferingIndicatorProps } from './ui/buffering-indicator/buffering-indicator';
+export { CameraButton, type CameraButtonProps } from './ui/camera-button/camera-button';
+export {
+  type CameraOption,
+  type CameraOptionsProps,
+  type CameraOptionsResult,
+  useCameraOptions,
+} from './ui/camera-radio-group';
 export { CaptionsButton, type CaptionsButtonProps } from './ui/captions-button/captions-button';
 export {
   type CaptionsOption,
@@ -92,10 +99,13 @@ export {
   type CaptionsOptionsResult,
   useCaptionsOptions,
 } from './ui/captions-radio-group';
+export { CapturePlaceholder, type CapturePlaceholderProps } from './ui/capture-placeholder/capture-placeholder';
 export { CastButton, type CastButtonProps } from './ui/cast-button/cast-button';
+export { ConnectionIndicator, type ConnectionIndicatorProps } from './ui/connection-indicator/connection-indicator';
 export { Controls } from './ui/controls';
 export type { ControlsGroupProps } from './ui/controls/controls-group';
 export type { ControlsRootProps } from './ui/controls/controls-root';
+export { EnableDevicesButton, type EnableDevicesButtonProps } from './ui/enable-devices-button/enable-devices-button';
 export { ErrorDialog, type ErrorDialogContextValue, useErrorDialogContext } from './ui/error-dialog';
 export { FullscreenButton, type FullscreenButtonProps } from './ui/fullscreen-button/fullscreen-button';
 export { Gesture, type GestureProps, MediaGesture, type MediaGestureProps } from './ui/gesture/gesture';
@@ -108,6 +118,13 @@ export { type UseHotkeyOptions, useHotkey } from './ui/hotkey/use-hotkey';
 export { useHotkeyShortcut } from './ui/hotkey/use-hotkey-shortcut';
 export { LiveButton, type LiveButtonProps } from './ui/live-button/live-button';
 export { Menu, type MenuContextValue, useMenuContext, useOptionalMenuContext } from './ui/menu';
+export { MicButton, type MicButtonProps } from './ui/mic-button/mic-button';
+export {
+  type MicrophoneOption,
+  type MicrophoneOptionsProps,
+  type MicrophoneOptionsResult,
+  useMicrophoneOptions,
+} from './ui/mic-radio-group';
 export { MuteButton, type MuteButtonProps } from './ui/mute-button/mute-button';
 export { PiPButton, type PiPButtonProps } from './ui/pip-button/pip-button';
 export { PlayButton, type PlayButtonProps } from './ui/play-button/play-button';
@@ -120,12 +137,16 @@ export {
 export { PlaybackRateButton, type PlaybackRateButtonProps } from './ui/playback-rate-button/playback-rate-button';
 export { Popover, type PopoverContextValue, usePopoverContext } from './ui/popover';
 export { Poster, type PosterProps } from './ui/poster/poster';
+export { PublishBadge, type PublishBadgeProps } from './ui/publish-badge/publish-badge';
+export { PublishButton, type PublishButtonProps } from './ui/publish-button/publish-button';
+export { PublishTimer, type PublishTimerProps } from './ui/publish-timer/publish-timer';
 export {
   type QualityOption,
   type QualityOptionsProps,
   type QualityOptionsResult,
   useQualityOptions,
 } from './ui/quality';
+export { ScreenShareButton, type ScreenShareButtonProps } from './ui/screen-share-button/screen-share-button';
 export { SeekButton, type SeekButtonProps } from './ui/seek-button/seek-button';
 export { SeekIndicator } from './ui/seek-indicator';
 export type { SeekIndicatorRootProps } from './ui/seek-indicator/seek-indicator-root';
