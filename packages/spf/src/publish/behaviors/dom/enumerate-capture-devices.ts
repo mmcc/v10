@@ -1,0 +1,83 @@
+/**
+ * **Keep `state.captureDevices` synced with the platform's capture
+ * inputs.** On setup (when `navigator.mediaDevices` exists) enumerates
+ * `videoinput`/`audioinput` devices into the slot, then re-enumerates on
+ * the platform `devicechange` event and whenever `state.captureStatus`
+ * becomes `'active'` — device labels stay redacted until a capture grant,
+ * so the post-grant refresh is what surfaces human-readable names.
+ *
+ * Simple behavior: one platform listener plus one effect watching the
+ * capture status. Each refresh writes a fresh array (a new enumeration
+ * snapshot), even when the contents are unchanged. In-flight enumerations
+ * that resolve after cleanup are discarded via a `disposed` flag.
+ *
+ * Sole writer of `state.captureDevices`.
+ */
+import { listen } from '@videojs/utils/dom';
+import { defineBehavior } from '../../../core/composition/create-composition';
+import { effect } from '../../../core/signals/effect';
+import type { ReadonlySignal, Signal } from '../../../core/signals/primitives';
+import type { CaptureStatus } from './acquire-capture-source';
+
+/** One selectable capture input device (an `enumerateDevices` snapshot). */
+export interface CaptureDeviceFacts {
+  deviceId: string;
+  kind: 'videoinput' | 'audioinput';
+  /** Empty until the user grants device permission. */
+  label: string;
+}
+
+/**
+ * State shape for capture-device enumeration.
+ */
+export interface EnumerateCaptureDevicesState {
+  captureDevices?: CaptureDeviceFacts[];
+  captureStatus?: CaptureStatus;
+}
+
+function isCaptureInputKind(kind: MediaDeviceKind): kind is 'videoinput' | 'audioinput' {
+  return kind === 'videoinput' || kind === 'audioinput';
+}
+
+function enumerateCaptureDevicesSetup({
+  state,
+}: {
+  state: {
+    captureDevices: Signal<EnumerateCaptureDevicesState['captureDevices']>;
+    captureStatus: ReadonlySignal<EnumerateCaptureDevicesState['captureStatus']>;
+  };
+}): (() => void) | undefined {
+  const mediaDevices = globalThis.navigator?.mediaDevices;
+  if (!mediaDevices?.enumerateDevices) return undefined;
+
+  let disposed = false;
+  const refresh = async () => {
+    const devices = await mediaDevices.enumerateDevices();
+    if (disposed) return;
+    const inputs: CaptureDeviceFacts[] = [];
+    for (const { deviceId, kind, label } of devices) {
+      if (isCaptureInputKind(kind)) inputs.push({ deviceId, kind, label });
+    }
+    state.captureDevices.set(inputs);
+  };
+
+  void refresh();
+  const removeDeviceChange = listen(mediaDevices, 'devicechange', () => void refresh());
+  // Labels appear once capture is granted — refresh when it goes active.
+  const cleanupStatus = effect(() => {
+    if (state.captureStatus.get() !== 'active') return;
+    void refresh();
+  });
+
+  return () => {
+    disposed = true;
+    removeDeviceChange();
+    cleanupStatus();
+  };
+}
+
+export const enumerateCaptureDevices = defineBehavior({
+  stateKeys: ['captureDevices', 'captureStatus'],
+  contextKeys: [],
+  setup: enumerateCaptureDevicesSetup,
+});

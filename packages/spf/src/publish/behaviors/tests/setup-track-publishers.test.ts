@@ -1,0 +1,123 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { signal } from '../../../core/signals/primitives';
+import { createMoqtSession } from '../../../network/moqt/session';
+import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
+import { createPublishSessionActor, type PublishSessionActor } from '../../session/publish-session';
+import {
+  type SetupTrackPublishersContext,
+  type SetupTrackPublishersState,
+  setupTrackPublishers,
+} from '../setup-track-publishers';
+
+const ENDPOINT = { url: 'https://relay.example.com/moq', namespace: ['live', 'abc123'] };
+
+const VIDEO_CONFIG = { codec: 'vp8', width: 640, height: 480 } as VideoEncoderConfig;
+const AUDIO_CONFIG = { codec: 'opus', sampleRate: 48_000, numberOfChannels: 2 } as AudioEncoderConfig;
+
+const disposals: (() => void)[] = [];
+
+function makeSessionActor() {
+  const pair = createTransportPair();
+  const publishes: string[] = [];
+  const dones: { statusCode: number }[] = [];
+  const peer = createMoqtSession(pair.server, {
+    callbacks: {
+      onIncomingPublish: (publish, respond) => {
+        publishes.push(publish.trackName);
+        respond.accept();
+      },
+    },
+  });
+  disposals.push(() => peer.destroy());
+  const actor: PublishSessionActor = createPublishSessionActor({
+    endpoint: ENDPOINT,
+    connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
+  });
+  disposals.push(() => actor.destroy());
+  return { actor, peer, publishes, dones };
+}
+
+function setupBehavior() {
+  const state = {
+    activeEncodings: signal<SetupTrackPublishersState['activeEncodings']>(undefined),
+    endpoint: signal<SetupTrackPublishersState['endpoint']>(undefined),
+    publishError: signal<SetupTrackPublishersState['publishError']>(undefined),
+  };
+  const context = {
+    publishSessionActor: signal<SetupTrackPublishersContext['publishSessionActor']>(undefined),
+    catalogTrackPublisher: signal<SetupTrackPublishersContext['catalogTrackPublisher']>(undefined),
+    videoTrackPublisher: signal<SetupTrackPublishersContext['videoTrackPublisher']>(undefined),
+    audioTrackPublisher: signal<SetupTrackPublishersContext['audioTrackPublisher']>(undefined),
+  };
+  const reactor = setupTrackPublishers.setup({ state, context, config: {} });
+  disposals.push(() => reactor.destroy());
+  return { state, context, reactor };
+}
+
+describe('setupTrackPublishers', () => {
+  afterEach(() => {
+    for (const dispose of disposals.splice(0)) dispose();
+  });
+
+  it('offers catalog + active tracks and publishes the actor slots once the session is ready', async () => {
+    const { actor, publishes } = makeSessionActor();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.publishSessionActor.set(actor);
+
+    await vi.waitFor(() => {
+      expect(context.catalogTrackPublisher.get()).toBeDefined();
+      expect(context.videoTrackPublisher.get()).toBeDefined();
+      expect(context.audioTrackPublisher.get()).toBeDefined();
+    });
+    await vi.waitFor(() => {
+      expect(publishes).toEqual(['catalog', 'video', 'audio']);
+    });
+    // Accepted offers move the session actor to live.
+    await vi.waitFor(() => {
+      expect(actor.snapshot.get().context.status).toBe('live');
+      expect(actor.snapshot.get().context.publishedTracks).toBe(3);
+    });
+    expect(state.publishError.get()).toBeUndefined();
+  });
+
+  it('skips the video publisher for an audio-only encoding', async () => {
+    const { actor, publishes } = makeSessionActor();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ audio: AUDIO_CONFIG });
+    context.publishSessionActor.set(actor);
+
+    await vi.waitFor(() => {
+      expect(context.catalogTrackPublisher.get()).toBeDefined();
+      expect(context.audioTrackPublisher.get()).toBeDefined();
+    });
+    expect(context.videoTrackPublisher.get()).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(publishes).toEqual(['catalog', 'audio']);
+    });
+  });
+
+  it('destroys the publishers and clears the slots when the encodings go away', async () => {
+    const { actor } = makeSessionActor();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ video: VIDEO_CONFIG });
+    context.publishSessionActor.set(actor);
+    await vi.waitFor(() => {
+      expect(context.videoTrackPublisher.get()).toBeDefined();
+    });
+    const publisher = context.videoTrackPublisher.get()!;
+
+    state.activeEncodings.set(undefined);
+    await vi.waitFor(() => {
+      expect(context.videoTrackPublisher.get()).toBeUndefined();
+      expect(context.catalogTrackPublisher.get()).toBeUndefined();
+    });
+    expect(publisher.snapshot.get().value).toBe('destroyed');
+  });
+});

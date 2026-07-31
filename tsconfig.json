@@ -33,6 +33,12 @@
     { "path": "packages/spf/src/playback/actors/dom" },
     { "path": "packages/spf/src/playback/engines/hls" },
     { "path": "packages/spf/src/playback/engines/moq" },
+    { "path": "packages/spf/src/publish/behaviors" },
+    { "path": "packages/spf/src/publish/behaviors/dom" },
+    { "path": "packages/spf/src/publish/actors" },
+    { "path": "packages/spf/src/publish/actors/dom" },
+    { "path": "packages/spf/src/publish/session" },
+    { "path": "packages/spf/src/publish/engines/moq" },
 
     { "path": "packages/html" },
     { "path": "packages/react" },

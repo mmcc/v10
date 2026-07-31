@@ -1,0 +1,21 @@
+{
+  "extends": "../../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "exactOptionalPropertyTypes": false,
+    "declarationDir": "../../../../types/publish/engines/moq"
+  },
+  "references": [
+    { "path": "../../../../../utils" },
+    { "path": "../../../core" },
+    { "path": "../../../network" },
+    { "path": "../../../media" },
+    { "path": "../../actors" },
+    { "path": "../../actors/dom" },
+    { "path": "../../behaviors" },
+    { "path": "../../behaviors/dom" },
+    { "path": "../../session" }
+  ],
+  "include": ["./**/*.ts"]
+}
