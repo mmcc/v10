@@ -13,7 +13,7 @@ import {
 import type { BidirectionalStreamLike } from '../../../../network/moqt/request-stream';
 import type { MoqtTransport } from '../../../../network/moqt/session';
 import type { CreateMoqTransport } from '../../../actors/moq-session';
-import { createMoqEngine, type MoqEngineSignals } from '../engine';
+import { createMoqEngine, type MoqEngineConfig, type MoqEngineSignals } from '../engine';
 
 // ============================================================================
 // In-memory relay: speaks real draft-19 bytes over a fake WebTransport.
@@ -375,6 +375,77 @@ describe('createMoqEngine', () => {
       locationFilter: { type: 'next-group-start' },
     });
     await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined());
+
+    await engine.destroy();
+  });
+
+  // A draft-19 relay replays its recent groups to every joining subscriber,
+  // so the jitter buffer starts seconds deep. `latency.joinAtEdge` decides
+  // whether playout starts at the front of that replay or at its edge.
+  //
+  // The canvas is attached after the replay lands so the assertion is about
+  // the anchor and not about how fast the burst arrives; the controller is
+  // parked (`intervalMs`) so its own catch-up cannot do the work instead.
+  async function playReplayedGroups(latency: MoqEngineConfig['latency']) {
+    const relay = createFakeRelay();
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      latency: { intervalMs: 60_000, ...latency },
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+    await vi.waitFor(
+      () => {
+        expect(relay.subscriptions.map((s) => s.message.trackName)).toContain('video');
+      },
+      { timeout: 5000 }
+    );
+
+    // 3s of replayed groups, one keyframe each.
+    const videoSubscription = relay.subscriptions.find((s) => s.message.trackName === 'video')!;
+    const keyframe = await encodeKeyframe();
+    const GROUP_COUNT = 30;
+    const GROUP_DURATION_US = 100_000;
+    for (let group = 0; group < GROUP_COUNT; group++) {
+      relay.openUni(
+        encodeLocObjectStream(videoSubscription.trackAlias, group + 1, 0, group * GROUP_DURATION_US, keyframe)
+      );
+    }
+    const newestUs = (GROUP_COUNT - 1) * GROUP_DURATION_US;
+    const subscriber = () => signals.context.videoSubscriberActor.get()!;
+    await vi.waitFor(() => expect(subscriber().snapshot.get().context.newestTimestampUs).toBe(newestUs), {
+      timeout: 5000,
+    });
+
+    signals.context.renderSurface.set(document.createElement('canvas'));
+    const presentedUs = () => signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+    await vi.waitFor(() => expect(presentedUs()).toBeDefined(), { timeout: 5000 });
+
+    return { engine, firstPresentedUs: presentedUs()!, newestUs, targetSeconds: latency?.defaultTargetLatency ?? 0.5 };
+  }
+
+  it('joins a replayed backlog at the live edge', async () => {
+    const { engine, firstPresentedUs, newestUs, targetSeconds } = await playReplayedGroups({});
+
+    // Within the target latency (plus the group the anchor lands inside) of
+    // the newest frame the relay served — not at the front of the replay.
+    expect(firstPresentedUs).toBeGreaterThan(newestUs - targetSeconds * 1_000_000 - 100_000);
+    expect(firstPresentedUs).toBeLessThanOrEqual(newestUs);
+
+    await engine.destroy();
+  });
+
+  it('joins at the oldest replayed group with joinAtEdge off', async () => {
+    const { engine, firstPresentedUs } = await playReplayedGroups({ joinAtEdge: false });
+
+    // The pre-change behavior, kept reachable: playout starts at the front
+    // of the replay and works through all 3s of it in real time.
+    expect(firstPresentedUs).toBe(0);
 
     await engine.destroy();
   });

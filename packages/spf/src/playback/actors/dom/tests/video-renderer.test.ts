@@ -271,6 +271,122 @@ describe('createVideoRendererActor', () => {
     }
   });
 
+  it('self-clock anchors at the live edge, decoding the backlog it does not present', async () => {
+    // 1s of replayed video buffered before the renderer starts.
+    const frames = await encodeTestFrames(30);
+    const NEWEST_US = frames[frames.length - 1]!.timestampUs;
+    const ANCHOR_US = NEWEST_US - 200_000;
+
+    const canvas = document.createElement('canvas');
+    const now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // Record what reaches the decoder, in the order it is fed.
+    const queue = [...frames];
+    const fedUs: number[] = [];
+    const source: VideoFrameSource = {
+      peek: () => queue[0],
+      dequeue: () => {
+        const frame = queue.shift();
+        if (frame) fedUs.push(frame.timestampUs);
+        return frame;
+      },
+    };
+    const renderer = createVideoRendererActor({ canvas, getJoinAnchorUs: () => ANCHOR_US });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    try {
+      renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+
+      // Presentation starts within a frame of the edge — never at frame 0,
+      // and without waiting out the ~1s backlog in real time (wall time is
+      // frozen, so a first-frame anchor could never get here).
+      await vi.waitFor(() => expect(presented()).toBeGreaterThan(ANCHOR_US - 2 * FRAME_DURATION_US), { timeout: 5000 });
+      await vi.waitFor(() => expect(queue).toHaveLength(0), { timeout: 5000 });
+
+      // Decode continuity: every frame was fed, in order, starting from
+      // the keyframe — the backlog is decoded and dropped, not skipped.
+      expect(fedUs).toEqual(frames.map((frame) => frame.timestampUs));
+      expect(renderer.snapshot.get().context.framesDropped).toBeGreaterThan(0);
+      expect(renderer.snapshot.get().context.status).not.toBe('error');
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('presents at the edge against a master clock that already anchored there', async () => {
+    // The production shape: audio owns the clock and anchored it at the
+    // live edge, so video's existing drop-late does the fast-forward.
+    const frames = await encodeTestFrames(30);
+    const ANCHOR_US = frames[frames.length - 1]!.timestampUs - 200_000;
+
+    const canvas = document.createElement('canvas');
+    const queue = [...frames];
+    const fedUs: number[] = [];
+    const source: VideoFrameSource = {
+      peek: () => queue[0],
+      dequeue: () => {
+        const frame = queue.shift();
+        if (frame) fedUs.push(frame.timestampUs);
+        return frame;
+      },
+    };
+    const renderer = createVideoRendererActor({ canvas, getClockTimeUs: () => ANCHOR_US });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+    await vi.waitFor(() => expect(presented()).toBeGreaterThan(ANCHOR_US - 2 * FRAME_DURATION_US), { timeout: 5000 });
+    await vi.waitFor(() => expect(queue).toHaveLength(0), { timeout: 5000 });
+
+    expect(fedUs).toEqual(frames.map((frame) => frame.timestampUs));
+    expect(renderer.snapshot.get().context.framesDropped).toBeGreaterThan(0);
+
+    renderer.destroy();
+  });
+
+  it('self-clock re-anchors at the live edge across a catch-up discontinuity', async () => {
+    const frames = await encodeTestFrames(6);
+    // The catch-up skip kept a keyframe-led group starting at JUMP_US and
+    // running two frames further on — the group start is not the edge.
+    const JUMP_US = 5_000_000;
+    const survivingGroup = frames
+      .slice(3)
+      .map((frame, i) => ({ ...frame, timestampUs: JUMP_US + i * FRAME_DURATION_US }));
+    const EDGE_US = JUMP_US + FRAME_DURATION_US;
+
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // The buffer's live edge, one frame back — as the behavior computes it
+    // from the subscriber's newest buffered timestamp.
+    let newestBufferedUs = 2 * FRAME_DURATION_US;
+    const queue = frames.slice(0, 3);
+    const source: VideoFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    const renderer = createVideoRendererActor({
+      canvas,
+      getJoinAnchorUs: () => newestBufferedUs - FRAME_DURATION_US,
+    });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    try {
+      renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(presented()).toBe(FRAME_DURATION_US), { timeout: 5000 });
+
+      // The skip lands: everything before the surviving group is gone.
+      queue.push(...survivingGroup);
+      newestBufferedUs = JUMP_US + 2 * FRAME_DURATION_US;
+      // Let the clock run past the last pre-jump frame so the jump reaches it.
+      now += 50;
+
+      // Re-anchoring at the jumped-to frame would resume at the group
+      // start; the edge anchor resumes a frame short of its newest.
+      await vi.waitFor(() => expect(presented()).toBe(EDGE_US), { timeout: 5000 });
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
   it('self-clock applies rate changes forward-only', async () => {
     const frames = await encodeTestFrames(30);
     const canvas = document.createElement('canvas');
