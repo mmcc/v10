@@ -167,6 +167,134 @@ describe('MoqMediaMixin', () => {
     media.destroy();
   });
 
+  it('starts playback from autoplay and defers audio while the context is suspended', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    // Chromium's pre-gesture shape: resume() parks until user activation.
+    let activate!: () => void;
+    audioContext.resume.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          activate = () => {
+            audioContext.state = 'running';
+            resolve();
+          };
+        })
+    );
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.autoplay = true;
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+
+    // Playback intent applies in full — video renders on the self-clock —
+    // while the audio subscription waits behind the policy gate.
+    expect(media.paused).toBe(false);
+    expect(media.engine.state.loadActivated.get()).toBe(true);
+    expect(media.engine.state.audioSuspended.get()).toBe(true);
+
+    // The queued resume settling at user activation is the unlock.
+    activate();
+    await vi.waitFor(() => expect(media.engine.state.audioSuspended.get()).toBeUndefined());
+    expect(media.paused).toBe(false);
+
+    media.destroy();
+  });
+
+  it('defers audio for an autoplay that ran before attach() and unlocks via the alignment resume', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
+    media.autoplay = true;
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    expect(media.paused).toBe(false);
+    expect(media.engine.state.audioSuspended.get()).toBe(true);
+    expect(audioContext.resume).not.toHaveBeenCalled();
+
+    // attach() aligns the fresh context with the playing state; the fake
+    // resume resolves (a permitted context), which settles the deferral.
+    media.attach(document.createElement('canvas'));
+    expect(audioContext.resume).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(media.engine.state.audioSuspended.get()).toBeUndefined());
+
+    media.destroy();
+  });
+
+  it('settles a pre-attach autoplay deferral when the context arrives running', () => {
+    const audioContext = createFakeAudioContext('running');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
+    media.autoplay = true;
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    expect(media.engine.state.audioSuspended.get()).toBe(true);
+
+    // A running context (created inside a gesture) can always render audio.
+    media.attach(document.createElement('canvas'));
+    expect(media.engine.state.audioSuspended.get()).toBeUndefined();
+    expect(audioContext.suspend).not.toHaveBeenCalled();
+
+    media.destroy();
+  });
+
+  it('keeps audio deferred after a rejected pre-gesture resume until play() succeeds', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    // Safari's shape: a pre-gesture resume() rejects outright.
+    audioContext.resume.mockRejectedValueOnce(new Error('NotAllowedError'));
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.autoplay = true;
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(media.engine.state.audioSuspended.get()).toBe(true);
+    // The rejection must not pause the deferred playback — video plays on.
+    expect(media.paused).toBe(false);
+
+    // A gesture-driven play(): the default fake resume now succeeds.
+    await media.play();
+    expect(media.engine.state.audioSuspended.get()).toBeUndefined();
+    expect(media.paused).toBe(false);
+
+    media.destroy();
+  });
+
+  it('attempts autoplay once per load cycle and never restarts an explicit pause', () => {
+    const audioContext = createFakeAudioContext('suspended');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.autoplay = true;
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    expect(media.paused).toBe(false);
+
+    media.pause();
+    // Toggling the flag after playback started (spec: pause() clears the
+    // can-autoplay flag) must not restart the player.
+    media.autoplay = false;
+    media.autoplay = true;
+    expect(media.paused).toBe(true);
+
+    // A new load cycle re-arms the attempt.
+    media.src = 'moqt://relay.test/other#msf:live--catalog';
+    expect(media.paused).toBe(false);
+
+    media.destroy();
+  });
+
+  it('begins playback when autoplay is enabled after the source', () => {
+    const audioContext = createFakeAudioContext('suspended');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    expect(media.paused).toBe(true);
+
+    media.autoplay = true;
+    expect(media.paused).toBe(false);
+    expect(media.engine.state.loadActivated.get()).toBe(true);
+
+    media.destroy();
+  });
+
   it('forwards engineConfig to the engine', async () => {
     const createMoqTransport = vi.fn((_connectUrl: string, _protocols: string[]) => ({
       // Never delivers server SETUP: the factory call is what's under test.

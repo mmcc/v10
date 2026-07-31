@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { signal } from '../../../core/signals/primitives';
-import type { MoqVideoTrack } from '../../../media/moq/parse-catalog';
+import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
 import type { MoqtSession } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
@@ -9,7 +9,7 @@ import type {
   TrackSubscriberActor,
   TrackSubscriberContext,
 } from '../../actors/track-subscriber';
-import { subscribeSelectedVideoTrack } from '../subscribe-selected-tracks';
+import { subscribeSelectedAudioTrack, subscribeSelectedVideoTrack } from '../subscribe-selected-tracks';
 
 // ============================================================================
 // Fixtures
@@ -28,13 +28,34 @@ function moqVideoTrack(name: string, bandwidth: number): MoqVideoTrack {
   };
 }
 
+function moqAudioTrack(name: string, bandwidth: number): MoqAudioTrack {
+  return {
+    type: 'audio',
+    id: `live/${name}`,
+    url: `moqt://relay/live#msf:live--${name}`,
+    mimeType: 'audio/loc',
+    bandwidth,
+    codecs: ['mp4a.40.2'],
+    groupId: 'audio',
+    name,
+    sampleRate: 48_000,
+    channels: 2,
+    deliveryMode: 'push',
+    moq: { namespace: ['live'], name, packaging: 'loc', isLive: true },
+  };
+}
+
 const HD = moqVideoTrack('hd', 5_000_000);
 const SD = moqVideoTrack('sd', 1_000_000);
+const MAIN_AUDIO = moqAudioTrack('main', 128_000);
 
 const PRESENTATION: MaybeResolvedPresentation = {
   id: 'moq:test',
   url: 'moqt://relay/live#msf:live--catalog',
-  selectionSets: [{ id: 'v', type: 'video', switchingSets: [{ id: 'v-main', type: 'video', tracks: [HD, SD] }] }],
+  selectionSets: [
+    { id: 'v', type: 'video', switchingSets: [{ id: 'v-main', type: 'video', tracks: [HD, SD] }] },
+    { id: 'a', type: 'audio', switchingSets: [{ id: 'a-main', type: 'audio', tracks: [MAIN_AUDIO] }] },
+  ],
 };
 
 // ============================================================================
@@ -79,18 +100,21 @@ function createFakeSubscriberFactory() {
   return { factory, created: created as FakeSubscriber[] };
 }
 
-function makeDeps() {
+function makeSessionActor(): MoqSessionActor {
   const session = { ready: Promise.resolve() } as unknown as MoqtSession;
   const sessionSnapshot = signal({
     value: 'active' as const,
     context: { status: 'ready', session } as MoqSessionActorContext,
   });
-  const sessionActor: MoqSessionActor = {
+  return {
     snapshot: sessionSnapshot as MoqSessionActor['snapshot'],
     getAuthParameters: () => ({}),
     refreshAuthToken: async () => ({}),
     destroy: () => {},
   };
+}
+
+function makeDeps() {
   return {
     state: {
       presentation: signal<MaybeResolvedPresentation | undefined>(PRESENTATION),
@@ -101,9 +125,28 @@ function makeDeps() {
       currentTime: signal<number | undefined>(undefined),
     },
     context: {
-      moqSessionActor: signal<MoqSessionActor | undefined>(sessionActor),
+      moqSessionActor: signal<MoqSessionActor | undefined>(makeSessionActor()),
       videoSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
       pendingVideoSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
+    },
+  };
+}
+
+function makeAudioDeps() {
+  return {
+    state: {
+      presentation: signal<MaybeResolvedPresentation | undefined>(PRESENTATION),
+      selectedAudioTrackId: signal<string | undefined>(undefined),
+      preload: signal<'auto' | 'metadata' | 'none' | undefined>(undefined),
+      loadActivated: signal<boolean | undefined>(true),
+      mediaSuspended: signal<boolean | undefined>(undefined),
+      audioSuspended: signal<boolean | undefined>(undefined),
+      currentTime: signal<number | undefined>(undefined),
+    },
+    context: {
+      moqSessionActor: signal<MoqSessionActor | undefined>(makeSessionActor()),
+      audioSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
+      pendingAudioSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
     },
   };
 }
@@ -320,6 +363,75 @@ describe('subscribeSelectedVideoTrack', () => {
     deps.state.selectedVideoTrackId.set('not-a-track');
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(created).toHaveLength(0);
+
+    reactor.destroy();
+  });
+
+  // The autoplay-policy gate is threaded to the audio variant explicitly;
+  // deferred-audio autoplay relies on video staying subscribed while set.
+  it('is not gated by audioSuspended', async () => {
+    const deps = makeDeps();
+    // Every behavior receives the composition's full signal map at runtime,
+    // so the slot is present — the video variant must simply never read it.
+    const state = { ...deps.state, audioSuspended: signal<boolean | undefined>(true) };
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({
+      ...deps,
+      state,
+      config: { createTrackSubscriber: factory },
+    });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]!.destroyed).toBe(false);
+
+    reactor.destroy();
+  });
+});
+
+describe('subscribeSelectedAudioTrack', () => {
+  it('releases the subscription while audio is suspended and rejoins at the live edge on unlock', async () => {
+    const deps = makeAudioDeps();
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedAudioTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedAudioTrackId.set(MAIN_AUDIO.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]!.options).toMatchObject({
+      track: { id: MAIN_AUDIO.id },
+      locationFilter: { type: 'largest-object' },
+    });
+
+    // Autoplay started without a gesture: the adapter defers audio.
+    deps.state.audioSuspended.set(true);
+    await vi.waitFor(() => expect(created[0]!.destroyed).toBe(true));
+    expect(deps.context.audioSubscriberActor.get()).toBeUndefined();
+    expect(deps.context.pendingAudioSubscriberActor.get()).toBeUndefined();
+
+    // First user gesture resumed the context: a fresh live-edge join.
+    deps.state.audioSuspended.set(undefined);
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+    expect(created[1]!.options).toMatchObject({
+      track: { id: MAIN_AUDIO.id },
+      locationFilter: { type: 'largest-object' },
+    });
+    expect(deps.context.audioSubscriberActor.get()).toBe(created[1]);
+
+    reactor.destroy();
+  });
+
+  it('does not subscribe while audio starts out suspended', async () => {
+    const deps = makeAudioDeps();
+    deps.state.audioSuspended.set(true);
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedAudioTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+    deps.state.selectedAudioTrackId.set(MAIN_AUDIO.id);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(created).toHaveLength(0);
+
+    deps.state.audioSuspended.set(undefined);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
 
     reactor.destroy();
   });

@@ -25,12 +25,16 @@
  * gate to be open (`loadActivated || preload === 'auto'` — the same gate
  * as HLS `load-segments`' full-range loading), *and* media delivery not
  * suspended (`mediaSuspended`, set by `suspend-media-while-paused` when a
- * pause outlives its hold window). Catalog resolution stays ungated in
- * `resolve-catalog`, so `preload: 'metadata'` still resolves tracks
- * without downloading media — and a suspended pause keeps receiving
- * catalog updates. Closing either gate exits the state and tears both
- * subscribers down; reopening re-subscribes the current selection through
- * the initial-join filters (a live-edge rejoin, not a handoff).
+ * pause outlives its hold window). The audio variant reads one further
+ * gate: `audioSuspended`, the adapter's autoplay-policy deferral — while
+ * a playback that began without a user gesture cannot resume its
+ * AudioContext, audio delivery waits (video keeps playing on the
+ * self-clock) and the unlock rejoins at the live edge. Catalog resolution
+ * stays ungated in `resolve-catalog`, so `preload: 'metadata'` still
+ * resolves tracks without downloading media — and a suspended pause keeps
+ * receiving catalog updates. Closing any gate exits the state and tears
+ * both subscribers down; reopening re-subscribes the current selection
+ * through the initial-join filters (a live-edge rejoin, not a handoff).
  *
  * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor`
  * slots (renderers and latency/bandwidth behaviors only read). Slot reads
@@ -60,6 +64,13 @@ export interface SubscribeSelectedTracksState {
   loadActivated?: boolean;
   /** Sustained-pause gate written by `suspend-media-while-paused`. */
   mediaSuspended?: boolean;
+  /**
+   * Adapter-written autoplay-policy gate, read by the audio variant only:
+   * set while playback started without a user gesture and the suspended
+   * AudioContext cannot render audio yet. Same release/rejoin semantics
+   * as `mediaSuspended`, scoped to the audio subscription.
+   */
+  audioSuspended?: boolean;
   /** Playout clock (media seconds) — gates make-before-break promotion. */
   currentTime?: number;
 }
@@ -121,7 +132,14 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     state: VariantStateMap<S>;
     context: VariantContextMap<Sub, P>;
     config?: SubscribeSelectedTracksConfig;
-  }
+  },
+  /**
+   * Extra suspension gate the audio variant threads in (`audioSuspended`).
+   * Passed explicitly rather than probed off the state map: every behavior
+   * receives the composition's full signal map at runtime, so an optional
+   * read here would silently subscribe the video variant to the slot too.
+   */
+  audioSuspended?: ReadonlySignal<boolean | undefined>
 ): Reactor<FsmState | 'destroying' | 'destroyed'> {
   const { state, context, config } = deps;
   const createSubscriber = config?.createTrackSubscriber ?? createTrackSubscriberActor;
@@ -143,9 +161,10 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     // Same gate as HLS load-segments' full-range loading: default preload
     // ('metadata') must not download live media before load activation.
     const loadGateOpen = state.loadActivated.get() || state.preload.get() === 'auto';
-    // Sustained pause: release the media subscriptions (the catalog stays
-    // subscribed); resume rejoins at the live edge via the initial filters.
-    const suspended = state.mediaSuspended.get() === true;
+    // Sustained pause (both variants) or autoplay-policy deferral (audio
+    // only): release the subscription (the catalog stays subscribed);
+    // reopening rejoins at the live edge via the initial filters.
+    const suspended = state.mediaSuspended.get() === true || audioSuspended?.get() === true;
     return sessionReady && loadGateOpen && !suspended ? 'session-ready' : 'preconditions-unmet';
   });
 
@@ -279,20 +298,35 @@ export const subscribeSelectedVideoTrack = defineBehavior({
 
 /**
  * Audio: every frame is independently decodable, so the initial join
- * starts straight at the live edge.
+ * starts straight at the live edge. Also the only reader of the
+ * `audioSuspended` autoplay-policy gate — deferred-audio playback keeps
+ * video subscribed while audio waits for the user-gesture unlock.
  *
  * @example
  * const reactor = subscribeSelectedAudioTrack.setup({ state, context });
  */
 export const subscribeSelectedAudioTrack = defineBehavior({
-  stateKeys: ['presentation', 'selectedAudioTrackId', 'preload', 'loadActivated', 'mediaSuspended', 'currentTime'],
+  stateKeys: [
+    'presentation',
+    'selectedAudioTrackId',
+    'preload',
+    'loadActivated',
+    'mediaSuspended',
+    'audioSuspended',
+    'currentTime',
+  ],
   contextKeys: ['moqSessionActor', 'audioSubscriberActor', 'pendingAudioSubscriberActor'],
   setup: (deps: {
-    state: VariantStateMap<'selectedAudioTrackId'>;
+    state: VariantStateMap<'selectedAudioTrackId'> & {
+      audioSuspended: ReadonlySignal<SubscribeSelectedTracksState['audioSuspended']>;
+    };
     context: VariantContextMap<'audioSubscriberActor', 'pendingAudioSubscriberActor'>;
     config?: SubscribeSelectedTracksConfig;
   }) =>
-    setupSubscribeSelectedTrack(
+    // Explicit type arguments: the `audioSuspended` intersection on `state`
+    // defeats inference of the selection key from the mapped type, which
+    // would otherwise widen to the full `SelectionKey` union.
+    setupSubscribeSelectedTrack<'selectedAudioTrackId', 'audioSubscriberActor', 'pendingAudioSubscriberActor'>(
       {
         trackType: 'audio',
         selectionKey: 'selectedAudioTrackId',
@@ -300,6 +334,7 @@ export const subscribeSelectedAudioTrack = defineBehavior({
         pendingKey: 'pendingAudioSubscriberActor',
         joinFilter: { type: 'largest-object' },
       },
-      deps
+      deps,
+      deps.state.audioSuspended
     ),
 });

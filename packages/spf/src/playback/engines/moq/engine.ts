@@ -62,6 +62,14 @@ export interface MoqEngineState {
    * on resume.
    */
   mediaSuspended?: boolean;
+  /**
+   * Adapter-written autoplay-policy gate: set when playback begins
+   * without a user gesture while the AudioContext is suspended (autoplay).
+   * The audio subscribe behavior releases its subscription while set —
+   * video plays on the renderer self-clock — and the adapter clears it
+   * once a resume() settles, rejoining audio at the live edge.
+   */
+  audioSuspended?: boolean;
   /** Consumer-set target latency in seconds (input slot). */
   targetLatency?: number;
   measuredLatency?: number;

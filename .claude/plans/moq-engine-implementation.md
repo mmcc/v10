@@ -293,6 +293,11 @@ different `moqt://` URL to test another deployment.
   matrix across other moq-dev/relay implementations.
 - Golden byte traces from real peers (tests currently round-trip
   against our own codec + in-memory fakes).
-- Safari WebCodecs coverage probe; autoplay-gate UX.
+- Safari WebCodecs coverage probe; Safari-device verification of the
+  autoplay gesture unlock. (Autoplay itself landed in-repo:
+  `<simple-moq-video autoplay>` starts video on the self-clock and defers
+  the audio subscription behind the engine's `audioSuspended` gate until
+  the first user gesture resumes the AudioContext — verified against
+  headless Chromium's strict autoplay policy.)
 - GOAWAY migration, CMSF/DRM.
 - §6 prototype (2): MediaStreamTrackGenerator bridge comparison.

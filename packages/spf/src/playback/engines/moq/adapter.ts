@@ -64,12 +64,21 @@ export interface MoqMediaProps {
   preload: '' | 'none' | 'metadata' | 'auto';
   /** Target latency in seconds. */
   targetLatency: number | undefined;
+  /**
+   * Begin playback as soon as a source is set, without waiting for
+   * `play()`. Autoplay policy still gates the audio clock: outside a user
+   * gesture the AudioContext cannot resume, so video starts on the
+   * renderer self-clock with the audio subscription deferred
+   * (`state.audioSuspended`) until the first resume() settles.
+   */
+  autoplay: boolean;
 }
 
 export const moqMediaDefaultProps: MoqMediaProps = {
   src: '',
   preload: '',
   targetLatency: undefined,
+  autoplay: false,
 };
 
 export interface MoqMediaAPI extends MoqMediaProps {
@@ -110,6 +119,13 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     #signals!: MoqEngineSignals;
     #src = moqMediaDefaultProps.src;
     #preload: MoqMediaProps['preload'] = moqMediaDefaultProps.preload;
+    #autoplay = moqMediaDefaultProps.autoplay;
+    /**
+     * The spec's can-autoplay flag, inverted: one autoplay attempt per
+     * load cycle, and none once playback was ever started or paused
+     * explicitly — a later `autoplay = true` must not restart playback.
+     */
+    #autoplayAttempted = false;
     readonly #createAudioContext: () => MoqAudioContext;
     #audioContext: MoqAudioContext | undefined;
     #volume = 1;
@@ -152,7 +168,12 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // source's already-scheduled audio keeps playing audibly while
       // `paused` reports true.
       this.#audioContext?.suspend().catch(() => {});
+      // A new load cycle re-arms autoplay (the spec's load algorithm resets
+      // the can-autoplay flag) and clears the old source's audio deferral.
+      this.#autoplayAttempted = false;
+      this.#signals.state.audioSuspended.set(undefined);
       this.#signals.state.presentation.set(value ? { url: value } : undefined);
+      if (this.#autoplay) this.#attemptAutoplay();
     }
 
     get preload(): MoqMediaProps['preload'] {
@@ -172,6 +193,48 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       this.#signals.state.targetLatency.set(value);
     }
 
+    get autoplay(): boolean {
+      return this.#autoplay;
+    }
+
+    set autoplay(value: boolean) {
+      this.#autoplay = value;
+      if (value) this.#attemptAutoplay();
+    }
+
+    /**
+     * The autoplay procedure: begin playback without a user gesture.
+     * Playback intent applies in full (`paused` false + load gate open) so
+     * video renders on the self-clock immediately, but a suspended
+     * AudioContext cannot resume outside a gesture — mark audio deferred
+     * (`audioSuspended`) so the audio subscription waits, and let whichever
+     * resume() settles first clear it (`play()`, attach() alignment, or the
+     * queued resume below).
+     */
+    #attemptAutoplay(): void {
+      if (!this.#src || this.#autoplayAttempted) return;
+      this.#autoplayAttempted = true;
+      if (!this.paused) return;
+      this.#signals.state.paused.set(false);
+      this.#signals.state.loadActivated.set(true);
+      const audioContext = this.#audioContext;
+      if (!audioContext) {
+        // No context until attach(); its alignment resume owns the unlock.
+        this.#signals.state.audioSuspended.set(true);
+        return;
+      }
+      if (audioContext.state !== 'suspended') return;
+      this.#signals.state.audioSuspended.set(true);
+      // Chromium queues a pre-gesture resume() and settles it on the first
+      // user activation, so this is both an immediate start attempt and an
+      // unlock signal. Engines that reject instead (Safari) stay deferred
+      // until a host gesture path calls play().
+      audioContext
+        .resume()
+        .then(() => this.#signals.state.audioSuspended.set(undefined))
+        .catch(() => {});
+    }
+
     attach(surface: HTMLCanvasElement): void {
       this.#signals.context.renderSurface.set(surface);
       const audioContext = (this.#audioContext ??= this.#createAudioContext());
@@ -179,10 +242,16 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // outside a user gesture — starts 'suspended' (so a play() that ran
       // before attach() would otherwise stay permanently silent), while
       // one created inside a gesture can start 'running' while paused.
-      if (!this.paused && audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {});
-      } else if (this.paused && audioContext.state === 'running') {
-        audioContext.suspend().catch(() => {});
+      if (audioContext.state === 'running') {
+        // A running context can always render audio — an autoplay deferral
+        // recorded before the context existed is already settled.
+        this.#signals.state.audioSuspended.set(undefined);
+        if (this.paused) audioContext.suspend().catch(() => {});
+      } else if (!this.paused && audioContext.state === 'suspended') {
+        audioContext
+          .resume()
+          .then(() => this.#signals.state.audioSuspended.set(undefined))
+          .catch(() => {});
       }
       this.#signals.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
     }
@@ -216,6 +285,9 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     }
 
     async play(): Promise<void> {
+      // Explicit playback settles autoplay for this load cycle (the spec
+      // clears the can-autoplay flag once playback starts).
+      this.#autoplayAttempted = true;
       // The engine-side pause gate: renderers hold their playout rate at 0
       // while set, which is what actually freezes video-only playback.
       this.#signals.state.paused.set(false);
@@ -236,9 +308,17 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
           throw error;
         }
       }
+      // Reached with the context running (resumed above or never blocked):
+      // any standing autoplay deferral of the audio subscription is over.
+      // Pre-attach (no context yet) the deferral must survive — attach()'s
+      // alignment resume owns the unlock there.
+      if (this.#audioContext) this.#signals.state.audioSuspended.set(undefined);
     }
 
     pause(): void {
+      // Pausing settles autoplay too (spec: pause() clears can-autoplay) —
+      // toggling `autoplay` on later must not restart a paused player.
+      this.#autoplayAttempted = true;
       this.#signals.state.paused.set(true);
       this.#audioContext?.suspend().catch(() => {});
     }
