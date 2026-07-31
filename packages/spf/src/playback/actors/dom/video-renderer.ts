@@ -13,7 +13,10 @@
  *
  * The clock is injected (`getClockTimeUs`): the audio renderer owns the
  * master clock when audio plays; without one the renderer self-anchors to
- * its first decoded frame and advances by wall time × `getPlaybackRate()`.
+ * its first decoded frame — or to `getJoinAnchorUs()`, the live edge —
+ * and advances by wall time × `getPlaybackRate()`. Either way the backlog
+ * behind the anchor is decoded in order and dropped late, so joining at
+ * the edge fast-forwards through it instead of skipping its keyframe.
  *
  * Track switches are keyframe-gated: `setTrack` swaps the frame source and
  * decoder config, and decode resumes only from the next keyframe-led
@@ -56,6 +59,15 @@ export interface CreateVideoRendererOptions extends VideoRendererConfig {
   getClockTimeUs?: () => number | undefined;
   /** Playout rate for the self-clock (latency nudges). Default 1. */
   getPlaybackRate?: () => number;
+  /**
+   * **Join at the live edge.** Media timestamp the *self-clock* should
+   * anchor at instead of the frame it would otherwise anchor on — at join,
+   * and again across a catch-up discontinuity. Frames behind it are still
+   * decoded in order from their keyframe and then dropped late, so the
+   * backlog fast-forwards rather than replaying. Ignored while a master
+   * clock is supplied: that clock already carries the anchor.
+   */
+  getJoinAnchorUs?: () => number | undefined;
 }
 
 type RendererMessage =
@@ -209,6 +221,17 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     }
   };
 
+  /**
+   * Where the self-clock should start from `fallbackUs`: the join anchor
+   * when it sits ahead (the live edge is further on than this frame), the
+   * frame itself otherwise. Never moves the clock backwards — a buffer
+   * shallower than the target latency is already at the edge.
+   */
+  const anchorTimestampUs = (fallbackUs: number): number => {
+    const joinUs = options.getJoinAnchorUs?.();
+    return joinUs !== undefined && joinUs > fallbackUs ? joinUs : fallbackUs;
+  };
+
   const clockTimeUs = (): number | undefined => {
     const master = options.getClockTimeUs?.();
     if (master !== undefined) return master;
@@ -216,7 +239,7 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     if (!selfAnchor) {
       const first = decoded[0];
       if (!first) return undefined;
-      selfAnchor = { timestampUs: first.timestamp, wallMs: performance.now(), rate };
+      selfAnchor = { timestampUs: anchorTimestampUs(first.timestamp), wallMs: performance.now(), rate };
     } else if (rate !== selfAnchor.rate) {
       // Re-anchor at the current clock value: the new rate scales time
       // from now on, not the whole interval since the original anchor.
@@ -235,8 +258,11 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     // arriving live frames would present them mid-pause.
     const next = decoded[0];
     if (rate !== 0 && next && next.timestamp - clock > DISCONTINUITY_THRESHOLD_US) {
-      selfAnchor = { timestampUs: next.timestamp, wallMs: performance.now(), rate };
-      return next.timestamp;
+      // The catch-up skip that produced the jump landed on a group start,
+      // still up to one GOP behind the live edge — re-place the anchor.
+      const timestampUs = anchorTimestampUs(next.timestamp);
+      selfAnchor = { timestampUs, wallMs: performance.now(), rate };
+      return timestampUs;
     }
     return clock;
   };

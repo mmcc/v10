@@ -22,6 +22,14 @@
  * re-point on subscriber-actor swaps — which is the moment a
  * make-before-break handoff completes; the renderer's keyframe gate
  * handles the decoder reconfiguration.
+ *
+ * Both also own the **playout anchor**: with `latency.joinAtEdge` set they
+ * hand each renderer the live edge of its own jitter buffer (newest
+ * buffered − target latency) as the point playout should start from, at
+ * join and after every catch-up skip. The controller in `sync-latency`
+ * steers latency once playout is running; the anchor is what decides
+ * where "running" begins, which is why it lives here — the renderers own
+ * the clocks — rather than in the controller.
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
@@ -29,6 +37,7 @@ import { createMachineReactor } from '../../../core/reactors/create-machine-reac
 import { computed, peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import { toAudioDecoderConfig, toVideoDecoderConfig } from '../../../media/moq/codec-mapping';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
+import { joinAnchorUs, resolveTargetLatencySeconds } from '../../../media/moq/timeline';
 import {
   type AudioContextLike,
   type AudioRendererActor,
@@ -36,6 +45,7 @@ import {
 } from '../../actors/dom/audio-renderer';
 import { createVideoRendererActor, type VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
+import { DEFAULT_LATENCY_CONTROL_CONFIG, type LatencyControlConfig } from '../sync-latency';
 
 // =============================================================================
 // Shared state/context shapes
@@ -43,6 +53,8 @@ import type { TrackSubscriberActor } from '../../actors/track-subscriber';
 
 export interface MoqRendererState {
   playoutRate?: number;
+  /** Consumer-set target latency in seconds; the anchor's distance from the live edge. */
+  targetLatency?: number;
   /**
    * Adapter-written pause flag; `undefined` means playing. Gates the
    * renderers' playout rate to 0 — the video self-clock re-anchors on rate
@@ -65,6 +77,35 @@ export interface MoqRendererContext {
 
 const CLOCK_PUBLISH_INTERVAL_MS = 100;
 
+export interface MoqRendererConfig {
+  /** Shared with `syncLatency`: `joinAtEdge` + the target the anchor is placed against. */
+  latency?: Partial<LatencyControlConfig>;
+}
+
+/**
+ * The live edge of `subscriberSignal`'s jitter buffer, `targetLatency`
+ * back: where playout should anchor. `undefined` disables edge anchoring —
+ * the knob is off, there is no subscriber, or nothing has arrived yet.
+ */
+function makeJoinAnchor(
+  subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
+  targetLatencySignal: ReadonlySignal<number | undefined>,
+  latency: LatencyControlConfig
+): (() => number | undefined) | undefined {
+  if (!latency.joinAtEdge) return undefined;
+  return () => {
+    const subscriber = peek(subscriberSignal);
+    const newestTimestampUs = subscriber?.snapshot.get().context.newestTimestampUs;
+    if (newestTimestampUs === undefined) return undefined;
+    const targetSeconds = resolveTargetLatencySeconds(
+      peek(targetLatencySignal),
+      subscriber?.track.moq.targetLatency,
+      latency.defaultTargetLatency
+    );
+    return joinAnchorUs(newestTimestampUs, targetSeconds);
+  };
+}
+
 // =============================================================================
 // Audio
 // =============================================================================
@@ -72,9 +113,11 @@ const CLOCK_PUBLISH_INTERVAL_MS = 100;
 function setupAudioRendererSetup({
   state,
   context,
+  config,
 }: {
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
+    targetLatency: ReadonlySignal<number | undefined>;
     currentTime: Signal<number | undefined>;
   };
   context: {
@@ -84,7 +127,9 @@ function setupAudioRendererSetup({
     /** Read-only, for the video-only clock fallback below. */
     videoRendererActor: ReadonlySignal<VideoRendererActor | undefined>;
   };
+  config?: MoqRendererConfig;
 }): Reactor<'preconditions-unmet' | 'renderer-active' | 'destroying' | 'destroyed'> {
+  const latencyConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
   const derivedStateSignal = computed(() =>
     context.audioContext.get() ? ('renderer-active' as const) : ('preconditions-unmet' as const)
   );
@@ -105,6 +150,7 @@ function setupAudioRendererSetup({
               // infinite clock segment (duration ÷ 0) and sources whose
               // `playbackRate` stays 0 after resume — a permanent stall.
               getPlaybackRate: () => peek(state.playoutRate) ?? 1,
+              getJoinAnchorUs: makeJoinAnchor(context.audioSubscriberActor, state.targetLatency, latencyConfig),
             });
             context.audioRendererActor.set(renderer);
             return () => {
@@ -155,7 +201,7 @@ function setupAudioRendererSetup({
  * const reactor = setupAudioRenderer.setup({ state, context });
  */
 export const setupAudioRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'currentTime'],
+  stateKeys: ['playoutRate', 'targetLatency', 'currentTime'],
   contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupAudioRendererSetup,
 });
@@ -167,9 +213,11 @@ export const setupAudioRenderer = defineBehavior({
 function setupVideoRendererSetup({
   state,
   context,
+  config,
 }: {
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
+    targetLatency: ReadonlySignal<number | undefined>;
     paused: ReadonlySignal<boolean | undefined>;
   };
   context: {
@@ -178,7 +226,9 @@ function setupVideoRendererSetup({
     audioRendererActor: ReadonlySignal<AudioRendererActor | undefined>;
     videoRendererActor: Signal<VideoRendererActor | undefined>;
   };
+  config?: MoqRendererConfig;
 }): Reactor<'preconditions-unmet' | 'renderer-active' | 'destroying' | 'destroyed'> {
+  const latencyConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
   const derivedStateSignal = computed(() =>
     context.renderSurface.get() ? ('renderer-active' as const) : ('preconditions-unmet' as const)
   );
@@ -200,6 +250,9 @@ function setupVideoRendererSetup({
             // re-anchoring makes rate 0 hold exactly and resume from the
             // hold point.
             getPlaybackRate: () => (peek(state.paused) ? 0 : (peek(state.playoutRate) ?? 1)),
+            // Only consulted on the self-clock path: with audio present the
+            // master clock already carries the edge anchor.
+            getJoinAnchorUs: makeJoinAnchor(context.videoSubscriberActor, state.targetLatency, latencyConfig),
           });
           context.videoRendererActor.set(renderer);
           return () => {
@@ -229,7 +282,7 @@ function setupVideoRendererSetup({
  * const reactor = setupVideoRenderer.setup({ state, context });
  */
 export const setupVideoRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'paused'],
+  stateKeys: ['playoutRate', 'targetLatency', 'paused'],
   contextKeys: ['renderSurface', 'videoSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupVideoRendererSetup,
 });

@@ -121,7 +121,7 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
   quality?: Partial<QualityConfig>;
   /** Arrival-timing estimator tuning (`trackMoqBandwidth`). */
   moqBandwidth?: Partial<BandwidthConfig>;
-  /** Latency-controller tuning (`syncLatency`). */
+  /** Latency tuning: the controller (`syncLatency`) plus the renderers' join-at-edge anchor. */
   latency?: Partial<LatencyControlConfig>;
   /**
    * Continuous pause duration, in seconds, before media subscriptions

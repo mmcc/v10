@@ -13,6 +13,10 @@
  * Rate nudges from the latency controller apply as `playbackRate` on the
  * scheduled sources (a ±5% nudge is a barely audible pitch shift).
  *
+ * Where the schedule *starts* is `getJoinAnchorUs`: with one supplied the
+ * clock anchors at the live edge and the buffered backlog is discarded,
+ * instead of anchoring at the oldest replayed group and playing all of it.
+ *
  * TODO(audio-worklet): replace source-node scheduling with an
  * AudioWorklet ring buffer for tighter jitter control and clean rate
  * adjustment; the actor surface (frame source in, master clock out) is
@@ -61,6 +65,15 @@ export interface CreateAudioRendererOptions {
   scheduleMargin?: number;
   /** Decode/schedule cadence in ms. Default 10. */
   tickIntervalMs?: number;
+  /**
+   * **Join at the live edge.** Media timestamp the schedule should start
+   * at while it has no anchor — at join, and again after a catch-up skip.
+   * Buffered audio older than it is discarded rather than played: audio
+   * cannot be fast-forwarded the way video can without pitch artifacts.
+   * `undefined` (the default, and whatever the caller returns before any
+   * frame has arrived) anchors at the oldest buffered frame instead.
+   */
+  getJoinAnchorUs?: () => number | undefined;
 }
 
 type RendererMessage =
@@ -127,6 +140,8 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   let destroyed = false;
   /** Timestamp of the last chunk fed to the decoder, for discontinuity detection. */
   let lastEnqueuedUs: number | undefined;
+  /** The schedule has no anchor yet: the next one should be placed at the live edge. */
+  let needsJoinAnchor = true;
 
   /**
    * One scheduled buffer's context-time span mapped to media time. The
@@ -174,7 +189,37 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   const closeDecoder = (): void => {
     if (decoder && decoder.state !== 'closed') decoder.close();
     decoder = null;
+    // A fresh decoder starts a fresh input timeline: the next chunk fed is
+    // not a jump within the old one, so it must not re-trigger the
+    // discontinuity restart that closed this decoder.
+    lastEnqueuedUs = undefined;
     stopAll();
+  };
+
+  /**
+   * Discard buffered audio older than the join anchor, so the schedule
+   * starts at the live edge rather than at the oldest group the relay
+   * replayed. Video decode-forwards its backlog; audio cannot (pitch), so
+   * the backlog is dropped unheard.
+   *
+   * Anything already scheduled belongs to the pre-anchor timeline, so a
+   * landed drop closes the decoder — the jumped-to audio then anchors
+   * fresh instead of being butt-joined after a matching stretch of
+   * scheduled silence, which would keep exactly the latency the drop shed.
+   */
+  const dropToJoinAnchor = (): void => {
+    const anchorUs = options.getJoinAnchorUs?.();
+    if (anchorUs === undefined || !source) return;
+    let dropped = 0;
+    for (let next = source.peek(); next && next.timestampUs < anchorUs; next = source.peek()) {
+      source.dequeue();
+      dropped++;
+    }
+    // Nothing behind the edge (yet): a relay's group replay arrives as a
+    // burst, so stay armed — the buffer's live edge may still be moving.
+    if (dropped === 0) return;
+    needsJoinAnchor = false;
+    closeDecoder();
   };
 
   const scheduleAudioData = (data: AudioData): void => {
@@ -246,6 +291,10 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
         (decoder?.decodeQueueSize ?? 0) < MAX_PENDING_DECODES &&
         (segments[segments.length - 1]?.endCtx ?? 0) - audioContext.currentTime < scheduleMargin * 4
       ) {
+        // Only while the schedule has no anchor to disturb: in steady state
+        // the latency controller owns depth corrections (rate nudges inside
+        // its deadband), and dropping audio here would preempt them.
+        if (needsJoinAnchor && segments.length === 0) dropToJoinAnchor();
         const next = source.peek();
         if (!next) return;
         // FFmpeg-backed audio decoders rebase output timestamps by frame
@@ -255,6 +304,11 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
         // independently decodable, so a restart is glitch-free).
         if (lastEnqueuedUs !== undefined && next.timestampUs - lastEnqueuedUs > DISCONTINUITY_THRESHOLD_US) {
           closeDecoder();
+          // The catch-up skip that produced the jump landed on a group
+          // start, still up to one GOP behind the live edge — re-place the
+          // anchor before feeding the jumped-to timeline.
+          needsJoinAnchor = true;
+          continue;
         }
         const active = ensureDecoder();
         // An errored decoder is closed but still referenced — stop pulling
@@ -296,7 +350,7 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       const missingConfig = nextSource !== null && nextConfig === null;
       source = missingConfig ? null : nextSource;
       decoderConfig = nextConfig;
-      lastEnqueuedUs = undefined;
+      needsJoinAnchor = true;
       closeDecoder();
       if (missingConfig) {
         inner.send({

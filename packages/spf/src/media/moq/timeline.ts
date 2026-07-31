@@ -121,3 +121,30 @@ export function estimateLatencySeconds(frameTimestampUs: number, nowEpochMs: num
 export function bufferDepthSeconds(newestTimestampUs: number, playoutTimestampUs: number): number {
   return Math.max(0, (newestTimestampUs - playoutTimestampUs) / MICROSECONDS_PER_SECOND);
 }
+
+/**
+ * Target latency in seconds, resolved across the layers allowed to state
+ * one: consumer input wins, then the track catalog's `targetLatency`
+ * (milliseconds, msf-01 §5.2.8), then the controller default. Shared by
+ * the latency controller and the renderers so both aim at one number.
+ */
+export function resolveTargetLatencySeconds(
+  consumerTargetSeconds: number | undefined,
+  catalogTargetMs: number | undefined,
+  defaultTargetSeconds: number
+): number {
+  if (consumerTargetSeconds !== undefined) return consumerTargetSeconds;
+  if (catalogTargetMs !== undefined) return catalogTargetMs / 1000;
+  return defaultTargetSeconds;
+}
+
+/**
+ * Media timestamp playout should join a jitter buffer at:
+ * `targetLatencySeconds` behind the newest buffered frame. A relay replays
+ * several recent groups to every joining subscriber, so anchoring at the
+ * oldest buffered frame instead parks playout that whole replay behind the
+ * live edge.
+ */
+export function joinAnchorUs(newestTimestampUs: number, targetLatencySeconds: number): number {
+  return newestTimestampUs - targetLatencySeconds * MICROSECONDS_PER_SECOND;
+}

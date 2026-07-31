@@ -21,6 +21,11 @@
  * falling back to the selected track's catalog `targetLatency`
  * (milliseconds, msf-01 §5.2.8), then `config.defaultTargetLatency`.
  *
+ * `LatencyControlConfig` spans two layers: this behavior steers playout,
+ * and the renderers (`setup-moq-renderers`) place the playout anchor from
+ * `joinAtEdge` + the same target. Both read the one config so they cannot
+ * aim at different numbers.
+ *
  * Evaluation is periodic (`entry` interval) rather than per-frame: depth
  * changes ~30-60×/s and reacting to every sample would thrash; the
  * half-second cadence matches the rates being controlled.
@@ -29,7 +34,7 @@ import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
-import { bufferDepthSeconds } from '../../media/moq/timeline';
+import { bufferDepthSeconds, resolveTargetLatencySeconds } from '../../media/moq/timeline';
 import type { TrackSubscriberActor } from '../actors/track-subscriber';
 
 export type PlayoutState = 'stable' | 'nudging' | 'catching-up';
@@ -64,6 +69,13 @@ export interface LatencyControlConfig {
   catchUpThreshold: number;
   /** Controller evaluation cadence in milliseconds. */
   intervalMs: number;
+  /**
+   * Anchor playout at the live edge (newest buffered − target) instead of
+   * at the oldest buffered frame — on join, and again after a catch-up
+   * skip. Read by the renderers, not by this behavior; see
+   * `setup-moq-renderers`.
+   */
+  joinAtEdge: boolean;
 }
 
 export const DEFAULT_LATENCY_CONTROL_CONFIG: LatencyControlConfig = {
@@ -72,6 +84,7 @@ export const DEFAULT_LATENCY_CONTROL_CONFIG: LatencyControlConfig = {
   rateNudge: 0.05,
   catchUpThreshold: 3,
   intervalMs: 500,
+  joinAtEdge: true,
 };
 
 type FsmState = 'inactive' | 'controlling';
@@ -105,13 +118,12 @@ function setupSyncLatency({
     return bufferDepthSeconds(buffer.newestTimestampUs, buffer.oldestTimestampUs);
   };
 
-  const targetSeconds = (subscriber: TrackSubscriberActor | undefined): number => {
-    const stateTarget = state.targetLatency.get();
-    if (stateTarget !== undefined) return stateTarget;
-    const catalogTargetMs = subscriber?.track.moq.targetLatency;
-    if (catalogTargetMs !== undefined) return catalogTargetMs / 1000;
-    return controlConfig.defaultTargetLatency;
-  };
+  const targetSeconds = (subscriber: TrackSubscriberActor | undefined): number =>
+    resolveTargetLatencySeconds(
+      state.targetLatency.get(),
+      subscriber?.track.moq.targetLatency,
+      controlConfig.defaultTargetLatency
+    );
 
   const evaluate = (): void => {
     // The audio buffer is the master-clock side; prefer it as the
