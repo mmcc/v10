@@ -523,6 +523,181 @@ export interface MediaConfigCapability {
 }
 
 // ----------------------------------------
+// Publish (publisher-only)
+// ----------------------------------------
+
+/**
+ * Lifecycle of an outbound publish session.
+ *
+ * - `idle` — no session; `publish()` starts one.
+ * - `connecting` — transport/session setup is in flight.
+ * - `live` — the session is established and media is being published.
+ * - `stopping` — an orderly shutdown (unpublish or server GOAWAY) is
+ *   draining; a new `publish()` must wait for `idle`.
+ * - `error` — the session failed; `publishError` holds the cause and
+ *   `publish()` may retry.
+ */
+export type MediaPublishSessionState = 'idle' | 'connecting' | 'live' | 'stopping' | 'error';
+
+export interface MediaPublishEvents {
+  publishstatechange: EventLike;
+}
+
+export interface MediaPublishCapability {
+  /** Publish endpoint URL (e.g. a MoQ relay's WebTransport URL). */
+  publishEndpoint: string;
+  /** Namespace/path the media is published under at the endpoint. */
+  publishNamespace: string;
+  /** Current publish session lifecycle. Fires `publishstatechange`. */
+  readonly publishState: MediaPublishSessionState;
+  /**
+   * Epoch milliseconds when the session last entered `live`. Held through
+   * `stopping` (so timers keep showing the elapsed session time while the
+   * shutdown drains) and `NaN` once the session settles on `idle` or
+   * `error`. Re-read on `publishstatechange`.
+   */
+  readonly publishStartedAt: number;
+  /** The failure that moved `publishState` to `error`, if any. */
+  readonly publishError: ErrorLike | null;
+  /**
+   * Start publishing. Resolves when the session is `live`; rejects when
+   * the attempt fails or is abandoned by `unpublish()` (`play()`-like).
+   * Rejects immediately when its preconditions are unmet: a publish
+   * endpoint must be configured and an active capture source must exist
+   * (`captureState` is `active`) — it never waits for either to appear.
+   * Calling it again while `publishState` is `error` tears the failed
+   * session down, starts a fresh attempt, and settles on that attempt's
+   * outcome.
+   */
+  publish(): Promise<void>;
+  /** Stop publishing and tear the session down. */
+  unpublish(): void;
+}
+
+// ----------------------------------------
+// Capture (publisher-only)
+// ----------------------------------------
+
+/** Which kind of media source feeds capture. */
+export type MediaCaptureSourceKind = 'camera' | 'screen';
+
+/**
+ * Lifecycle of the local capture pipeline.
+ *
+ * - `idle` — no source selected; nothing captured yet.
+ * - `acquiring` — a source is being acquired (usually a permission prompt).
+ * - `active` — tracks are live and previewable.
+ * - `denied` — the user (or platform policy) refused access.
+ * - `ended` — the source ended outside our control (device unplugged,
+ *   screen share stopped from browser UI).
+ */
+export type MediaCaptureState = 'idle' | 'acquiring' | 'active' | 'denied' | 'ended';
+
+export interface MediaCaptureSourceEvents {
+  capturesourcechange: EventLike;
+  capturestatechange: EventLike;
+  capturestreamchange: EventLike;
+}
+
+export interface MediaCaptureSourceCapability {
+  /**
+   * The selected capture source. Setting a kind acquires it (prompting for
+   * permission as needed); setting `null` releases capture entirely.
+   * Switching kinds re-acquires. Fires `capturesourcechange`.
+   */
+  captureSource: MediaCaptureSourceKind | null;
+  /** Current capture lifecycle. Fires `capturestatechange`. */
+  readonly captureState: MediaCaptureState;
+  /**
+   * The live capture stream while `captureState` is `active`, else `null`.
+   * Fires `capturestreamchange`. Exposed for consumers that must read
+   * tracks directly (e.g. an audio level meter) — high-frequency data
+   * should never round-trip through state.
+   */
+  readonly captureStream: MediaStreamLike | null;
+}
+
+/**
+ * Structural stand-in for the DOM `MediaStream` — keeps this contract
+ * DOM-free. (Not to be confused with {@link MediaStreamType}, which
+ * classifies live vs on-demand playback.)
+ */
+export interface MediaStreamLike {
+  readonly id: string;
+  getAudioTracks(): { enabled: boolean }[];
+  getVideoTracks(): { enabled: boolean }[];
+}
+
+/** One selectable capture input device. */
+export interface MediaCaptureDeviceInfo {
+  readonly deviceId: string;
+  readonly kind: 'videoinput' | 'audioinput';
+  /** Human-readable name; empty until the user grants device permission. */
+  readonly label: string;
+}
+
+export interface MediaCaptureDevicesEvents {
+  capturedeviceschange: EventLike;
+}
+
+export interface MediaCaptureDevicesCapability {
+  /** Known capture input devices. Fires `capturedeviceschange`. */
+  readonly captureDevices: readonly MediaCaptureDeviceInfo[];
+  /**
+   * Selected camera; empty string defers to the platform default. Hosts
+   * must fire `capturedeviceschange` when a selection changes — consumers
+   * re-read selections from that event.
+   */
+  videoInputDeviceId: string;
+  /** Selected microphone; empty string defers to the platform default. */
+  audioInputDeviceId: string;
+}
+
+export interface MediaCaptureToggleEvents {
+  capturetogglechange: EventLike;
+}
+
+export interface MediaCaptureToggleCapability {
+  /**
+   * Whether outgoing video is muted. Muting disables the track (black
+   * frames) without stopping capture or encoding.
+   */
+  cameraMuted: boolean;
+  /** Whether outgoing audio is muted (silence without stopping capture). */
+  micMuted: boolean;
+}
+
+/** Point-in-time health counters for an active publish session. */
+export interface MediaPublishStats {
+  /** Encoded video frames per second over the last sample window. */
+  readonly encodedFps: number;
+  /** Outgoing video bitrate in bits per second; `NaN` when unknown. */
+  readonly videoBitrate: number;
+  /** Outgoing audio bitrate in bits per second; `NaN` when unknown. */
+  readonly audioBitrate: number;
+  /** Frames dropped before encoding (capture or encoder backpressure). */
+  readonly droppedFrames: number;
+  /** Whole groups abandoned because the transport fell behind. */
+  readonly droppedGroups: number;
+  /** Total bytes handed to the transport this session. */
+  readonly bytesSent: number;
+  /** Active subscriptions at the relay, when known; `NaN` otherwise. */
+  readonly subscriberCount: number;
+}
+
+export interface MediaPublishStatsEvents {
+  publishstatsupdate: EventLike;
+}
+
+export interface MediaPublishStatsCapability {
+  /**
+   * Latest sampled stats, `null` before the first sample. Updated at a low
+   * frequency (~1 Hz); fires `publishstatsupdate`.
+   */
+  readonly publishStats: MediaPublishStats | null;
+}
+
+// ----------------------------------------
 // Base Media
 // ----------------------------------------
 

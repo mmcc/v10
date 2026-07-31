@@ -4,10 +4,15 @@ import { EMPTY_REMOTE, EMPTY_TEXT_TRACKS, EMPTY_TIME_RANGES } from './constants'
 import type {
   MediaAudioTrackCapability,
   MediaBufferCapability,
+  MediaCaptureDevicesCapability,
+  MediaCaptureSourceCapability,
+  MediaCaptureToggleCapability,
   MediaErrorCapability,
   MediaLiveCapability,
   MediaPauseCapability,
   MediaPlaybackRateCapability,
+  MediaPublishCapability,
+  MediaPublishStatsCapability,
   MediaRemotePlaybackCapability,
   MediaSeekCapability,
   MediaSourceCapability,
@@ -114,6 +119,40 @@ export function isMediaLiveCapable(value: unknown): value is MediaLiveCapability
   if (!isObject(value)) return false;
   const media = value as Record<string, unknown>;
   return !isUndefined(media.liveEdgeStart) && !isUndefined(media.targetLiveWindow);
+}
+
+export function isMediaPublishCapable(value: unknown): value is MediaPublishCapability {
+  if (!isObject(value)) return false;
+  const media = value as Record<string, unknown>;
+  return !isUndefined(media.publishState) && isFunction(media.publish) && isFunction(media.unpublish);
+}
+
+export function isMediaCaptureSourceCapable(value: unknown): value is MediaCaptureSourceCapability {
+  if (!isObject(value)) return false;
+  const media = value as Record<string, unknown>;
+  return !isUndefined(media.captureState) && 'captureSource' in media;
+}
+
+export function isMediaCaptureDevicesCapable(value: unknown): value is MediaCaptureDevicesCapability {
+  if (!isObject(value)) return false;
+  const media = value as Record<string, unknown>;
+  return (
+    !isUndefined(media.captureDevices) &&
+    !isUndefined(media.videoInputDeviceId) &&
+    !isUndefined(media.audioInputDeviceId)
+  );
+}
+
+export function isMediaCaptureToggleCapable(value: unknown): value is MediaCaptureToggleCapability {
+  if (!isObject(value)) return false;
+  const media = value as Record<string, unknown>;
+  return !isUndefined(media.cameraMuted) && !isUndefined(media.micMuted);
+}
+
+export function isMediaPublishStatsCapable(value: unknown): value is MediaPublishStatsCapability {
+  if (!isObject(value)) return false;
+  const media = value as Record<string, unknown>;
+  return 'publishStats' in media;
 }
 
 /** Framework-agnostic `NodeList`-like shape returned by `querySelectorAll`. */

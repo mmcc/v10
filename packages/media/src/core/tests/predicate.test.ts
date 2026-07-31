@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY_REMOTE, EMPTY_TEXT_TRACKS, EMPTY_TIME_RANGES } from '../constants';
-import { isMediaBufferCapable, isMediaRemotePlaybackCapable, isMediaTextTrackCapable } from '../predicate';
+import {
+  isMediaBufferCapable,
+  isMediaCaptureDevicesCapable,
+  isMediaCaptureSourceCapable,
+  isMediaCaptureToggleCapable,
+  isMediaPublishCapable,
+  isMediaPublishStatsCapable,
+  isMediaRemotePlaybackCapable,
+  isMediaTextTrackCapable,
+} from '../predicate';
 
 describe('isMediaBufferCapable', () => {
   it('rejects empty time range stubs', () => {
@@ -30,5 +39,51 @@ describe('isMediaRemotePlaybackCapable', () => {
 
   it('accepts defined non-stub remote playback', () => {
     expect(isMediaRemotePlaybackCapable({ remote: new EventTarget() })).toBe(true);
+  });
+});
+
+describe('isMediaPublishCapable', () => {
+  it('rejects playback-only media', () => {
+    expect(isMediaPublishCapable({ paused: true, play: () => Promise.resolve() })).toBe(false);
+  });
+
+  it('requires publishState plus publish/unpublish functions', () => {
+    expect(isMediaPublishCapable({ publishState: 'idle', publish: () => Promise.resolve() })).toBe(false);
+    expect(isMediaPublishCapable({ publishState: 'idle', publish: () => Promise.resolve(), unpublish: () => {} })).toBe(
+      true
+    );
+  });
+});
+
+describe('isMediaCaptureSourceCapable', () => {
+  it('accepts a null captureSource (released capture is still capable)', () => {
+    expect(isMediaCaptureSourceCapable({ captureSource: null, captureState: 'idle' })).toBe(true);
+  });
+
+  it('rejects media without capture state', () => {
+    expect(isMediaCaptureSourceCapable({ captureSource: 'camera' })).toBe(false);
+  });
+});
+
+describe('isMediaCaptureDevicesCapable', () => {
+  it('requires the device list and both selections', () => {
+    expect(isMediaCaptureDevicesCapable({ captureDevices: [] })).toBe(false);
+    expect(isMediaCaptureDevicesCapable({ captureDevices: [], videoInputDeviceId: '', audioInputDeviceId: '' })).toBe(
+      true
+    );
+  });
+});
+
+describe('isMediaCaptureToggleCapable', () => {
+  it('requires both mute flags', () => {
+    expect(isMediaCaptureToggleCapable({ cameraMuted: false })).toBe(false);
+    expect(isMediaCaptureToggleCapable({ cameraMuted: false, micMuted: false })).toBe(true);
+  });
+});
+
+describe('isMediaPublishStatsCapable', () => {
+  it('accepts a null stats value (no sample yet is still capable)', () => {
+    expect(isMediaPublishStatsCapable({ publishStats: null })).toBe(true);
+    expect(isMediaPublishStatsCapable({})).toBe(false);
   });
 });
