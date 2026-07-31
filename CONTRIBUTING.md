@@ -76,7 +76,7 @@ pnpm build:packages
 
 ### 🧰 Using mise (optional)
 
-[mise](https://mise.jdx.dev) is an alternative to Volta/NVM that manages **both** Node and pnpm from the checked-in [`mise.toml`](./mise.toml). It is entirely optional — no repo script or CI job depends on it, and the version pins it reads (`.nvmrc` for Node, `packageManager` for pnpm) are the same ones every other contributor uses.
+[mise](https://mise.jdx.dev) is an alternative to Volta/NVM that manages **both** Node and pnpm from the checked-in [`mise.toml`](./mise.toml).
 
 ```sh
 mise trust        # once per clone; mise only reads configs you've trusted
@@ -86,7 +86,7 @@ mise run setup    # pnpm install + pnpm build:packages
 
 `mise.toml` also puts the workspace's `node_modules/.bin` on `PATH`, so `biome`, `turbo`, and `tsgo` can be run directly rather than through `pnpm exec`.
 
-Everything else stays as documented below: use the `pnpm` scripts, not mise tasks. Personal additions — extra tools, environment variables — belong in a gitignored `mise.local.toml` or `.env.local`, never in the shared config.
+Everything else stays as documented below: use the `pnpm` scripts, not mise tasks. Personal additions, such as extra tools, environment variables, belong in a gitignored `mise.local.toml` or `.env.local` and not in the shared config.
 
 ### 🏗 Building & Development
 
