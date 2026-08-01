@@ -137,6 +137,36 @@ describe('suspendMediaWhilePaused', () => {
     reactor.destroy();
   });
 
+  it('falls back to the default hold when the consumer target latency is invalid', async () => {
+    const deps = makeDeps();
+    // setTimeout would coerce the NaN-derived delay to zero — an invalid
+    // consumer value must not turn every pause into an immediate suspend.
+    deps.state.targetLatency.set(Number.NaN);
+    const reactor = suspendMediaWhilePaused.setup(deps);
+
+    deps.state.paused.set(true);
+    await vi.advanceTimersByTimeAsync(DEFAULT_HOLD_MS - 100);
+    expect(deps.state.mediaSuspended.get()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(deps.state.mediaSuspended.get()).toBe(true);
+
+    reactor.destroy();
+  });
+
+  it('ignores an invalid pauseHoldSeconds and derives the hold window instead', async () => {
+    const deps = makeDeps();
+    deps.state.targetLatency.set(2); // derived hold = 2s + 3s catch-up threshold
+    const reactor = suspendMediaWhilePaused.setup({ ...deps, config: { pauseHoldSeconds: -1 } });
+
+    deps.state.paused.set(true);
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(deps.state.mediaSuspended.get()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(deps.state.mediaSuspended.get()).toBe(true);
+
+    reactor.destroy();
+  });
+
   it('never suspends when the hold deadline races a resume ahead of the effect flush', async () => {
     const deps = makeDeps();
     const reactor = suspendMediaWhilePaused.setup(deps);

@@ -128,6 +128,16 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     #autoplayAttempted = false;
     readonly #createAudioContext: () => MoqAudioContext;
     #audioContext: MoqAudioContext | undefined;
+    /**
+     * The most recent fire-and-forget `suspend()` still in flight.
+     * `state` only reports 'suspended' once the control thread
+     * acknowledges, so a play()/autoplay issued right after a src-change
+     * or pause() suspend would read a stale 'running', skip its resume,
+     * and let the late suspend silence a facade that reports playing.
+     * Resume paths treat a pending suspend as suspended and chain behind
+     * it (`#resumeAudio`).
+     */
+    #pendingSuspend: Promise<void> | undefined;
     #volume = 1;
     #muted = false;
     #gain: GainNode | undefined;
@@ -167,7 +177,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // suspending the context *is* the pause — so without this the old
       // source's already-scheduled audio keeps playing audibly while
       // `paused` reports true.
-      this.#audioContext?.suspend().catch(() => {});
+      if (this.#audioContext) this.#suspendAudio(this.#audioContext);
       // A new load cycle re-arms autoplay (the spec's load algorithm resets
       // the can-autoplay flag) and clears the old source's audio deferral.
       this.#autoplayAttempted = false;
@@ -223,16 +233,41 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
         this.#signals.state.audioSuspended.set(true);
         return;
       }
-      if (audioContext.state !== 'suspended') return;
+      if (!this.#audioContextSuspended(audioContext)) return;
       this.#signals.state.audioSuspended.set(true);
       // Chromium queues a pre-gesture resume() and settles it on the first
       // user activation, so this is both an immediate start attempt and an
       // unlock signal. Engines that reject instead (Safari) stay deferred
       // until a host gesture path calls play().
-      audioContext
-        .resume()
+      this.#resumeAudio(audioContext)
         .then(() => this.#signals.state.audioSuspended.set(undefined))
         .catch(() => {});
+    }
+
+    /**
+     * Suspend, recording the in-flight promise so resume paths can
+     * serialize behind it — see {@link #pendingSuspend}.
+     */
+    #suspendAudio(audioContext: MoqAudioContext): void {
+      const clear = (): void => {
+        if (this.#pendingSuspend === pending) this.#pendingSuspend = undefined;
+      };
+      const pending: Promise<void> = audioContext.suspend().then(clear, clear);
+      this.#pendingSuspend = pending;
+    }
+
+    /** Suspended for playback purposes: an in-flight suspend counts. */
+    #audioContextSuspended(audioContext: MoqAudioContext): boolean {
+      return this.#pendingSuspend !== undefined || audioContext.state === 'suspended';
+    }
+
+    /**
+     * Resume serialized behind any in-flight suspend, so a suspend acked
+     * after the resume decision cannot silence a playing facade.
+     */
+    #resumeAudio(audioContext: MoqAudioContext): Promise<void> {
+      const pending = this.#pendingSuspend;
+      return pending ? pending.then(() => audioContext.resume()) : audioContext.resume();
     }
 
     attach(surface: HTMLCanvasElement): void {
@@ -242,16 +277,17 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // outside a user gesture — starts 'suspended' (so a play() that ran
       // before attach() would otherwise stay permanently silent), while
       // one created inside a gesture can start 'running' while paused.
-      if (audioContext.state === 'running') {
+      if (this.#audioContextSuspended(audioContext)) {
+        if (!this.paused) {
+          this.#resumeAudio(audioContext)
+            .then(() => this.#signals.state.audioSuspended.set(undefined))
+            .catch(() => {});
+        }
+      } else if (audioContext.state === 'running') {
         // A running context can always render audio — an autoplay deferral
         // recorded before the context existed is already settled.
         this.#signals.state.audioSuspended.set(undefined);
-        if (this.paused) audioContext.suspend().catch(() => {});
-      } else if (!this.paused && audioContext.state === 'suspended') {
-        audioContext
-          .resume()
-          .then(() => this.#signals.state.audioSuspended.set(undefined))
-          .catch(() => {});
+        if (this.paused) this.#suspendAudio(audioContext);
       }
       this.#signals.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
     }
@@ -300,9 +336,9 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // Safari outside a gesture, or an already-closed context — means
       // playback did not start, so restore `paused` rather than leaving the
       // player reporting playing over a frozen clock.
-      if (this.#audioContext && this.#audioContext.state === 'suspended') {
+      if (this.#audioContext && this.#audioContextSuspended(this.#audioContext)) {
         try {
-          await this.#audioContext.resume();
+          await this.#resumeAudio(this.#audioContext);
         } catch (error) {
           this.#signals.state.paused.set(true);
           throw error;
@@ -320,7 +356,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // toggling `autoplay` on later must not restart a paused player.
       this.#autoplayAttempted = true;
       this.#signals.state.paused.set(true);
-      this.#audioContext?.suspend().catch(() => {});
+      if (this.#audioContext) this.#suspendAudio(this.#audioContext);
     }
 
     get paused(): boolean {
@@ -334,6 +370,10 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     }
 
     set volume(value: number) {
+      // NaN would survive the clamp (the infinities do not) and Web Audio
+      // rejects a non-finite gain value with a TypeError once attached —
+      // drop the write instead, keeping the documented [0, 1] invariant.
+      if (Number.isNaN(value)) return;
       this.#volume = Math.min(1, Math.max(0, value));
       this.#applyGain();
     }

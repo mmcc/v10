@@ -80,6 +80,13 @@ export const suspendMediaWhilePaused = defineBehavior({
   }) => {
     const latencyConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
 
+    // setTimeout coerces a non-finite or negative delay to "fire now", so
+    // an invalid consumer `targetLatency` or `pauseHoldSeconds` would turn
+    // every pause into an immediate suspend. Invalid values fall through
+    // to the next step of the derivation instead.
+    const isUsableHold = (seconds: number | undefined): seconds is number =>
+      seconds !== undefined && Number.isFinite(seconds) && seconds >= 0;
+
     return createMachineReactor({
       initial: 'playing' as 'playing' | 'paused',
       monitor: () => (state.paused.get() === true ? 'paused' : 'playing'),
@@ -90,9 +97,12 @@ export const suspendMediaWhilePaused = defineBehavior({
           // for exactly one continuous pause. Entry bodies are untracked,
           // so the target-latency read is pinned at pause time.
           entry: () => {
-            const holdSeconds =
-              config?.pauseHoldSeconds ??
-              (state.targetLatency.get() ?? latencyConfig.defaultTargetLatency) + latencyConfig.catchUpThreshold;
+            const configuredHold = config?.pauseHoldSeconds;
+            const targetLatency = state.targetLatency.get();
+            const holdSeconds = isUsableHold(configuredHold)
+              ? configuredHold
+              : (isUsableHold(targetLatency) ? targetLatency : latencyConfig.defaultTargetLatency) +
+                latencyConfig.catchUpThreshold;
             const timer = setTimeout(() => {
               // The resume cleanup clears this timer on the effect flush,
               // but that scheduling is framework-owned — re-check at fire

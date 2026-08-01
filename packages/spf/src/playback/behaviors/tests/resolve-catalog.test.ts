@@ -22,6 +22,14 @@ const DELTA = JSON.stringify({
   ],
 });
 
+const CATALOG_WITH_AUDIO = JSON.stringify({
+  version: '1',
+  tracks: [
+    { name: 'video', packaging: 'loc', isLive: true, role: 'video', codec: 'avc1.64001f', bitrate: 1_000_000 },
+    { name: 'audio', packaging: 'loc', isLive: true, role: 'audio', codec: 'opus' },
+  ],
+});
+
 // ============================================================================
 // Fakes
 // ============================================================================
@@ -248,6 +256,76 @@ describe('resolveCatalog', () => {
 
     await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
     expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
+
+    reactor.destroy();
+  });
+
+  // The deadline switches to live-only, but the relay may still deliver
+  // the joining fetch's replay afterwards. Those entries are older than
+  // the live catalog by construction — applying one would roll the
+  // presentation back (or land the next delta on the wrong base).
+  it('ignores fetch entries that arrive after the settle deadline', async () => {
+    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup({ ...deps, config: { catalogFetchTimeoutMs: 10 } });
+
+    await vi.waitFor(() => expect(fetches).toHaveLength(1));
+    // The deadline also cancels the replay stream outright.
+    await vi.waitFor(() => expect(fetches[0]!.cancelled).toBe(true));
+
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, CATALOG_WITH_AUDIO));
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+
+    // A straggling replay entry (an older group) must not overwrite it.
+    fetches[0]!.handlers.onEntry?.({
+      kind: 'object',
+      groupId: 5,
+      objectId: 0,
+      priority: 128,
+      properties: [],
+      payload: utf8Encode(CATALOG),
+    });
+    fetches[0]!.handlers.onEnd?.();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+    expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
+
+    reactor.destroy();
+  });
+
+  it('keeps a cancelled first fetch from settling the retry attempt early', async () => {
+    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await vi.waitFor(() => expect(fetches).toHaveLength(2));
+
+    // Cancelling a fetch does not stop callbacks already in flight — the
+    // first fetch's late settle must not flush the retry's buffer early.
+    fetches[0]!.handlers.onEnd?.();
+
+    // Still buffering: the retry's live delta waits for its own fetch...
+    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+
+    // ...and applies in order once that fetch replays the base catalog.
+    fetches[1]!.handlers.onEntry?.({
+      kind: 'object',
+      groupId: 5,
+      objectId: 0,
+      priority: 128,
+      properties: [],
+      payload: utf8Encode(CATALOG),
+    });
+    fetches[1]!.handlers.onEnd?.();
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
 
     reactor.destroy();
   });
