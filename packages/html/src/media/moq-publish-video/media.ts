@@ -19,6 +19,7 @@ export class MoqPublishVideo extends MoqPublishVideoBase {
     ...MoqPublishVideoBase.properties,
     publishEndpoint: { type: String, attribute: 'publish-endpoint', empty: '' },
     publishNamespace: { type: String, attribute: 'publish-namespace', empty: '' },
+    publishAuthToken: { type: String, attribute: 'publish-auth-token', empty: '' },
     captureSource: { type: String, attribute: 'capture-source', empty: null },
   };
 }

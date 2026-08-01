@@ -68,6 +68,11 @@ export interface MoqPublishMediaProps {
   publishEndpoint: string;
   /** Namespace/path the media is published under, `'/'`-delimited. */
   publishNamespace: string;
+  /**
+   * Bearer token sent as the MOQT `AUTHORIZATION TOKEN` parameter on the
+   * session's requests; empty string sends none.
+   */
+  publishAuthToken: string;
   /** Selected capture source kind; `null` releases capture. */
   captureSource: CaptureSourceKind | null;
   /** Selected camera; empty string defers to the platform default. */
@@ -83,6 +88,7 @@ export interface MoqPublishMediaProps {
 export const moqPublishMediaDefaultProps: MoqPublishMediaProps = {
   publishEndpoint: '',
   publishNamespace: '',
+  publishAuthToken: '',
   captureSource: null,
   videoInputDeviceId: '',
   audioInputDeviceId: '',
@@ -166,6 +172,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     #signals!: MoqPublishEngineSignals;
     #publishEndpoint = moqPublishMediaDefaultProps.publishEndpoint;
     #publishNamespace = moqPublishMediaDefaultProps.publishNamespace;
+    #publishAuthToken = moqPublishMediaDefaultProps.publishAuthToken;
     #videoInputDeviceId = moqPublishMediaDefaultProps.videoInputDeviceId;
     #audioInputDeviceId = moqPublishMediaDefaultProps.audioInputDeviceId;
     #publishStartedAt = Number.NaN;
@@ -218,12 +225,26 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
       this.#syncEndpoint();
     }
 
+    get publishAuthToken(): string {
+      return this.#publishAuthToken;
+    }
+
+    set publishAuthToken(value: string) {
+      if (value === this.#publishAuthToken) return;
+      this.#publishAuthToken = value;
+      this.#syncEndpoint();
+    }
+
     #syncEndpoint(): void {
       // No URL, no endpoint — the namespace mirror waits locally until an
       // endpoint URL makes the pair meaningful to the engine.
       this.#signals.state.endpoint.set(
         this.#publishEndpoint
-          ? { url: this.#publishEndpoint, namespace: this.#publishNamespace.split('/').filter(Boolean) }
+          ? {
+              url: this.#publishEndpoint,
+              namespace: this.#publishNamespace.split('/').filter(Boolean),
+              ...(this.#publishAuthToken ? { authToken: this.#publishAuthToken } : {}),
+            }
           : undefined
       );
     }

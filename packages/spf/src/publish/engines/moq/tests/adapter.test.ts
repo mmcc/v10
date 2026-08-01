@@ -142,6 +142,24 @@ describe('MoqPublishMediaMixin', () => {
     expect(media.engine.state.endpoint.get()).toBeUndefined();
   });
 
+  it('carries publishAuthToken into state.endpoint only when set', () => {
+    const media = makeMedia();
+
+    media.publishEndpoint = 'https://relay.example.com/moq';
+    media.publishNamespace = 'live/abc123';
+    expect(media.engine.state.endpoint.get()).not.toHaveProperty('authToken');
+
+    media.publishAuthToken = 'secret-token';
+    expect(media.engine.state.endpoint.get()).toEqual({
+      url: 'https://relay.example.com/moq',
+      namespace: ['live', 'abc123'],
+      authToken: 'secret-token',
+    });
+
+    media.publishAuthToken = '';
+    expect(media.engine.state.endpoint.get()).not.toHaveProperty('authToken');
+  });
+
   it('bridges capture facts to contract events through the real engine', async () => {
     vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([
       { deviceId: 'cam-1', kind: 'videoinput', label: 'Fake camera', groupId: 'g1' } as MediaDeviceInfo,

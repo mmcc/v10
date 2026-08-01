@@ -548,6 +548,11 @@ export interface MediaPublishCapability {
   publishEndpoint: string;
   /** Namespace/path the media is published under at the endpoint. */
   publishNamespace: string;
+  /**
+   * Bearer token presented to the endpoint when the session is
+   * established; empty string presents none.
+   */
+  publishAuthToken: string;
   /** Current publish session lifecycle. Fires `publishstatechange`. */
   readonly publishState: MediaPublishSessionState;
   /**

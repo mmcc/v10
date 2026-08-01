@@ -37,6 +37,7 @@ export class FakePublishMedia
 {
   publishEndpoint = '';
   publishNamespace = '';
+  publishAuthToken = '';
 
   #captureSource: MediaCaptureSourceKind | null = null;
   #captureState: MediaCaptureState = 'idle';

@@ -13,6 +13,7 @@ import '@app/styles.css';
 //   ?real            publish to an actual MoQ relay via <moq-publish-video>
 //   ?relay=<url>     relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>  publish namespace for ?real (default: persisted random name)
+//   ?token=<token>   auth token for ?real (MOQT AUTHORIZATION TOKEN; not persisted)
 //   ?fake            real capture, fake publish transport (FakePublishMedia)
 //   ?synthetic       stub getUserMedia with canvas+oscillator capture, so the
 //                    demo runs headlessly / without a camera
@@ -52,6 +53,8 @@ const mode: Mode = params.has('real') ? 'real' : params.has('fake') ? 'fake' : '
 const relay = params.get('relay') || localStorage.getItem(RELAY_STORAGE_KEY) || DEFAULT_RELAY;
 const namespace =
   params.get('ns') || localStorage.getItem(NS_STORAGE_KEY) || `vjs-sandbox-${Math.random().toString(36).slice(2, 8)}`;
+// Deliberately not persisted: tokens are usually short-lived credentials.
+const authToken = params.get('token') ?? '';
 
 localStorage.setItem(RELAY_STORAGE_KEY, relay);
 localStorage.setItem(NS_STORAGE_KEY, namespace);
@@ -182,6 +185,7 @@ const mediaTag = {
     id="media"
     publish-endpoint="${escapeAttr(relay)}"
     publish-namespace="${escapeAttr(namespace)}"
+    publish-auth-token="${escapeAttr(authToken)}"
   ></moq-publish-video>`,
   fake: html`<fake-publish-video id="media"></fake-publish-video>`,
 }[mode];
