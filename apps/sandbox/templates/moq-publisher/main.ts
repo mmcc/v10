@@ -11,7 +11,7 @@ import '@app/styles.css';
 //
 //   (default)        loopback: publisher + relay + player side by side
 //   ?real            publish to an actual MoQ relay via <moq-publish-video>
-//   ?relay=<url>     relay endpoint for ?real (default https://relay.quic.video)
+//   ?relay=<url>     relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>  publish namespace for ?real (default: persisted random name)
 //   ?fake            real capture, fake publish transport (FakePublishMedia)
 //   ?synthetic       stub getUserMedia with canvas+oscillator capture, so the
@@ -36,7 +36,10 @@ const button = 'rounded border border-zinc-300 bg-white px-2 py-1 hover:bg-zinc-
 
 // ── Mode + settings (query params with localStorage fallback) ───────────────
 
-const DEFAULT_RELAY = 'https://relay.quic.video';
+// The moq-dev relay the moq-relay-interop template verified speaks this
+// engine's draft (moq-transport-19). relay.quic.video looks tempting but
+// speaks kixelated's moq-lite dialect, so a draft-19 SETUP goes nowhere.
+const DEFAULT_RELAY = 'https://relay.mux.dev';
 const RELAY_STORAGE_KEY = 'moq-publisher:relay';
 const NS_STORAGE_KEY = 'moq-publisher:ns';
 /** Namespace the loopback publisher and the relay's `src` agree on. */

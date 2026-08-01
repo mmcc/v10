@@ -8,7 +8,7 @@ import '@app/styles.css';
 //
 //   (default)          real capture, fake publish transport (FakePublishMedia)
 //   ?real              publish to an actual MoQ relay via <MoqPublishVideo>
-//   ?relay=<url>       relay endpoint for ?real (default https://relay.quic.video)
+//   ?relay=<url>       relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>    publish namespace for ?real (default: random name)
 //   ?styling=tailwind  use the Tailwind skin twin
 
@@ -23,7 +23,9 @@ import { FakePublishMedia } from '../moq-publisher/fake-media';
 const params = new URLSearchParams(location.search);
 const styling: Styling = params.get('styling') === 'tailwind' ? 'tailwind' : 'css';
 const real = params.has('real');
-const relay = params.get('relay') || 'https://relay.quic.video';
+// The draft-19 relay verified by the moq-relay-interop template;
+// relay.quic.video speaks moq-lite, not this engine's draft.
+const relay = params.get('relay') || 'https://relay.mux.dev';
 const namespace = params.get('ns') || `vjs-sandbox-${Math.random().toString(36).slice(2, 8)}`;
 
 if (styling === 'css') await import('@videojs/react/publisher/skin.css');
