@@ -4,16 +4,20 @@ import { packageLocFrame } from '../../../media/moq/loc-packaging';
 import { applyMoqCatalogUpdate } from '../../../media/moq/parse-catalog';
 import { utf8Decode, utf8Encode } from '../../../network/moqt/bytes';
 import {
+  ControlMessageDeframer,
+  decodeControlMessage,
   encodeGoaway,
   encodeSetup,
   PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
+  SETUP_OPTION,
 } from '../../../network/moqt/control-messages';
 import type { MoqtObject } from '../../../network/moqt/object-stream';
 import { createMoqtSession, type MoqtSession, type PublishDone } from '../../../network/moqt/session';
 import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
 import { createTrackPublisherActor } from '../../actors/track-publisher';
 import {
+  composePublishConnectUrl,
   createMoqtPublishSession,
   createPublishSessionActor,
   type IncomingSubscribe,
@@ -503,5 +507,51 @@ describe('createPublishSessionActor', () => {
     const parameters = actor.getAuthParameters();
     expect(parameters.authorizationTokens).toHaveLength(1);
     actor.destroy();
+  });
+
+  it('sends the endpoint auth token as a SETUP Authorization Token option', async () => {
+    const pair = createTransportPair();
+    const options: { type: number }[] = [];
+    void (async () => {
+      const reader = pair.server.incomingUnidirectionalStreams.getReader();
+      const { value: control } = await reader.read();
+      const deframer = new ControlMessageDeframer();
+      const streamReader = control!.getReader();
+      const { value } = await streamReader.read();
+      for (const frame of deframer.push(value!)) {
+        const message = decodeControlMessage(frame);
+        if (message.kind === 'setup') options.push(...message.options);
+      }
+    })();
+    const actor = createPublishSessionActor({
+      endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE, authToken: 'secret' },
+      connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
+    });
+    await vi.waitFor(() => {
+      expect(options.map((option) => option.type)).toContain(SETUP_OPTION.AUTHORIZATION_TOKEN);
+    });
+    actor.destroy();
+  });
+});
+
+describe('composePublishConnectUrl', () => {
+  it('appends the token as a jwt query parameter (kixelated-relay convention)', () => {
+    expect(composePublishConnectUrl('https://relay.example.com:4443', 'tok')).toBe(
+      'https://relay.example.com:4443/?jwt=tok'
+    );
+    expect(composePublishConnectUrl('https://relay.example.com/moq?keep=1', 'tok')).toBe(
+      'https://relay.example.com/moq?keep=1&jwt=tok'
+    );
+  });
+
+  it('leaves the URL alone without a token or with an explicit jwt parameter', () => {
+    expect(composePublishConnectUrl('https://relay.example.com/moq')).toBe('https://relay.example.com/moq');
+    expect(composePublishConnectUrl('https://relay.example.com/?jwt=mine', 'tok')).toBe(
+      'https://relay.example.com/?jwt=mine'
+    );
+  });
+
+  it('returns an unparseable URL verbatim so WebTransport raises the canonical error', () => {
+    expect(composePublishConnectUrl('not a url', 'tok')).toBe('not a url');
   });
 });

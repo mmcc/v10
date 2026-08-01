@@ -242,6 +242,14 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     try {
       const control = await this.#transport.createUnidirectionalStream();
       this.#controlWriter = control.getWriter();
+      // A control stream MUST stay open for the session's lifetime
+      // (§3.3) — a peer stopping it has ended the session, so fail now
+      // rather than on the next control write or the transport's own
+      // `closed` (~an RTT later); the gap is long enough for a busy
+      // publisher to keep churning streams against a dying transport.
+      // A clean local close resolves the writer instead, and #fatal
+      // no-ops once #handleClosed has run.
+      void this.#controlWriter.closed.catch((error: unknown) => this.#fatal(error));
       const options: KeyValuePair[] = [
         {
           type: SETUP_OPTION.MOQT_IMPLEMENTATION,
@@ -579,6 +587,15 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   openUniStream(): Promise<WritableStream<Uint8Array>> {
+    // Refuse rather than touch the transport once the session is going
+    // away. Encoders keep producing frames for a beat after a peer kills
+    // the session, and hammering createUnidirectionalStream() on a
+    // torn-down WebTransport segfaults Chromium's renderer (null deref in
+    // the native session teardown race) — observed against a relay that
+    // resets every stream on protocol disagreement.
+    if (this.#destroyed || this.#closing) {
+      return Promise.reject(new Error('moq publish session: closed'));
+    }
     return this.#transport.createUnidirectionalStream();
   }
 
@@ -805,6 +822,12 @@ export function createMoqtPublishSession(
 export interface PublishEndpoint {
   url: string;
   namespace: string[];
+  /**
+   * Relay auth token, offered via every carriage relays are known to use:
+   * a `?jwt=` connect-URL query parameter (kixelated-lineage relays), a
+   * SETUP Authorization Token option (§10.3.1), and request parameters on
+   * PUBLISH / PUBLISH_NAMESPACE (§10.2).
+   */
   authToken?: string;
 }
 
@@ -858,8 +881,33 @@ export interface PublishSessionActor
   destroy(): void;
 }
 
+/**
+ * Compose the WebTransport connect URL for an endpoint. Draft-19 carries
+ * auth in SETUP options and request parameters, but kixelated-lineage
+ * relays (moq-rs / moq-lite-rs — e.g. the Varnish lab relays) only accept
+ * a JWT `?jwt=` query parameter on the connect URL and close the
+ * connection right after CLIENT_SETUP without one. Offering the token both
+ * ways keeps one endpoint config working across relay families; relays
+ * ignore carriage they don't use. An explicit `jwt` param already in the
+ * endpoint URL wins, and an unparseable URL is returned verbatim so
+ * `new WebTransport(url)` raises the canonical error.
+ */
+export function composePublishConnectUrl(url: string, authToken?: string): string {
+  if (!authToken) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.searchParams.has('jwt')) return url;
+    parsed.searchParams.set('jwt', authToken);
+    return parsed.href;
+  } catch {
+    return url;
+  }
+}
+
 function connectWebTransport(endpoint: PublishEndpoint): { transport: MoqtTransport; ready: Promise<void> } {
-  const transport = new WebTransport(endpoint.url, { protocols: [MOQT_PROTOCOL_ID] });
+  const transport = new WebTransport(composePublishConnectUrl(endpoint.url, endpoint.authToken), {
+    protocols: [MOQT_PROTOCOL_ID],
+  });
   return { transport, ready: transport.ready.then(() => undefined) };
 }
 
@@ -927,6 +975,17 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
       session = createMoqtPublishSession(transport, {
         requestTimeoutMs: options.requestTimeoutMs,
         implementationName: options.implementationName,
+        // Session-level auth (§10.3.1) — the same token also rides on every
+        // request (`getAuthParameters`) and, for kixelated-lineage relays,
+        // in the connect URL (`composePublishConnectUrl`).
+        setupOptions: endpoint.authToken
+          ? [
+              {
+                type: SETUP_OPTION.AUTHORIZATION_TOKEN,
+                value: encodeAuthTokenUseValue(0, utf8Encode(endpoint.authToken)),
+              },
+            ]
+          : undefined,
         callbacks: {
           onGoaway: (goaway) => inner.send({ type: 'goaway', goaway }),
           onPublishResult: (result) => {
