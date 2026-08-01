@@ -81,20 +81,51 @@ describe('SimpleMoqVideo', () => {
   // A declarative-shadow-DOM host already has a root at upgrade time; a bare
   // `attachShadow` throws NotSupportedError there and bricks the element.
   it('reuses an existing shadow root instead of attaching a second one', () => {
-    const tag = defineElement();
-    const host = document.createElement('div');
-    host.innerHTML = `<${tag}></${tag}>`;
-    const el = host.firstElementChild as SimpleMoqVideo;
-    // Simulate the upgrade order declarative shadow DOM produces.
-    const preAttached = document.createElement(tag) as SimpleMoqVideo;
+    // happy-dom neither parses declarative shadow DOM (`<template
+    // shadowrootmode>`) nor implements `customElements.upgrade()`, so there
+    // is no way to reproduce, through real parsing/upgrade timing, an
+    // element whose constructor observes a shadow root that already
+    // exists. Stand in for it: override `shadowRoot` on a throwaway
+    // subclass so the base constructor's `if (!this.shadowRoot)` guard
+    // sees a pre-existing root exactly as a declarative-shadow-DOM host
+    // would produce. Built before the spy below so its own `attachShadow`
+    // call isn't mistaken for one made by the element under test.
+    const existingRoot = document.createElement('div').attachShadow({ mode: 'open' });
+    const existingCanvas = document.createElement('canvas');
+    existingRoot.append(existingCanvas);
 
-    expect(el.shadowRoot?.querySelector('canvas')).not.toBeNull();
-    expect(preAttached.shadowRoot?.querySelectorAll('canvas')).toHaveLength(1);
+    const attachShadowSpy = vi.spyOn(Element.prototype, 'attachShadow');
 
-    // Never connected, so nothing disconnects them — release both engines
-    // explicitly rather than leaving live compositions behind.
+    // Baseline: proves the spy actually observes real calls — a normal
+    // element with no pre-existing root attaches exactly one.
+    const baseline = document.createElement(defineElement()) as SimpleMoqVideo;
+    expect(attachShadowSpy).toHaveBeenCalledTimes(1);
+    attachShadowSpy.mockClear();
+
+    const tag = `test-simple-moq-video-${++tagCounter}`;
+    customElements.define(
+      tag,
+      class extends SimpleMoqVideo {
+        constructor() {
+          super({ createAudioContext: () => createFakeAudioContext('suspended') });
+        }
+        override get shadowRoot() {
+          return existingRoot;
+        }
+      }
+    );
+    const el = document.createElement(tag) as SimpleMoqVideo;
+
+    expect(attachShadowSpy).not.toHaveBeenCalled();
+    expect(el.shadowRoot).toBe(existingRoot);
+    expect(existingRoot.querySelectorAll('canvas')).toHaveLength(1);
+    expect(existingRoot.querySelector('canvas')).toBe(existingCanvas);
+
+    // Neither ever connected, so nothing disconnects them — release both
+    // engines explicitly rather than leaving live compositions behind.
+    attachShadowSpy.mockRestore();
+    baseline.destroy();
     el.destroy();
-    preAttached.destroy();
   });
 
   it('keeps the engine alive across disconnect when keep-alive is set', async () => {
@@ -295,6 +326,41 @@ describe('SimpleMoqVideo', () => {
       await vi.advanceTimersByTimeAsync(500);
 
       expect(events).toEqual([]);
+    });
+
+    // A bare canvas defaults to 300×150 until something draws to it; native
+    // <video> reports 0×0 before the first frame, so the element must not
+    // expose (or announce) the canvas default as real stream dimensions.
+    it('does not fire resize before the renderer presents a frame', async () => {
+      vi.useFakeTimers();
+      const el = createConnectedElement();
+      const events = recordEvents(el, ['resize']);
+
+      expect(el.videoWidth).toBe(0);
+      expect(el.videoHeight).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(events).toEqual([]);
+      expect(el.videoWidth).toBe(0);
+      expect(el.videoHeight).toBe(0);
+    });
+
+    it('fires resize once the renderer presents its first frame', async () => {
+      vi.useFakeTimers();
+      const el = createConnectedElement();
+      const events = recordEvents(el, ['resize']);
+
+      // Simulates what the moq video-renderer actor does on first decode:
+      // it sets the canvas's backing-store dimensions to the frame size.
+      const canvas = el.shadowRoot!.querySelector('canvas')!;
+      canvas.width = 640;
+      canvas.height = 360;
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(events).toEqual(['resize']);
+      expect(el.videoWidth).toBe(640);
+      expect(el.videoHeight).toBe(360);
     });
 
     it('dispatches volumechange when volume or muted change', () => {

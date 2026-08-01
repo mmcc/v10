@@ -106,6 +106,14 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     const root = this.shadowRoot!;
     this.#canvas = root.querySelector('canvas') ?? document.createElement('canvas');
     if (!this.#canvas.isConnected) root.append(this.#canvas);
+    // A `<canvas>` defaults to 300×150 until something draws to it; native
+    // `<video>` reports 0×0 before the first frame. `#lastWidth`/`#lastHeight`
+    // start at 0 to match, so without this the first poll tick in
+    // `#connectEventBridge` sees the HTML default as a "change" and fires a
+    // `resize` exposing 300×150 as the stream's dimensions before the
+    // renderer has presented anything.
+    this.#canvas.width = 0;
+    this.#canvas.height = 0;
     applyShadowStyles(root, [SHADOW_STYLE_SHEET]);
   }
 
