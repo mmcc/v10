@@ -22,12 +22,20 @@ const AVC_CONFIG: VideoEncoderConfig = {
 };
 
 const FRAME_DURATION_US = 33_333;
+/**
+ * Deterministic wallclock for the actor's capture→wallclock timestamp
+ * rebase: outputs land at `WALLCLOCK_US + <capture delta>`.
+ */
+const WALLCLOCK_US = 1_000_000_000_000;
 
 const disposals: (() => void)[] = [];
 
 function setupActor(options?: Parameters<typeof createVideoEncoderActor>[1]) {
   const sunk: { packaged: PackagedLocFrame; meta: EncodedChunkSinkMeta }[] = [];
-  const actor = createVideoEncoderActor((packaged, meta) => sunk.push({ packaged, meta }), options);
+  const actor = createVideoEncoderActor((packaged, meta) => sunk.push({ packaged, meta }), {
+    nowUs: () => WALLCLOCK_US,
+    ...options,
+  });
   disposals.push(() => actor.destroy());
   return { actor, sunk };
 }
@@ -75,12 +83,12 @@ describe('createVideoEncoderActor', () => {
     expect(counters.encodedBytes).toBeGreaterThan(0);
     expect(counters.droppedFrames).toBe(0);
     expect(counters.keyframes).toBeGreaterThanOrEqual(2);
-    expect(counters.lastTimestampUs).toBe(9 * FRAME_DURATION_US);
+    expect(counters.lastTimestampUs).toBe(WALLCLOCK_US + 9 * FRAME_DURATION_US);
 
     expect(sunk).toHaveLength(10);
     const keyTimestamps = sunk.filter(({ meta }) => meta.keyframe).map(({ meta }) => meta.timestampUs);
-    expect(keyTimestamps).toContain(0);
-    expect(keyTimestamps).toContain(5 * FRAME_DURATION_US);
+    expect(keyTimestamps).toContain(WALLCLOCK_US);
+    expect(keyTimestamps).toContain(WALLCLOCK_US + 5 * FRAME_DURATION_US);
     for (const { packaged, meta } of sunk) {
       expect(meta.track).toBe('video');
       expect(meta.byteLength).toBe(packaged.payload.byteLength);
@@ -94,7 +102,7 @@ describe('createVideoEncoderActor', () => {
       properties: first.packaged.properties,
       payload: first.packaged.payload,
     });
-    expect(extracted).toMatchObject({ timestampUs: 0, isKey: true });
+    expect(extracted).toMatchObject({ timestampUs: WALLCLOCK_US, isKey: true });
   });
 
   it('drops delta frames under backpressure, never keyframes, and closes every frame', async () => {

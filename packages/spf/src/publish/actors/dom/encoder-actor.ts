@@ -17,6 +17,18 @@
  * encoded, dropped, mis-state, or error — the actor takes ownership at
  * `send()`.
  *
+ * Timestamp rebasing: capture pipelines stamp frames on per-source
+ * clocks (Chrome's camera, microphone, and canvas/WebAudio captures all
+ * ride different bases), but MSF receivers sync tracks against ONE media
+ * timeline — the playback engine's audio renderer owns the master clock
+ * and its video renderer presents strictly by timestamp against it, so
+ * an unrebased cross-track skew either holds every video frame "in the
+ * future" forever or destroys A/V sync. Each actor therefore anchors its
+ * first encoded frame to the shared wallclock (Unix-epoch microseconds,
+ * LOC's absent-timescale timebase) and shifts every output by that
+ * constant — intra-track pacing is capture-exact, and cross-track error
+ * is bounded by the tracks' first-frame delivery jitter.
+ *
  * The reactive snapshot context is the counters `trackPublishStats`
  * samples. Its shape is mirrored structurally by that DOM-free behavior
  * (`publish/behaviors/track-publish-stats.ts`) — keep the two identical.
@@ -107,6 +119,12 @@ export interface EncoderActorOptions {
   maxQueueDepth?: number;
   /** Encoder failures (sync throws and codec error callbacks) land here. */
   onError?: (error: unknown) => void;
+  /**
+   * Shared wallclock the first frame's timestamp is rebased onto, in
+   * microseconds since the Unix epoch (see the module doc). Injectable
+   * for deterministic tests; defaults to `Date.now() * 1000`.
+   */
+  nowUs?: () => number;
 }
 
 export const DEFAULT_MAX_QUEUE_DEPTH = 60;
@@ -132,7 +150,7 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-export function createEncoderActor<Config, Frame extends { close(): void }>(options: {
+export function createEncoderActor<Config, Frame extends { close(): void; timestamp: number }>(options: {
   track: 'video' | 'audio';
   sink: EncodedChunkSink;
   /** Builds the codec adapter; `output`/`error` are the codec callbacks. */
@@ -142,9 +160,11 @@ export function createEncoderActor<Config, Frame extends { close(): void }>(opti
   }): EncoderInstance<Config, Frame>;
   maxQueueDepth?: number;
   onError?: (error: unknown) => void;
+  nowUs?: () => number;
 }): EncoderActor<Config, Frame> {
   const { track, sink, onError } = options;
   const maxQueueDepth = options.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH;
+  const nowUs = options.nowUs ?? (() => Date.now() * 1000);
 
   type Message = EncoderMessage<Config, Frame> | InternalMessage;
   type Ctx = HandlerContext<EncoderActorUserState, EncoderActorCounters, () => SerialRunner>;
@@ -160,14 +180,32 @@ export function createEncoderActor<Config, Frame extends { close(): void }>(opti
   // consumers have no use for it, so it stays out of the snapshot.
   let latestConfig: Uint8Array | undefined;
 
+  // Capture-clock → wallclock rebase constant (see the module doc).
+  // Anchored on the first frame that reaches the codec — the input side,
+  // where delivery lags capture by less than a frame, not the output side,
+  // where codec queueing would fold encode latency into the timeline.
+  // Actor lifetime matches capture-stream lifetime (`setupEncoderActors`
+  // rebuilds actors per stream), so one anchor per clock domain holds; a
+  // mid-stream reconfigure keeps it.
+  let timestampOffsetUs: number | undefined;
+
   const instance = options.create({
     output: (chunk, metadata) => {
       const description = metadata?.decoderConfig?.description;
       if (description !== undefined) latestConfig = copyDescription(description);
       const keyframe = chunk.type === 'key';
-      const packaged = packageLocFrame(chunk, latestConfig === undefined ? {} : { config: latestConfig });
-      sink(packaged, { keyframe, timestampUs: chunk.timestamp, byteLength: chunk.byteLength, track });
-      inner?.send({ type: 'chunk-output', byteLength: chunk.byteLength, keyframe, timestampUs: chunk.timestamp });
+      // Codecs carry input timestamps through to their chunks, so the
+      // input-anchored offset applies exactly.
+      const timestampUs = chunk.timestamp + (timestampOffsetUs ?? 0);
+      const rebased: EncodedChunkLike = {
+        type: chunk.type,
+        timestamp: timestampUs,
+        byteLength: chunk.byteLength,
+        copyTo: (destination) => chunk.copyTo(destination),
+      };
+      const packaged = packageLocFrame(rebased, latestConfig === undefined ? {} : { config: latestConfig });
+      sink(packaged, { keyframe, timestampUs, byteLength: chunk.byteLength, track });
+      inner?.send({ type: 'chunk-output', byteLength: chunk.byteLength, keyframe, timestampUs });
     },
     error: (error) => {
       onError?.(error);
@@ -177,6 +215,11 @@ export function createEncoderActor<Config, Frame extends { close(): void }>(opti
 
   const configure = (msg: { config: Config }, { transition }: Ctx): void => {
     try {
+      // The cached extradata belongs to the outgoing config. WebCodecs
+      // emits a fresh `decoderConfig` on the first output after
+      // configure(), so invalidating here can never leave a keyframe
+      // carrying a stale description for the new config.
+      latestConfig = undefined;
       instance.configure(msg.config);
       transition('encoding');
     } catch (error) {
@@ -217,6 +260,7 @@ export function createEncoderActor<Config, Frame extends { close(): void }>(opti
           // Mid-stream reconfigure (WebCodecs allows it on a configured codec).
           configure,
           encode: (msg, { context, setContext }) => {
+            if (timestampOffsetUs === undefined) timestampOffsetUs = nowUs() - msg.frame.timestamp;
             const keyFrame = msg.keyFrame === true;
             if (!keyFrame && instance.encodeQueueSize > maxQueueDepth) {
               msg.frame.close();

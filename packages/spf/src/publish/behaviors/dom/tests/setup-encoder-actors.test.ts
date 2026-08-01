@@ -110,12 +110,17 @@ describe('setupEncoderActors', () => {
       expect(context.videoEncoderActor.get()).toBeDefined();
     });
     const actor = context.videoEncoderActor.get()!;
+    const beforeUs = Date.now() * 1000;
     actor.send({ type: 'encode', frame: new VideoFrame(canvas, { timestamp: 0 }), keyFrame: true });
     actor.send({ type: 'flush' });
 
     await vi.waitFor(() => {
       expect(sunk).toHaveLength(1);
     });
-    expect(sunk[0]).toMatchObject({ track: 'video', keyframe: true, timestampUs: 0 });
+    expect(sunk[0]).toMatchObject({ track: 'video', keyframe: true });
+    // The actor rebases the capture timestamp onto the shared wallclock
+    // anchored at the first encoded frame (see encoder-actor.ts).
+    expect(sunk[0]!.timestampUs).toBeGreaterThanOrEqual(beforeUs);
+    expect(sunk[0]!.timestampUs).toBeLessThanOrEqual(Date.now() * 1000);
   });
 });
