@@ -9,6 +9,7 @@ import {
   type MoqRendererConfig,
   setupAudioRenderer,
   setupVideoRenderer,
+  trackPlayoutHealth,
   trackPlayoutTime,
 } from '../setup-moq-renderers';
 
@@ -168,6 +169,28 @@ describe('setupAudioRenderer', () => {
 
     context.videoRendererActor.set(undefined);
     expect(getJoinAnchorUs!()).toBe(9_500_000);
+
+    reactor.destroy();
+  });
+
+  // The clocks and the controller must aim at one number, so the
+  // adaptive proposal has to reach the anchor too — with the same
+  // precedence the controller applies.
+  it('anchors on the adaptive target where the consumer set none', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const { state, context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    const { getJoinAnchorUs } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
+
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000, 3_000));
+    // Catalog says 3s; the adaptive proposal outranks it.
+    state.adaptiveTargetLatency.set(0.4);
+    expect(getJoinAnchorUs!()).toBe(9_600_000);
+
+    // …and an explicit consumer target outranks both.
+    state.targetLatency.set(1);
+    expect(getJoinAnchorUs!()).toBe(9_000_000);
 
     reactor.destroy();
   });
@@ -349,6 +372,23 @@ describe('setupVideoRenderer', () => {
     reactor.destroy();
   });
 
+  it('aims the self-clock at the adaptive target where the consumer set none', async () => {
+    vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
+    const { state, context, reactor } = setupSetupVideoRenderer();
+
+    await vi.waitFor(() => expect(createVideoRendererActor).toHaveBeenCalledTimes(1));
+    const { getTargetClockUs } = vi.mocked(createVideoRendererActor).mock.calls[0]![0];
+
+    context.videoSubscriberActor.set(makeFakeSubscriber(4_000_000));
+    state.adaptiveTargetLatency.set(0.2);
+    expect(getTargetClockUs!()).toBe(3_800_000);
+
+    state.targetLatency.set(1);
+    expect(getTargetClockUs!()).toBe(3_000_000);
+
+    reactor.destroy();
+  });
+
   it('supplies no target clock with joinAtEdge off', async () => {
     vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
     const { context, reactor } = setupSetupVideoRenderer({ latency: { joinAtEdge: false } });
@@ -361,5 +401,77 @@ describe('setupVideoRenderer', () => {
     expect(vi.mocked(createVideoRendererActor).mock.calls[0]![0].getTargetClockUs).toBeUndefined();
 
     reactor.destroy();
+  });
+});
+
+describe('trackPlayoutHealth', () => {
+  function setupTrackPlayoutHealth() {
+    const state = {
+      framesDropped: signal<number | undefined>(undefined),
+      audioUnderruns: signal<number | undefined>(undefined),
+    };
+    const context = {
+      audioRendererActor: signal<AudioRendererActor | undefined>(undefined),
+      videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
+    };
+    const cleanup = trackPlayoutHealth.setup({ state, context });
+    return { state, context, cleanup };
+  }
+
+  // Both counters lived inside the renderer actors and were readable from
+  // nowhere. They are the cost half of any latency decision — a lower
+  // target is only good news next to "and nothing started dropping".
+  it('publishes the renderers cost counters', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutHealth();
+
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { framesDropped: 7 } }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+    context.audioRendererActor.set({
+      snapshot: signal({ context: { underruns: 2 } }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as AudioRendererActor);
+
+    await vi.waitFor(() => expect(state.framesDropped.get()).toBe(7));
+    expect(state.audioUnderruns.get()).toBe(2);
+
+    cleanup();
+  });
+
+  // Instrumentation is not gated on adaptation being on: an A/B whose
+  // control arm reports nothing cannot be read.
+  it('runs with no renderers at all and publishes nothing', async () => {
+    const { state, cleanup } = setupTrackPlayoutHealth();
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(state.framesDropped.get()).toBeUndefined();
+    expect(state.audioUnderruns.get()).toBeUndefined();
+
+    cleanup();
+  });
+
+  it('stops publishing after cleanup', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutHealth();
+    let framesDropped = 1;
+    context.videoRendererActor.set({
+      get snapshot() {
+        return signal({ context: { framesDropped } });
+      },
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.framesDropped.get()).toBe(1));
+    cleanup();
+
+    framesDropped = 9;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(state.framesDropped.get()).toBe(1);
   });
 });

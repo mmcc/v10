@@ -89,6 +89,38 @@ describe('parseMoqCatalog', () => {
     expect(audio.moq).toMatchObject({ samplerate: 48_000, channelConfig: '2' });
   });
 
+  // §5.2.9. The publisher's own statement of the minimum buffer a
+  // receiver has to hold; the adaptive latency controller reads it as one
+  // additive term of its margin, and nothing else in the engine does.
+  it('carries the declared jitter through to the moq side-channel', () => {
+    const catalog = JSON.stringify({
+      version: '1',
+      tracks: [
+        {
+          name: 'video',
+          namespace: 'live',
+          packaging: 'loc',
+          isLive: true,
+          role: 'video',
+          codec: 'avc1.42001f',
+          width: 640,
+          height: 360,
+          framerate: 30,
+          jitter: 34,
+        },
+      ],
+    });
+    const presentation = parseMoqCatalog(catalog, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+    expect(video.moq.jitter).toBe(34);
+  });
+
+  it('leaves jitter absent when the catalog declares none', () => {
+    const presentation = parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+    expect(video.moq.jitter).toBeUndefined();
+  });
+
   it('sums dotted surround channel configurations', () => {
     expect(parseChannelConfig('2')).toBe(2);
     // `parseInt('5.1')` reads 5 and silently drops the LFE channel.

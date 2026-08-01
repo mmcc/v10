@@ -226,6 +226,36 @@ describe('SimpleMoqVideo', () => {
     expect(el.targetLatency).toBe(2);
   });
 
+  // A *request* rather than a number, so it routes to its own slot
+  // instead of widening the numeric `targetLatency` — and an element that
+  // never carries the attribute never writes the slot, leaving the engine
+  // config's own default in charge.
+  it('routes the adaptive-latency attribute to its own engine slot', () => {
+    const el = createConnectedElement();
+
+    expect((el as any).engine.state.adaptiveLatencyEnabled.get()).toBeUndefined();
+    expect(el.targetLatency).toBeUndefined();
+
+    el.toggleAttribute('adaptive-latency', true);
+    expect((el as any).engine.state.adaptiveLatencyEnabled.get()).toBe(true);
+    expect(el.targetLatency).toBeUndefined();
+
+    el.toggleAttribute('adaptive-latency', false);
+    expect((el as any).engine.state.adaptiveLatencyEnabled.get()).toBe(false);
+  });
+
+  // Precedence has to survive the element boundary: setting both is the
+  // A/B's "pin it here and tell me what adaptation would have chosen".
+  it('keeps an explicit target-latency alongside an adaptive request', () => {
+    const el = createConnectedElement();
+
+    el.toggleAttribute('adaptive-latency', true);
+    el.setAttribute('target-latency', '1.5');
+
+    expect((el as any).engine.state.adaptiveLatencyEnabled.get()).toBe(true);
+    expect((el as any).engine.state.targetLatency.get()).toBe(1.5);
+  });
+
   it('falls back to the empty preload for values outside the enumeration', () => {
     const el = createConnectedElement();
 

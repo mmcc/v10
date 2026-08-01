@@ -80,23 +80,29 @@
  * "latency controller hunting" failure mode. That is why widening is not
  * a step even though the evidence for it is acute: there is no mechanism
  * at either the clock or the nudge that can realize a step without
- * hunting, so "prompt" here means *begins immediately and monotonically*,
- * not *jumps*. The bias itself rises instantly; only its journey into the
- * published setpoint is rate-limited, and the acute case is meanwhile
- * handled by the nudge, which is already refilling at 5%.
+ * hunting, so "prompt" here means *begins at the very next evaluation and
+ * moves monotonically*, not *jumps*. The bias itself rises instantly;
+ * only its journey into the published setpoint is rate-limited, and the
+ * acute case is meanwhile handled by the nudge, already refilling at 5%.
  *
- * Narrowing is slower still (`maxNarrowRatePerSecond`, a quarter of the
- * widen rate) and both directions sit behind a Schmitt trigger sized off
- * `latency.deadband`: the setpoint does not begin moving until the
- * proposal is more than half a deadband away, and stops once it is within
- * a quarter. Without it the setpoint would creep continuously and the
- * nudge would never find a stationary thing to converge on.
+ * The two directions are deliberately asymmetric, and not only in rate:
  *
- * Adaptation also **freezes** — the published target is held, though the
- * bias keeps integrating — while `playoutState` is not `'stable'` (the
- * inner loop is mid-correction), for `freezeSeconds` after a catch-up
- * skip or an underrun, and across a subscriber handoff. Each is a moment
- * when the measurement describes the transient rather than the path.
+ * - **Widening** needs a stable inner loop and nothing else. It runs at
+ *   `maxWidenRatePerSecond`.
+ * - **Narrowing** additionally waits out `quietSeconds` since the last
+ *   failure event or subscriber handoff, and runs at
+ *   `maxNarrowRatePerSecond` — a quarter of the widen rate. `widenBias`
+ *   decays through the same gate, because relaxing the safety margin is
+ *   narrowing one step removed.
+ *
+ * Both sit behind a Schmitt trigger sized off the finest band any inner
+ * loop acts on, so the setpoint moves in occasional deliberate runs
+ * rather than creeping continuously — a creeping setpoint is one the
+ * nudge can never converge on.
+ *
+ * Adaptation stops entirely while `playoutState` is not `'stable'`: the
+ * inner loop is mid-correction, and that is the moment a moving setpoint
+ * turns into hunting.
  *
  * ## Warm-up
  *
@@ -170,11 +176,16 @@ export interface AdaptiveLatencyConfig {
   jitterSafetyFactor: number;
   /** Add the catalog's declared `jitter` (msf-01 §5.2.9) to the margin. */
   useCatalogJitter: boolean;
+  /**
+   * Late-frame drops that add up to one failure event. Underruns and
+   * catch-up skips each count as one on their own; drops need bulk.
+   */
+  dropsPerEvent: number;
   /** Seconds added to `widenBias` per failure event. */
   widenStep: number;
   /** Ceiling on `widenBias`, in seconds. */
   widenMax: number;
-  /** Seconds of `widenBias` shed per second without a failure event. */
+  /** Seconds of `widenBias` shed per second of quiet, stable playback. */
   widenDecayPerSecond: number;
   /**
    * Maximum rate the published target may *increase*, as seconds of
@@ -189,8 +200,12 @@ export interface AdaptiveLatencyConfig {
   minArrivalSamples: number;
   /** Seconds of observation required before publishing anything. */
   warmupSeconds: number;
-  /** Seconds adaptation is frozen after a failure event or a handoff. */
-  freezeSeconds: number;
+  /**
+   * Seconds of quiet required after a failure event or a subscriber
+   * handoff before the target may *narrow* again (and before
+   * `widenBias` resumes decaying). Widening is not gated by it.
+   */
+  quietSeconds: number;
 }
 
 export const DEFAULT_ADAPTIVE_LATENCY_CONFIG: AdaptiveLatencyConfig = {
@@ -209,20 +224,24 @@ export const DEFAULT_ADAPTIVE_LATENCY_CONFIG: AdaptiveLatencyConfig = {
   floorSeconds: 0.1,
   jitterSafetyFactor: 1.5,
   useCatalogJitter: true,
+  // A third of a second of dropped video at 30fps.
+  dropsPerEvent: 10,
   // One event ≈ one GOP of extra cushion. Sized to be felt, since the
   // rate limit below spreads it over several seconds anyway.
   widenStep: 0.15,
   widenMax: 1,
-  // From `widenMax` back to zero in ~50s of clean playback: long enough
-  // that a flaky minute does not evaporate between spikes.
-  widenDecayPerSecond: 0.02,
+  // From `widenMax` back to zero in ~100s of clean playback, and one
+  // `widenStep` in 15s: long enough that a flaky minute does not
+  // evaporate between spikes, and an order of magnitude slower than the
+  // step that put it there.
+  widenDecayPerSecond: 0.01,
   // Strictly below DEFAULT_LATENCY_CONTROL_CONFIG.clockSlewRate / 2 = 0.025.
   maxWidenRatePerSecond: 0.02,
   maxNarrowRatePerSecond: 0.005,
   // ~2s of 30fps video, or ~1.3s of 48kHz AAC.
   minArrivalSamples: 60,
   warmupSeconds: 3,
-  freezeSeconds: 5,
+  quietSeconds: 5,
 };
 
 export interface AdaptLatencyTargetConfig {
@@ -358,17 +377,23 @@ function setupAdaptLatencyTarget({
       : 'inactive'
   );
 
-  // Schmitt trigger bounds. Sized off the controller's own deadband so the
-  // setpoint only moves by amounts the inner loop would actually act on.
-  const engageThreshold = latency.deadband / 2;
-  const releaseThreshold = latency.deadband / 4;
+  // Schmitt-trigger bounds: the setpoint does not start moving until the
+  // proposal is at least `engageThreshold` away, and stops once inside
+  // `releaseThreshold`. Sized off the *finest* band any inner loop acts
+  // on — the self-clock's slew tolerance, or half the controller's
+  // deadband where that is tighter. A setpoint move smaller than that is
+  // invisible to every loop below and buys only churn; without the band
+  // the setpoint would creep continuously and the nudge would never have
+  // a stationary thing to converge on.
+  const engageThreshold = Math.min(latency.clockSlewTolerance, latency.deadband / 2);
+  const releaseThreshold = engageThreshold / 2;
 
   /** Per-activation controller state; reset by `entry`. */
   let widenBias = 0;
   let published: number | undefined;
   let moving = false;
   let observedSince = 0;
-  let frozenUntil = 0;
+  let quietUntil = 0;
   let lastSubscriber: TrackSubscriberActor | undefined;
   let lastEvaluatedAt = 0;
   let seenSkips = 0;
@@ -380,7 +405,7 @@ function setupAdaptLatencyTarget({
     published = undefined;
     moving = false;
     observedSince = 0;
-    frozenUntil = 0;
+    quietUntil = 0;
     lastSubscriber = undefined;
     lastEvaluatedAt = 0;
     seenSkips = 0;
@@ -411,7 +436,7 @@ function setupAdaptLatencyTarget({
       lastSubscriber = subscriber;
       if (isHandoff) {
         observedSince = now;
-        frozenUntil = now + adaptive.freezeSeconds * 1000;
+        quietUntil = now + adaptive.quietSeconds * 1000;
       }
     }
     if (!subscriber) return;
@@ -420,20 +445,28 @@ function setupAdaptLatencyTarget({
     const skips = peek(state.catchUpSkips);
     const underruns = peek(state.audioUnderruns);
     const drops = peek(state.framesDropped);
-    // Drops count, but a tenth as hard: a late frame is one dropped
-    // picture, while an underrun or a skip is audible or visible as a
-    // discontinuity. Without the discount a busy decoder would widen the
-    // target for a reason that has nothing to do with the network.
+    // An underrun or a skip is one event each — both are audible or
+    // visible discontinuities. Late-frame drops only count in bulk: a
+    // handful per window is a busy decoder rather than a starved path,
+    // and treating each one as evidence would keep the target permanently
+    // widened on a loaded machine for a reason the network never caused.
     const events =
-      counterDelta(seenSkips, skips) + counterDelta(seenUnderruns, underruns) + counterDelta(seenDrops, drops) * 0.1;
+      counterDelta(seenSkips, skips) +
+      counterDelta(seenUnderruns, underruns) +
+      Math.floor(counterDelta(seenDrops, drops) / adaptive.dropsPerEvent);
     seenSkips = skips ?? 0;
     seenUnderruns = underruns ?? 0;
     seenDrops = drops ?? 0;
 
+    const stable = peek(state.playoutState) === 'stable';
     if (events > 0) {
       widenBias = Math.min(adaptive.widenMax, widenBias + events * adaptive.widenStep);
-      frozenUntil = now + adaptive.freezeSeconds * 1000;
-    } else {
+      quietUntil = now + adaptive.quietSeconds * 1000;
+    }
+    const quiet = now >= quietUntil;
+    // The bias only bleeds off through the same gate narrowing does:
+    // relaxing the safety margin *is* narrowing, one step removed.
+    if (events === 0 && quiet && stable) {
       widenBias = Math.max(0, widenBias - elapsedSeconds * adaptive.widenDecayPerSecond);
     }
 
@@ -475,13 +508,21 @@ function setupAdaptLatencyTarget({
       return;
     }
 
-    // --- freeze gates ----------------------------------------------------
+    // --- directional gates ------------------------------------------------
     // A non-stable controller is mid-correction toward the current
-    // setpoint; moving the setpoint under it is the hunting failure.
-    if (now < frozenUntil || peek(state.playoutState) !== 'stable') return;
+    // setpoint; moving the setpoint under it is the hunting failure, in
+    // either direction.
+    if (!stable) return;
+
+    const error = proposal - published;
+    // Narrowing additionally waits out the quiet window. Widening does
+    // not: an underrun or a skip is a definite failure rather than a
+    // suspect measurement, so the response begins at the very next
+    // evaluation — it is still rate-limited, because neither the slew nor
+    // the nudge can realize a step without hunting, but it never waits.
+    if (error < 0 && !quiet) return;
 
     // --- Schmitt-triggered, rate-limited approach ------------------------
-    const error = proposal - published;
     if (!moving && Math.abs(error) > engageThreshold) moving = true;
     if (moving && Math.abs(error) <= releaseThreshold) moving = false;
     if (!moving || elapsedSeconds === 0) return;
@@ -503,6 +544,13 @@ function setupAdaptLatencyTarget({
         entry: () => {
           reset();
           observedSince = performance.now();
+          // Baseline the failure counters at activation. They are
+          // cumulative and the latency controller has usually been
+          // running for a while, so counting from zero would open with a
+          // burst of events that already happened.
+          seenSkips = state.catchUpSkips.get() ?? 0;
+          seenUnderruns = state.audioUnderruns.get() ?? 0;
+          seenDrops = state.framesDropped.get() ?? 0;
           const timer = setInterval(evaluate, adaptive.intervalMs);
           return () => {
             clearInterval(timer);

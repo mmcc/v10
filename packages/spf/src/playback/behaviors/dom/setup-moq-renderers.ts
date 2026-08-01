@@ -1,5 +1,5 @@
 /**
- * **Wire subscriber jitter buffers into the WebCodecs renderers.** Three
+ * **Wire subscriber jitter buffers into the WebCodecs renderers.** Four
  * behaviors:
  *
  * - `setupAudioRenderer` — owns `context.audioRendererActor` (created when
@@ -18,6 +18,12 @@
  *   would go silent exactly in the video-only case it exists to cover, and
  *   `syncLatency` reads `currentTime` as its setpoint, so a starved clock
  *   is a stopped controller.
+ * - `trackPlayoutHealth` — owns `state.framesDropped` and
+ *   `state.audioUnderruns`: the renderers' quality-cost counters, which
+ *   lived inside the actors and were readable from nowhere. Separate from
+ *   the clock above because it has a different consumer and a different
+ *   cadence, and always composed because instrumentation that only exists
+ *   when adaptation is on cannot measure whether adaptation helped.
  *
  * The renderers apply `state.playoutRate` (latency-controller nudges)
  * through the `getPlaybackRate` seam — gated to 0 for video while
@@ -43,11 +49,7 @@ import { createMachineReactor } from '../../../core/reactors/create-machine-reac
 import { computed, peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import { toAudioDecoderConfig, toVideoDecoderConfig } from '../../../media/moq/codec-mapping';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
-import {
-  joinAnchorUs,
-  preferredTargetLatencySeconds,
-  resolveTargetLatencySeconds,
-} from '../../../media/moq/timeline';
+import { joinAnchorUs, preferredTargetLatencySeconds, resolveTargetLatencySeconds } from '../../../media/moq/timeline';
 import {
   type AudioContextLike,
   type AudioRendererActor,

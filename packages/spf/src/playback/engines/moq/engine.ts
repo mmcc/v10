@@ -12,7 +12,7 @@ import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audi
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
-import { adaptLatencyTarget, type AdaptiveLatencyConfig } from '../../behaviors/adapt-latency-target';
+import { type AdaptiveLatencyConfig, adaptLatencyTarget } from '../../behaviors/adapt-latency-target';
 import {
   setupAudioRenderer,
   setupVideoRenderer,

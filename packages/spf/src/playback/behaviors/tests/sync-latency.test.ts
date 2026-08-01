@@ -234,6 +234,95 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
+  // Adaptive siblings. The chain above is unchanged by all of this: an
+  // absent `adaptiveTargetLatency` is the same input the resolver saw
+  // before the slot existed.
+  it('uses the adaptive target when the consumer set none', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber(2_000); // 2s catalog target
+    const deps = makeDeps(subscriber);
+    deps.state.adaptiveTargetLatency.set(0.3);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(0.35);
+    await vi.advanceTimersByTimeAsync(600);
+
+    // The adaptive proposal outranks the catalog, so 0.35s is on target
+    // rather than 1.65s short of it.
+    expect(deps.state.effectiveTargetLatency.get()).toBe(0.3);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  it('lets an explicit consumer target beat the adaptive one', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(2);
+    deps.state.adaptiveTargetLatency.set(0.2);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(2);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(deps.state.effectiveTargetLatency.get()).toBe(2);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  it('publishes the resolved target for every layer of the chain', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber(2_000);
+    const deps = makeDeps(subscriber);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(2);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.effectiveTargetLatency.get()).toBe(2); // catalog
+
+    deps.state.adaptiveTargetLatency.set(0.4);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.effectiveTargetLatency.get()).toBe(0.4); // adaptive
+
+    deps.state.targetLatency.set(1.25);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.effectiveTargetLatency.get()).toBe(1.25); // consumer
+
+    reactor.destroy();
+  });
+
+  it('publishes the default target with nothing else stated', async () => {
+    const { subscriber } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    const reactor = syncLatency.setup(deps);
+
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.effectiveTargetLatency.get()).toBe(0.5);
+
+    reactor.destroy();
+  });
+
+  it('counts catch-up skips as the cost side of the target it is holding', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    expect(deps.state.catchUpSkips.get()).toBe(0);
+
+    setBufferDepth(10);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.catchUpSkips.get()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.catchUpSkips.get()).toBe(2);
+
+    setBufferDepth(0.5);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.catchUpSkips.get()).toBe(2);
+
+    reactor.destroy();
+  });
+
   it('clears its outputs when the last subscriber goes away', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);

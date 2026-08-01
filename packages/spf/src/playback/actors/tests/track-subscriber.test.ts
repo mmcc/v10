@@ -164,6 +164,47 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  // The arrival-offset envelope is the jitter primitive the adaptive
+  // latency controller reads. The offsets themselves mix two unrelated
+  // clock epochs, so only their *spread* means anything — and the bounds
+  // have to forget, or one lucky early frame pins the estimate forever.
+  it('publishes a decaying arrival-offset envelope', () => {
+    const now = vi.spyOn(performance, 'now');
+    const { session, subscriptions } = createFakeSession();
+    now.mockReturnValue(0);
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+    const jitter = () => subscriber.snapshot.get().context.arrivalJitter!;
+
+    // Media time in microseconds, arrival in wall milliseconds, 30fps.
+    // Every frame is delivered 100ms "after" its own timestamp except
+    // frame 1, which is 40ms later still.
+    const deliver = (index: number, lateMs = 0) => {
+      now.mockReturnValue(100 + index * (1000 / 30) + lateMs);
+      handlers.onObject?.(locObject(1, index, Math.round((index * 1_000_000) / 30)));
+    };
+
+    deliver(0);
+    expect(jitter()).toEqual({ minOffsetMs: 100, maxOffsetMs: 100, sampleCount: 1 });
+
+    deliver(1, 40);
+    expect(jitter().sampleCount).toBe(2);
+    // Not exactly 40: the bounds have already relaxed over the 73ms
+    // between the two arrivals, which is the mechanism working.
+    expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeGreaterThan(38);
+    expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeLessThanOrEqual(40);
+
+    // A long run of well-behaved arrivals pulls the stale high bound back
+    // down rather than holding the spread open indefinitely — an
+    // unbounded max (or min) is what makes this class of estimate drift
+    // permanently pessimistic.
+    for (let i = 2; i < 300; i++) deliver(i);
+    expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeLessThan(5);
+
+    subscriber.destroy();
+    now.mockRestore();
+  });
+
   it('discards late objects at or behind the drain watermark', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });

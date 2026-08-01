@@ -110,6 +110,38 @@ describe('suspendMediaWhilePaused', () => {
     reactor.destroy();
   });
 
+  // The window means "the depth at which the controller starts discarding
+  // the paused buffer anyway", so it has to derive from the target the
+  // controller is actually holding — not from an input it is ignoring.
+  it('derives the hold window from the adaptive target where the consumer set none', async () => {
+    const deps = makeDeps();
+    deps.state.adaptiveTargetLatency.set(0.2); // hold = 0.2s + 3s catch-up threshold
+    const reactor = suspendMediaWhilePaused.setup(deps);
+
+    deps.state.paused.set(true);
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect(deps.state.mediaSuspended.get()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(deps.state.mediaSuspended.get()).toBe(true);
+
+    reactor.destroy();
+  });
+
+  it('keeps the consumer target ahead of the adaptive one', async () => {
+    const deps = makeDeps();
+    deps.state.targetLatency.set(2);
+    deps.state.adaptiveTargetLatency.set(0.2);
+    const reactor = suspendMediaWhilePaused.setup(deps);
+
+    deps.state.paused.set(true);
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(deps.state.mediaSuspended.get()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(deps.state.mediaSuspended.get()).toBe(true);
+
+    reactor.destroy();
+  });
+
   it('honors an explicit pauseHoldSeconds over the derived default', async () => {
     const deps = makeDeps();
     deps.state.targetLatency.set(10);

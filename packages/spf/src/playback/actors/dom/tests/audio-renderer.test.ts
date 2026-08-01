@@ -102,6 +102,38 @@ describe('createAudioRendererActor', () => {
     renderer.destroy();
   });
 
+  // The clock deliberately hides an underrun — it clamps to the segment
+  // end and resumes seamlessly, which is right for presentation and
+  // useless as a signal. This counter is the only direct evidence that a
+  // target latency is below what the path sustains.
+  it('counts the rising edge of a schedule that ran dry', async () => {
+    const frames = await encodeTestFrames(3);
+    const audioContext = createFakeAudioContext();
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05, tickIntervalMs: 1 });
+
+    // Nothing scheduled is not an underrun: at join there is no schedule
+    // to starve.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(renderer.snapshot.get().context.underruns).toBe(0);
+
+    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+    expect(renderer.snapshot.get().context.underruns).toBe(0);
+
+    // The source is exhausted; walk the hardware clock past everything
+    // scheduled and the schedule is dry.
+    audioContext.currentTime = 60;
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.underruns).toBe(1), { timeout: 5000 });
+
+    // Still dry several ticks later — one starvation, one increment.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(renderer.snapshot.get().context.underruns).toBe(1);
+
+    renderer.destroy();
+  });
+
   it('clearing the track resets to idle and drops the anchor', async () => {
     const frames = await encodeTestFrames(2);
     const audioContext = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
