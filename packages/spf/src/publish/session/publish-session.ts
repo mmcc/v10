@@ -30,7 +30,6 @@ import { StreamReader, utf8Encode } from '../../network/moqt/bytes';
 import {
   type ControlMessage,
   decodeControlMessage,
-  encodeAuthTokenUseValue,
   encodeGoaway,
   encodePublish,
   encodePublishDone,
@@ -823,10 +822,10 @@ export interface PublishEndpoint {
   url: string;
   namespace: string[];
   /**
-   * Relay auth token, offered via every carriage relays are known to use:
-   * a `?jwt=` connect-URL query parameter (kixelated-lineage relays), a
-   * SETUP Authorization Token option (§10.3.1), and request parameters on
-   * PUBLISH / PUBLISH_NAMESPACE (§10.2).
+   * Relay auth token, sent as a `?jwt=` query parameter on the connect
+   * URL — the only carriage the known relay fleet (moq-lite-rs lineage)
+   * accepts; see `authParameters` in the session actor for why the
+   * draft-19 AUTHORIZATION_TOKEN structures stay off the wire for now.
    */
   authToken?: string;
 }
@@ -882,15 +881,13 @@ export interface PublishSessionActor
 }
 
 /**
- * Compose the WebTransport connect URL for an endpoint. Draft-19 carries
- * auth in SETUP options and request parameters, but kixelated-lineage
- * relays (moq-rs / moq-lite-rs — e.g. the Varnish lab relays) only accept
- * a JWT `?jwt=` query parameter on the connect URL and close the
- * connection right after CLIENT_SETUP without one. Offering the token both
- * ways keeps one endpoint config working across relay families; relays
- * ignore carriage they don't use. An explicit `jwt` param already in the
- * endpoint URL wins, and an unparseable URL is returned verbatim so
- * `new WebTransport(url)` raises the canonical error.
+ * Compose the WebTransport connect URL for an endpoint. moq-lite-rs
+ * lineage relays (Mux's relay-rs fleet, the Varnish lab relays)
+ * authenticate with a JWT `?jwt=` query parameter on the connect URL and
+ * close the connection right after CLIENT_SETUP when auth is required
+ * but missing. An explicit `jwt` param already in the endpoint URL wins,
+ * and an unparseable URL is returned verbatim so `new WebTransport(url)`
+ * raises the canonical error.
  */
 export function composePublishConnectUrl(url: string, authToken?: string): string {
   if (!authToken) return url;
@@ -957,10 +954,16 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
     }
   );
 
-  const authParameters = (): MessageParameters => {
-    if (!endpoint.authToken) return {};
-    return { authorizationTokens: [encodeAuthTokenUseValue(0, utf8Encode(endpoint.authToken))] };
-  };
+  // The endpoint token rides ONLY in the connect URL's `?jwt=` query
+  // parameter (`composePublishConnectUrl`). The known relay fleet
+  // (kixelated-lineage moq-lite-rs, incl. Mux's relay-rs deployments)
+  // does not support draft-19 AUTHORIZATION_TOKEN structures yet and
+  // hard-closes the session (`5 "invalid value"`) when one appears in a
+  // request's parameters — verified against sjc.relay.mux.global: the
+  // same PUBLISH_NAMESPACE gets REQUEST_OK bare and a session kill with
+  // the parameter attached. Re-attach via this seam (encodeAuthTokenUseValue,
+  // §10.2.2) once relays accept draft-19 auth.
+  const authParameters = (): MessageParameters => ({});
 
   const start = async () => {
     let transport: MoqtTransport | undefined;
@@ -975,17 +978,6 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
       session = createMoqtPublishSession(transport, {
         requestTimeoutMs: options.requestTimeoutMs,
         implementationName: options.implementationName,
-        // Session-level auth (§10.3.1) — the same token also rides on every
-        // request (`getAuthParameters`) and, for kixelated-lineage relays,
-        // in the connect URL (`composePublishConnectUrl`).
-        setupOptions: endpoint.authToken
-          ? [
-              {
-                type: SETUP_OPTION.AUTHORIZATION_TOKEN,
-                value: encodeAuthTokenUseValue(0, utf8Encode(endpoint.authToken)),
-              },
-            ]
-          : undefined,
         callbacks: {
           onGoaway: (goaway) => inner.send({ type: 'goaway', goaway }),
           onPublishResult: (result) => {

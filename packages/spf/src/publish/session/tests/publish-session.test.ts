@@ -498,20 +498,12 @@ describe('createPublishSessionActor', () => {
     actor.destroy();
   });
 
-  it('attaches the endpoint auth token to request parameters', () => {
+  // The known relay fleet (moq-lite-rs lineage) hard-closes the session on
+  // draft-19 AUTHORIZATION_TOKEN structures — the token must ride ONLY in
+  // the connect URL (`composePublishConnectUrl`) until relays support them.
+  it('keeps draft-19 auth structures off the wire even with an endpoint token', async () => {
     const pair = createTransportPair();
-    const actor = createPublishSessionActor({
-      endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE, authToken: 'secret' },
-      connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
-    });
-    const parameters = actor.getAuthParameters();
-    expect(parameters.authorizationTokens).toHaveLength(1);
-    actor.destroy();
-  });
-
-  it('sends the endpoint auth token as a SETUP Authorization Token option', async () => {
-    const pair = createTransportPair();
-    const options: { type: number }[] = [];
+    const setupOptions: { type: number }[] = [];
     void (async () => {
       const reader = pair.server.incomingUnidirectionalStreams.getReader();
       const { value: control } = await reader.read();
@@ -520,16 +512,18 @@ describe('createPublishSessionActor', () => {
       const { value } = await streamReader.read();
       for (const frame of deframer.push(value!)) {
         const message = decodeControlMessage(frame);
-        if (message.kind === 'setup') options.push(...message.options);
+        if (message.kind === 'setup') setupOptions.push(...message.options);
       }
     })();
     const actor = createPublishSessionActor({
       endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE, authToken: 'secret' },
       connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
     });
+    expect(actor.getAuthParameters()).toEqual({});
     await vi.waitFor(() => {
-      expect(options.map((option) => option.type)).toContain(SETUP_OPTION.AUTHORIZATION_TOKEN);
+      expect(setupOptions.length).toBeGreaterThan(0);
     });
+    expect(setupOptions.map((option) => option.type)).not.toContain(SETUP_OPTION.AUTHORIZATION_TOKEN);
     actor.destroy();
   });
 });
