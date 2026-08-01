@@ -101,7 +101,7 @@ describe('setupTrackPublishers', () => {
     });
   });
 
-  it('destroys the publishers and clears the slots when the encodings go away', async () => {
+  it('keeps the publishers through an encodings gap and destroys them when the session goes away', async () => {
     const { actor } = makeSessionActor();
     const { state, context } = setupBehavior();
 
@@ -113,7 +113,17 @@ describe('setupTrackPublishers', () => {
     });
     const publisher = context.videoTrackPublisher.get()!;
 
+    // A source switch clears the encodings while it re-probes — the
+    // PUBLISHed tracks must ride that out (destroying one sends
+    // PUBLISH_DONE, ending the track for every subscriber).
     state.activeEncodings.set(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(context.videoTrackPublisher.get()).toBe(publisher);
+    expect(context.catalogTrackPublisher.get()).toBeDefined();
+    expect(publisher.snapshot.get().value).toBe('publishing');
+
+    // The cluster is keyed on the session: losing it tears everything down.
+    context.publishSessionActor.set(undefined);
     await vi.waitFor(() => {
       expect(context.videoTrackPublisher.get()).toBeUndefined();
       expect(context.catalogTrackPublisher.get()).toBeUndefined();

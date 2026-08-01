@@ -106,10 +106,19 @@ function openPublishSessionSetup({
 }): Reactor<OpenPublishSessionFsmState | 'destroying' | 'destroyed'> {
   return createMachineReactor<OpenPublishSessionFsmState>({
     initial: 'no-session',
-    monitor: () =>
-      state.endpoint.get() && state.publishActivated.get() === true && state.captureStatus.get() === 'active'
-        ? 'session-open'
-        : 'no-session',
+    monitor: () => {
+      if (!state.endpoint.get() || state.publishActivated.get() !== true) return 'no-session';
+      const captureStatus = state.captureStatus.get();
+      if (captureStatus === 'active') return 'session-open';
+      // A capture-source switch re-acquires through 'acquiring'. An
+      // already-open session must ride that out: closing it would send
+      // PUBLISH_DONE for every track and drop the transport — a relay
+      // treats that as the END of the broadcast, freezing every
+      // subscriber. The session only *opens* on 'active', and 'idle' /
+      // 'denied' / 'ended' still close it. `peek`: our own effect writes
+      // the actor slot.
+      return captureStatus === 'acquiring' && peek(context.publishSessionActor) ? 'session-open' : 'no-session';
+    },
     states: {
       'no-session': {},
 

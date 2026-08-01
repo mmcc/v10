@@ -38,6 +38,7 @@
     { "path": "packages/spf/src/publish/actors" },
     { "path": "packages/spf/src/publish/actors/dom" },
     { "path": "packages/spf/src/publish/session" },
+    { "path": "packages/spf/src/publish/tests" },
     { "path": "packages/spf/src/publish/engines/moq" },
 
     { "path": "packages/html" },
