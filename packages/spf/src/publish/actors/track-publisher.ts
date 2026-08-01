@@ -155,6 +155,24 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
     onError?.(error);
   };
 
+  /**
+   * FIN the cell's stream without holding the publish chain. By the time
+   * a group FINs, every one of its writes has been accepted by the
+   * transport, so what `fin()` still waits for is the peer acknowledging
+   * the stream close — peer latency, not send backpressure. The cell
+   * therefore leaves the backpressure queue immediately, and the FIN
+   * settles detached, landing on the counters (or the drop path) when it
+   * does. Serializing that settlement into the runner is what previously
+   * capped a group-per-frame track at ~1 group per close round trip and
+   * let the drop policy shred it (~80% of audio groups against a real
+   * relay at ~50 ms close latency).
+   */
+  const finishCell = (cell: GroupCell): void => {
+    removeCell(cell);
+    const fin = cell.writer?.fin() ?? Promise.resolve();
+    fin.then(() => inner?.send({ type: 'group-finished' }), failCell(cell));
+  };
+
   const scheduleOpen = (cell: GroupCell, frame: Extract<TrackPublisherMessage, { type: 'frame' }>): void => {
     const objectId = 0;
     runner
@@ -175,11 +193,7 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
           });
           await cell.writer.writeObject({ objectId, properties: frame.properties, payload: frame.payload });
           inner?.send({ type: 'object-written', bytes: frame.payload.length, timestampUs: frame.timestampUs });
-          if (groupPerFrame) {
-            await cell.writer.fin();
-            removeCell(cell);
-            inner?.send({ type: 'group-finished' });
-          }
+          if (groupPerFrame) finishCell(cell);
         })
       )
       .catch(failCell(cell));
@@ -205,10 +219,10 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
     runner
       .schedule(
         new Task(async (signal) => {
+          // Queued behind the group's writes so the FIN can only start
+          // once they were accepted; the settlement itself is detached.
           if (signal.aborted || cell.aborted) return;
-          await cell.writer?.fin();
-          removeCell(cell);
-          inner?.send({ type: 'group-finished' });
+          finishCell(cell);
         })
       )
       .catch(failCell(cell));

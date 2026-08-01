@@ -8,11 +8,12 @@
  * through the `config.selectEncoderConfig` strategy seam (default: first
  * supported per kind).
  *
- * Default ladder: H.264 constrained-baseline (`avc1.42E01F`, `avc`
- * bitstream format so the avcC extradata rides LOC keyframes) with a VP8
- * fallback, at the track resolution/framerate; Opus at the track sample
- * rate with a 48 kHz fallback. A `config.video.codec` prepends itself to
- * the ladder rather than replacing it.
+ * Default ladder: H.264 constrained-baseline (`avc1.42E01F`, `annexb`
+ * bitstream format so keyframes are self-describing — see
+ * `videoCandidates`) with a VP8 fallback, at the track
+ * resolution/framerate; Opus at the track sample rate with a 48 kHz
+ * fallback. A `config.video.codec` prepends itself to the ladder rather
+ * than replacing it.
  *
  * Single-positive-state reactor mirroring `acquireCaptureSource`: the
  * probe runs in the positive state's `effects:` so a captureTracks
@@ -84,9 +85,16 @@ function videoCandidates(track: CaptureTrackFacts, video: ProbeEncoderSupportCon
     framerate: video?.frameRate ?? track.frameRate ?? 30,
     bitrate: video?.bitrate ?? DEFAULT_VIDEO_BITRATE,
     latencyMode: 'realtime',
-    // `avc` format keeps parameter sets in `decoderConfig.description`
-    // (LOC Config carriage) instead of in-band Annex B.
-    ...(codec.startsWith('avc1') ? { avc: { format: 'avc' as const } } : {}),
+    // `annexb` keeps H.264 parameter sets in-band with every keyframe,
+    // so the stream decodes with no out-of-band `description` at all.
+    // The alternative (`avc` format + avcC via the LOC Config property)
+    // is undecodable through relays that do not forward unknown object
+    // extension properties — relay.mux.dev rewrites Timestamp/Timescale
+    // and drops Config, leaving subscribers no parameter sets (verified
+    // on the wire, 2026-08-01). A receiver configured without a
+    // description expects Annex B per the WebCodecs AVC registration,
+    // which is exactly what this produces.
+    ...(codec.startsWith('avc1') ? { avc: { format: 'annexb' as const } } : {}),
   }));
 }
 

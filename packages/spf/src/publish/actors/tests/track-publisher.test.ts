@@ -195,6 +195,68 @@ describe('createTrackPublisherActor', () => {
     publisher.destroy();
   });
 
+  it('sustains group-per-frame publishing when stream close acks lag behind the frame cadence', async () => {
+    // Models a real relay leg: writes are accepted immediately (send
+    // buffer), but close() only settles ~10 frame intervals later (the
+    // QUIC stream close acknowledgment round trip — measured ~54 ms
+    // against relay.mux.dev, vs a 20 ms opus frame cadence). That
+    // settlement is peer latency, not backpressure: it must neither
+    // serialize the next group's stream work behind it nor count toward
+    // `maxQueuedGroups`. Before the fix this decimated audio (~80% of
+    // groups reset by the drop policy) while in-memory transports, whose
+    // close() settles instantly, showed nothing.
+    const streams: FakeUniStream[] = [];
+    const openUniStream = async (): Promise<WritableStream<Uint8Array>> => {
+      const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+      streams.push(record);
+      return new WritableStream<Uint8Array>({
+        write(chunk) {
+          record.chunks.push(chunk);
+        },
+        close() {
+          return new Promise<void>((resolve) => {
+            setTimeout(() => {
+              record.closed = true;
+              resolve();
+            }, 50);
+          });
+        },
+        abort(reason) {
+          record.aborted = true;
+          record.abortReason = reason;
+        },
+      });
+    };
+    const publisher = createTrackPublisherActor({ openUniStream, trackAlias: 3, groupPerFrame: true });
+
+    for (let i = 0; i < 10; i++) {
+      const frame = locFrame(i * 20_000, [i]);
+      publisher.send({
+        type: 'frame',
+        payload: frame.payload,
+        properties: frame.properties,
+        keyframe: false,
+        timestampUs: i * 20_000,
+      });
+      // Frame pacing: several frames arrive while earlier closes are
+      // still settling.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    await vi.waitFor(() => {
+      expect(counters(publisher)).toMatchObject({
+        openedGroups: 10,
+        publishedGroups: 10,
+        publishedObjects: 10,
+        droppedGroups: 0,
+        queuedGroups: 0,
+      });
+    });
+    expect(streams).toHaveLength(10);
+    expect(streams.every((stream) => stream.closed && !stream.aborted)).toBe(true);
+    publisher.destroy();
+  });
+
   it('ignores delta frames before the first keyframe', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, trackAlias: 1 });
