@@ -13,7 +13,7 @@ import {
 import type { BidirectionalStreamLike } from '../../../../network/moqt/request-stream';
 import type { MoqtTransport } from '../../../../network/moqt/session';
 import type { CreateMoqTransport } from '../../../actors/moq-session';
-import { createMoqEngine, type MoqEngineSignals } from '../engine';
+import { createMoqEngine, type MoqEngineConfig, type MoqEngineSignals } from '../engine';
 
 // ============================================================================
 // In-memory relay: speaks real draft-19 bytes over a fake WebTransport.
@@ -377,6 +377,152 @@ describe('createMoqEngine', () => {
     await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined());
 
     await engine.destroy();
+  });
+
+  // A draft-19 relay replays its recent groups to every joining subscriber,
+  // so the jitter buffer starts seconds deep. `latency.joinAtEdge` decides
+  // whether playout starts at the front of that replay or at its edge.
+  //
+  // The canvas is attached after the replay lands so the assertion is about
+  // the anchor and not about how fast the burst arrives; the controller is
+  // parked (`intervalMs`) so its own catch-up cannot do the work instead.
+  async function playReplayedGroups(latency: MoqEngineConfig['latency']) {
+    const relay = createFakeRelay();
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      latency: { intervalMs: 60_000, ...latency },
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+    await vi.waitFor(
+      () => {
+        expect(relay.subscriptions.map((s) => s.message.trackName)).toContain('video');
+      },
+      { timeout: 5000 }
+    );
+
+    // 3s of replayed groups, one keyframe each.
+    const videoSubscription = relay.subscriptions.find((s) => s.message.trackName === 'video')!;
+    const keyframe = await encodeKeyframe();
+    const GROUP_COUNT = 30;
+    const GROUP_DURATION_US = 100_000;
+    for (let group = 0; group < GROUP_COUNT; group++) {
+      relay.openUni(
+        encodeLocObjectStream(videoSubscription.trackAlias, group + 1, 0, group * GROUP_DURATION_US, keyframe)
+      );
+    }
+    const newestUs = (GROUP_COUNT - 1) * GROUP_DURATION_US;
+    const subscriber = () => signals.context.videoSubscriberActor.get()!;
+    await vi.waitFor(() => expect(subscriber().snapshot.get().context.newestTimestampUs).toBe(newestUs), {
+      timeout: 5000,
+    });
+
+    signals.context.renderSurface.set(document.createElement('canvas'));
+    const presentedUs = () => signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+    await vi.waitFor(() => expect(presentedUs()).toBeDefined(), { timeout: 5000 });
+
+    return { engine, firstPresentedUs: presentedUs()!, newestUs, targetSeconds: latency?.defaultTargetLatency ?? 0.5 };
+  }
+
+  it('joins a replayed backlog at the live edge', async () => {
+    const { engine, firstPresentedUs, newestUs, targetSeconds } = await playReplayedGroups({});
+
+    // Within the target latency (plus the group the anchor lands inside) of
+    // the newest frame the relay served — not at the front of the replay.
+    expect(firstPresentedUs).toBeGreaterThan(newestUs - targetSeconds * 1_000_000 - 100_000);
+    expect(firstPresentedUs).toBeLessThanOrEqual(newestUs);
+
+    await engine.destroy();
+  });
+
+  it('joins at the oldest replayed group with joinAtEdge off', async () => {
+    const { engine, firstPresentedUs } = await playReplayedGroups({ joinAtEdge: false });
+
+    // The pre-change behavior, kept reachable: playout starts at the front
+    // of the replay and works through all 3s of it in real time.
+    expect(firstPresentedUs).toBe(0);
+
+    await engine.destroy();
+  });
+
+  // Adaptation is additive and selectable: the engine composes the
+  // behavior unconditionally, and switching it off is what every test
+  // above already exercises.
+  it('publishes the resolved target latency while adaptation is off', async () => {
+    const relay = createFakeRelay();
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      latency: { intervalMs: 20 },
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+    await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined(), { timeout: 5000 });
+
+    // Nothing exposed the *resolved* target before this slot: every other
+    // one is an input to the resolution.
+    await vi.waitFor(() => expect(signals.state.effectiveTargetLatency.get()).toBe(0.5), { timeout: 5000 });
+    expect(signals.state.adaptiveTargetLatency.get()).toBeUndefined();
+
+    signals.state.targetLatency.set(1.25);
+    await vi.waitFor(() => expect(signals.state.effectiveTargetLatency.get()).toBe(1.25), { timeout: 5000 });
+
+    await engine.destroy();
+  });
+
+  it('composes the adaptive controller when it is switched on', async () => {
+    const relay = createFakeRelay();
+    let signals!: MoqEngineSignals;
+    const engine = createMoqEngine({
+      createMoqTransport: relay.createMoqTransport,
+      latency: { intervalMs: 20 },
+      adaptiveLatency: { enabled: true, intervalMs: 80, warmupSeconds: 0, minArrivalSamples: 1 },
+      onSignalsReady: (refs) => {
+        signals = refs;
+      },
+    });
+
+    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    signals.state.loadActivated.set(true);
+    await vi.waitFor(() => expect(relay.subscriptions.map((sub) => sub.message.trackName)).toContain('video'), {
+      timeout: 5000,
+    });
+
+    // A handful of real arrivals is all the envelope needs here
+    // (`minArrivalSamples: 1`, `warmupSeconds: 0`).
+    const videoSubscription = relay.subscriptions.find((sub) => sub.message.trackName === 'video')!;
+    const keyframe = await encodeKeyframe();
+    for (let group = 0; group < 5; group++) {
+      relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, group + 1, 0, group * 100_000, keyframe));
+    }
+
+    // The proposal is whatever the floor plus the observed spread comes
+    // to, and it wins over the default because no consumer target was set.
+    await vi.waitFor(() => expect(signals.state.adaptiveTargetLatency.get()).toBeDefined(), { timeout: 5000 });
+    expect(signals.state.effectiveTargetLatency.get()).toBe(signals.state.adaptiveTargetLatency.get());
+
+    // …and an explicit consumer target still wins over it.
+    signals.state.targetLatency.set(2);
+    await vi.waitFor(() => expect(signals.state.effectiveTargetLatency.get()).toBe(2), { timeout: 5000 });
+
+    await engine.destroy();
+  });
+
+  // A control loop that never settles is the one bug that cannot be
+  // attributed after the fact, so an unfollowable setpoint rate is a
+  // startup throw rather than a silent clamp.
+  it('refuses a configuration whose control loops cannot settle', () => {
+    expect(() => createMoqEngine({ adaptiveLatency: { maxWidenRatePerSecond: 0.1 } })).toThrow(RangeError);
+    expect(() => createMoqEngine({ adaptiveLatency: { intervalMs: 100 } })).toThrow(RangeError);
   });
 
   it('subscribes to the catalog with the largest-object filter', async () => {

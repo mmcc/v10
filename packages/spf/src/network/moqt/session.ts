@@ -284,6 +284,11 @@ interface FetchRecord extends RequestRecordBase {
   groupOrder: 'ascending' | 'descending';
 }
 
+interface TrackStatusRecord extends RequestRecordBase {
+  requestId: number;
+  handlers: TrackStatusHandlers;
+}
+
 interface AliasWaiter {
   resolve(record: SubscriptionRecord | undefined): void;
   timer: ReturnType<typeof setTimeout>;
@@ -303,6 +308,7 @@ class MoqtSessionImpl implements MoqtSession {
   #nextRequestId = 0; // client request IDs: even, starting at 0 (§10.1)
   #subscriptions = new Map<number, SubscriptionRecord>();
   #fetches = new Map<number, FetchRecord>();
+  #trackStatuses = new Map<number, TrackStatusRecord>();
   #aliasRoutes = new Map<number, SubscriptionRecord>();
   #aliasWaiters = new Map<number, AliasWaiter[]>();
 
@@ -389,15 +395,15 @@ class MoqtSessionImpl implements MoqtSession {
     // hear about — otherwise a dropped transport leaves subscribers pending
     // forever. A deliberate `close()` is ordinary teardown, and cancelled
     // requests already have their answer.
-    const pending = expected
-      ? []
-      : [...this.#subscriptions.values(), ...this.#fetches.values()].filter((r) => !r.settled && !r.cancelled);
-    for (const record of [...this.#subscriptions.values(), ...this.#fetches.values()]) {
+    const records = [...this.#subscriptions.values(), ...this.#fetches.values(), ...this.#trackStatuses.values()];
+    const pending = expected ? [] : records.filter((r) => !r.settled && !r.cancelled);
+    for (const record of records) {
       this.#settleRequest(record);
       record.stream?.cancel(error);
     }
     this.#subscriptions.clear();
     this.#fetches.clear();
+    this.#trackStatuses.clear();
     this.#aliasRoutes.clear();
     this.#controlWriter = undefined;
 
@@ -511,7 +517,11 @@ class MoqtSessionImpl implements MoqtSession {
 
   trackStatus(options: MoqtSubscribeOptions, handlers: TrackStatusHandlers = {}): void {
     const requestId = this.#allocateRequestId();
-    const record: RequestRecordBase = { cancelled: false, settled: false };
+    const record: TrackStatusRecord = { requestId, handlers, cancelled: false, settled: false };
+    // Tracked so session teardown fails a still-pending TRACK_STATUS the
+    // same way it fails pending subscriptions and fetches. Answered
+    // requests leave the map — nothing else arrives on their stream.
+    this.#trackStatuses.set(requestId, record);
 
     const message = encodeTrackStatus({
       requestId,
@@ -526,15 +536,20 @@ class MoqtSessionImpl implements MoqtSession {
       (msg) => {
         if (msg.kind === 'request-ok') {
           this.#settleRequest(record);
+          this.#trackStatuses.delete(requestId);
           handlers.onOk?.({ parameters: msg.parameters, trackProperties: msg.trackProperties });
           record.stream?.finWrite().catch(() => {});
         } else if (msg.kind === 'request-error') {
           this.#settleRequest(record);
+          this.#trackStatuses.delete(requestId);
           handlers.onError?.(msg);
           record.stream?.finWrite().catch(() => {});
         }
       },
-      (error) => handlers.onError?.(error)
+      (error) => {
+        this.#trackStatuses.delete(requestId);
+        handlers.onError?.(error);
+      }
     );
   }
 
@@ -574,10 +589,14 @@ class MoqtSessionImpl implements MoqtSession {
 
     const timeout = this.#config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     if (timeout > 0 && !record.settled && !record.cancelled) {
-      record.responseTimer = setTimeout(
-        () => fail(streamFailure('no response before the request timeout', REQUEST_ERROR_CODE.TIMEOUT)),
-        timeout
-      );
+      record.responseTimer = setTimeout(() => {
+        const failure = streamFailure('no response before the request timeout', REQUEST_ERROR_CODE.TIMEOUT);
+        // The stream dies with the request: left open, a late SUBSCRIBE_OK
+        // would fire onOk after onError and re-register the alias route of
+        // a subscription already reported dead.
+        record.stream?.cancel(failure);
+        fail(failure);
+      }, timeout);
     }
 
     record.stream = openRequestStream(stream, message, {

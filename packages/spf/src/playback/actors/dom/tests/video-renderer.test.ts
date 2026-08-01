@@ -271,6 +271,311 @@ describe('createVideoRendererActor', () => {
     }
   });
 
+  it('self-clock anchors at the delivery edge, decoding the backlog it does not present', async () => {
+    // 1s of replayed video buffered before the renderer starts.
+    const frames = await encodeTestFrames(30);
+    const NEWEST_US = frames[frames.length - 1]!.timestampUs;
+    const ANCHOR_US = NEWEST_US - 200_000;
+
+    const canvas = document.createElement('canvas');
+    const now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // Record what reaches the decoder, in the order it is fed.
+    const queue = [...frames];
+    const fedUs: number[] = [];
+    const source: VideoFrameSource = {
+      peek: () => queue[0],
+      dequeue: () => {
+        const frame = queue.shift();
+        if (frame) fedUs.push(frame.timestampUs);
+        return frame;
+      },
+    };
+    const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => ANCHOR_US });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    try {
+      renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+
+      // Presentation starts within a frame of the edge — never at frame 0,
+      // and without waiting out the ~1s backlog in real time (wall time is
+      // frozen, so a first-frame anchor could never get here).
+      await vi.waitFor(() => expect(presented()).toBeGreaterThan(ANCHOR_US - 2 * FRAME_DURATION_US), { timeout: 5000 });
+      await vi.waitFor(() => expect(queue).toHaveLength(0), { timeout: 5000 });
+
+      // Decode continuity: every frame was fed, in order, starting from
+      // the keyframe — the backlog is decoded and dropped, not skipped.
+      expect(fedUs).toEqual(frames.map((frame) => frame.timestampUs));
+      expect(renderer.snapshot.get().context.framesDropped).toBeGreaterThan(0);
+      expect(renderer.snapshot.get().context.status).not.toBe('error');
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('presents at the edge against a master clock that already anchored there', async () => {
+    // The production shape: audio owns the clock and anchored it at the
+    // live edge, so video's existing drop-late does the fast-forward.
+    const frames = await encodeTestFrames(30);
+    const ANCHOR_US = frames[frames.length - 1]!.timestampUs - 200_000;
+
+    const canvas = document.createElement('canvas');
+    const queue = [...frames];
+    const fedUs: number[] = [];
+    const source: VideoFrameSource = {
+      peek: () => queue[0],
+      dequeue: () => {
+        const frame = queue.shift();
+        if (frame) fedUs.push(frame.timestampUs);
+        return frame;
+      },
+    };
+    const renderer = createVideoRendererActor({ canvas, getClockTimeUs: () => ANCHOR_US });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+    await vi.waitFor(() => expect(presented()).toBeGreaterThan(ANCHOR_US - 2 * FRAME_DURATION_US), { timeout: 5000 });
+    await vi.waitFor(() => expect(queue).toHaveLength(0), { timeout: 5000 });
+
+    expect(fedUs).toEqual(frames.map((frame) => frame.timestampUs));
+    expect(renderer.snapshot.get().context.framesDropped).toBeGreaterThan(0);
+
+    renderer.destroy();
+  });
+
+  it('self-clock re-anchors at the delivery edge across a catch-up discontinuity', async () => {
+    const frames = await encodeTestFrames(6);
+    // The catch-up skip kept a keyframe-led group starting at JUMP_US and
+    // running two frames further on — the group start is not the edge.
+    const JUMP_US = 5_000_000;
+    const survivingGroup = frames
+      .slice(3)
+      .map((frame, i) => ({ ...frame, timestampUs: JUMP_US + i * FRAME_DURATION_US }));
+    const EDGE_US = JUMP_US + FRAME_DURATION_US;
+
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // The buffer's live edge, one frame back — as the behavior computes it
+    // from the subscriber's newest buffered timestamp.
+    let newestBufferedUs = 2 * FRAME_DURATION_US;
+    const queue = frames.slice(0, 3);
+    const source: VideoFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    const renderer = createVideoRendererActor({
+      canvas,
+      getTargetClockUs: () => newestBufferedUs - FRAME_DURATION_US,
+    });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    try {
+      renderer.setTrack(source, { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(presented()).toBe(FRAME_DURATION_US), { timeout: 5000 });
+
+      // The skip lands: everything before the surviving group is gone.
+      queue.push(...survivingGroup);
+      newestBufferedUs = JUMP_US + 2 * FRAME_DURATION_US;
+      // Let the clock run past the last pre-jump frame so the jump reaches it.
+      now += 50;
+
+      // Re-anchoring at the jumped-to frame would resume at the group
+      // start; the edge anchor resumes a frame short of its newest.
+      await vi.waitFor(() => expect(presented()).toBe(EDGE_US), { timeout: 5000 });
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  // The join-burst race: a relay's group replay arrives as a burst, so an
+  // anchor placed on the first read is placed against an edge that had not
+  // finished arriving. Under the old anchor-once self-clock that mistake
+  // was permanent; edge tracking walks it off.
+  it('self-clock slews onto the edge after a short initial anchor', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // A live edge advancing in real time. The burst is still arriving when
+    // the clock anchors, so the edge it sees then is 400ms short of the
+    // truth — and every later reading is 400ms ahead of the clock.
+    let shortfallUs = 0;
+    const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => now * 1000 + shortfallUs });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // The rest of the burst lands. The error is inside the >1s hard-reset
+      // path, so only the slew can reclaim it.
+      shortfallUs = 400_000;
+      // 4s of real time at the default 5% → 200ms of correction, on top of
+      // the 4s the clock advances on its own.
+      now += 4_000;
+
+      // Sampling repeatedly must not multiply the correction: the budget is
+      // per unit of real time, not per read.
+      for (let i = 0; i < 20; i++) renderer.getClockTimeUs();
+      expect(renderer.getClockTimeUs()).toBeCloseTo(4_200_000, -4);
+
+      // …and it keeps closing, rather than settling at a fixed offset.
+      now += 4_000;
+      expect(renderer.getClockTimeUs()).toBeCloseTo(8_400_000, -4);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  // The two edge-correction paths are driven by different inputs and both
+  // must survive: the slew reads `getTargetClockUs` and is rate-bounded;
+  // the hard re-anchor reads the decoded queue and jumps (covered by the
+  // discontinuity tests above, which still pass with the slew in place).
+  it('bounds the slew rather than jumping to the edge', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let targetUs = 0;
+    // 10%/s, tolerate 10ms.
+    const renderer = createVideoRendererActor({
+      canvas,
+      getTargetClockUs: () => targetUs,
+      clockSlewRate: 0.1,
+      clockSlewToleranceUs: 10_000,
+    });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // A 900ms error — under the 1s reset threshold, so the slew owns it.
+      targetUs = 900_000;
+      now += 100;
+      // 100ms elapsed × 0.1 → 10ms of correction, plus the 100ms the clock
+      // ran. Not a jump to the target.
+      expect(renderer.getClockTimeUs()).toBeCloseTo(110_000, -4);
+
+      now += 100;
+      expect(renderer.getClockTimeUs()).toBeCloseTo(220_000, -4);
+
+      // Errors inside the tolerance band are left alone — the edge advances
+      // in frame-sized steps and chasing them would be chasing noise. An
+      // edge 5ms ahead of where the clock is about to be leaves it there.
+      targetUs = 325_000;
+      now += 100;
+      expect(renderer.getClockTimeUs()).toBe(320_000);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('self-clock reclaims the latency a short pause added', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let playbackRate = 1;
+    // A live edge that keeps advancing in real time while playout holds.
+    const startWallMs = 0;
+    const renderer = createVideoRendererActor({
+      canvas,
+      getPlaybackRate: () => playbackRate,
+      getTargetClockUs: () => (now - startWallMs) * 1000,
+    });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // Pause for 500ms of wall time: the clock holds, the edge does not.
+      playbackRate = 0;
+      renderer.getClockTimeUs();
+      now += 500;
+      expect(renderer.getClockTimeUs()).toBe(0);
+
+      // On resume the clock is 500ms behind the edge — under the old
+      // anchor-once clock that offset was permanent. The slew now reclaims
+      // it at 50ms/s, so ~10s of real time closes it.
+      playbackRate = 1;
+      for (let i = 0; i < 200; i++) {
+        now += 100;
+        renderer.getClockTimeUs();
+      }
+      const edgeUs = (now - startWallMs) * 1000;
+      expect(edgeUs - renderer.getClockTimeUs()!).toBeLessThanOrEqual(50_000);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('banks no slew budget while a master clock is presenting', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let masterUs: number | undefined;
+    // An edge far behind the clock, so any banked budget shows up as a
+    // backwards jump the moment the master clock goes away.
+    const renderer = createVideoRendererActor({
+      canvas,
+      getClockTimeUs: () => masterUs,
+      getTargetClockUs: () => 0,
+    });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      // Audio takes over for 10s of wall time, then ends mid-stream.
+      masterUs = 500_000;
+      renderer.getClockTimeUs();
+      now += 10_000;
+      renderer.getClockTimeUs();
+      masterUs = undefined;
+
+      // The first self-clock read after the handover corrects by nothing —
+      // 10s of budget would have been a half-second lurch.
+      const clock = renderer.getClockTimeUs()!;
+      now += 100;
+      expect(renderer.getClockTimeUs()! - clock).toBeCloseTo(95_000, -4);
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
+  it('self-clock never runs backwards while slewing back onto the edge', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    // A stalled publisher: the edge stops moving while playout continues,
+    // so the error goes negative and the slew pulls the clock back.
+    const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => 0 });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+
+      let previous = renderer.getClockTimeUs()!;
+      for (let i = 0; i < 20; i++) {
+        now += 100;
+        const clock = renderer.getClockTimeUs()!;
+        // Bounded by a *fraction* of elapsed real time, so the correction
+        // can only slow the clock down, never reverse it.
+        expect(clock).toBeGreaterThan(previous);
+        expect(clock - previous).toBeLessThan(100_000);
+        previous = clock;
+      }
+    } finally {
+      nowSpy.mockRestore();
+      renderer.destroy();
+    }
+  });
+
   it('self-clock applies rate changes forward-only', async () => {
     const frames = await encodeTestFrames(30);
     const canvas = document.createElement('canvas');

@@ -384,6 +384,47 @@ describe('createMoqtSession', () => {
     session.destroy();
   });
 
+  it('ignores a response that arrives after the request timeout', async () => {
+    const fake = createFakeTransport();
+    const session = createMoqtSession(fake.transport, { requestTimeoutMs: 10, unknownAliasTimeoutMs: 50 });
+    fake.sendServerSetup();
+
+    const onOk = vi.fn();
+    const onError = vi.fn();
+    const objects: MoqtObject[] = [];
+    session.subscribe(
+      { trackNamespace: ['live'], trackName: 'video' },
+      { onOk, onError, onObject: (object) => objects.push(object) }
+    );
+    const request = await fake.nextRequestStream();
+    await request.firstMessage;
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+
+    // A SUBSCRIBE_OK after the timeout must not fire onOk after onError,
+    // and must not resurrect the alias route of the dead subscription.
+    await request.send(encodeSubscribeOk(11)).catch(() => {});
+    fake.openDataStream(encodeSubgroup(11, 41, utf8Encode('late')));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(onOk).not.toHaveBeenCalled();
+    expect(objects).toHaveLength(0);
+    session.destroy();
+  });
+
+  it('fails a pending trackStatus when the transport drops', async () => {
+    const harness = createSessionHarness();
+    harness.sendServerSetup();
+
+    const onError = vi.fn();
+    harness.session.trackStatus({ trackNamespace: ['live'], trackName: 'video' }, { onError });
+    await (await harness.nextRequestStream()).firstMessage;
+    harness.dropTransport();
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'session closed before the request was answered' })
+    );
+  });
+
   it('fails pending requests when the transport drops, but not on a local close()', async () => {
     const dropped = createSessionHarness();
     dropped.sendServerSetup();
@@ -525,7 +566,9 @@ describe('createMoqtSession', () => {
   // instead of delivering it — the replay vanishes with no protocol error.
   it('settles a fetch answered with REQUEST_OK so the request timeout cannot fail it', async () => {
     const fake = createFakeTransport();
-    const session = createMoqtSession(fake.transport, { requestTimeoutMs: 10, unknownAliasTimeoutMs: 200 });
+    // 25ms: below the 30ms wait (an un-disarmed timer would still fire in
+    // time to be observed) with headroom for the REQUEST_OK on slow CI.
+    const session = createMoqtSession(fake.transport, { requestTimeoutMs: 25, unknownAliasTimeoutMs: 200 });
     fake.sendServerSetup();
 
     const subscription = session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
@@ -721,6 +764,24 @@ describe('createMoqtSession', () => {
     expect(messages[0]).toMatchObject({ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED });
 
     harness.session.destroy();
+  });
+
+  it('closes the session when an incoming request frame has a truncated body', async () => {
+    const onClosed = vi.fn();
+    const harness = createSessionHarness({ onClosed });
+    harness.sendServerSetup();
+
+    // A PUBLISH_NAMESPACE frame whose declared body length cuts the
+    // namespace off — decoding must terminate the session, not vanish as
+    // an unhandled RangeError in the accept loop.
+    const frame = new ByteWriter();
+    frame.writeVarint(0x06); // PUBLISH_NAMESPACE
+    frame.writeUint16(1);
+    frame.writeVarint(1); // request id, then no namespace at all
+    harness.openIncomingBidi(frame.toBytes());
+
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
+    expect(harness.getCloseInfo()).toMatchObject({ closeCode: 0x3 });
   });
 
   it('closes the session with PROTOCOL_VIOLATION on an unknown data stream type', async () => {

@@ -121,3 +121,50 @@ export function estimateLatencySeconds(frameTimestampUs: number, nowEpochMs: num
 export function bufferDepthSeconds(newestTimestampUs: number, playoutTimestampUs: number): number {
   return Math.max(0, (newestTimestampUs - playoutTimestampUs) / MICROSECONDS_PER_SECOND);
 }
+
+/**
+ * Target latency in seconds, resolved across the layers allowed to state
+ * one: consumer input wins, then the track catalog's `targetLatency`
+ * (milliseconds, msf-01 §5.2.8), then the controller default. Shared by
+ * the latency controller and the renderers so both aim at one number.
+ */
+export function resolveTargetLatencySeconds(
+  consumerTargetSeconds: number | undefined,
+  catalogTargetMs: number | undefined,
+  defaultTargetSeconds: number
+): number {
+  if (consumerTargetSeconds !== undefined) return consumerTargetSeconds;
+  if (catalogTargetMs !== undefined) return catalogTargetMs / 1000;
+  return defaultTargetSeconds;
+}
+
+/**
+ * The value to feed `resolveTargetLatencySeconds` as its consumer target
+ * when adaptive latency is in play: **an explicit consumer target always
+ * wins over the adaptive controller's proposal.** Setting `targetLatency`
+ * therefore pins the setpoint whether or not adaptation is running, and
+ * `undefined` from both leaves the catalog → default chain below it
+ * untouched — which is exactly what a warming-up (or disabled) adaptive
+ * controller publishes.
+ *
+ * A one-line rule with two readers (`syncLatency` and the renderers'
+ * `makeEdgeTargetUs`), named so the precedence lives in one place rather
+ * than as a `??` that can be spelled differently in each.
+ */
+export function preferredTargetLatencySeconds(
+  consumerTargetSeconds: number | undefined,
+  adaptiveTargetSeconds: number | undefined
+): number | undefined {
+  return consumerTargetSeconds ?? adaptiveTargetSeconds;
+}
+
+/**
+ * Media timestamp playout should join a jitter buffer at:
+ * `targetLatencySeconds` behind the newest buffered frame. A relay replays
+ * several recent groups to every joining subscriber, so anchoring at the
+ * oldest buffered frame instead parks playout that whole replay behind the
+ * live edge.
+ */
+export function joinAnchorUs(newestTimestampUs: number, targetLatencySeconds: number): number {
+  return newestTimestampUs - targetLatencySeconds * MICROSECONDS_PER_SECOND;
+}

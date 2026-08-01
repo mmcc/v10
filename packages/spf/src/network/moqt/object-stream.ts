@@ -51,11 +51,13 @@ export function isSubgroupHeaderType(type: number): boolean {
  * hostile relay declaring 2^53 would exhaust memory before the read ever
  * completed, so the declaration is rejected before any allocation.
  *
- * 16 MiB clears any real LOC frame (a 4K keyframe is low single-digit MB);
- * Properties carry frame metadata, so 64 KiB is already generous.
+ * 16 MiB clears any real LOC frame (a 4K keyframe is low single-digit MB).
+ * The Properties block is Key-Value-Pairs whose individual byte values may
+ * legally reach 2^16-1 (`MAX_KVP_VALUE_LENGTH`), so its bound leaves room
+ * for several maximum-size values, not just typical frame metadata.
  */
 export const MAX_OBJECT_PAYLOAD_LENGTH = 16 * 1024 * 1024;
-export const MAX_OBJECT_PROPERTIES_LENGTH = 64 * 1024;
+export const MAX_OBJECT_PROPERTIES_LENGTH = 1024 * 1024;
 
 function checkPayloadLength(length: number): number {
   if (length > MAX_OBJECT_PAYLOAD_LENGTH) {

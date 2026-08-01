@@ -57,6 +57,13 @@ export interface MoqCatalogTrack {
   renderGroup?: number;
   altGroup?: number;
   targetLatency?: number;
+  /**
+   * Publisher-declared minimum buffer in milliseconds (msf-01 §5.2.9) —
+   * the packaging/encode jitter a receiver has to absorb even on a perfect
+   * path. Read by the adaptive latency controller as one additive term of
+   * its margin; unused by the fixed-setpoint chain.
+   */
+  jitter?: number;
   buffers?: { target?: number; min?: number; max?: number };
   maxGopDuration?: number;
   maxGroupDuration?: number;
@@ -88,6 +95,8 @@ export interface MoqTrackFields {
   renderGroup?: number;
   altGroup?: number;
   targetLatency?: number;
+  /** Publisher-declared minimum buffer in milliseconds (msf-01 §5.2.9). */
+  jitter?: number;
   buffers?: { target?: number; min?: number; max?: number };
   maxGopDuration?: number;
   maxGroupDuration?: number;
@@ -223,6 +232,7 @@ function parseCatalogTrackFields(
   fields.renderGroup = number(raw.renderGroup);
   fields.altGroup = number(raw.altGroup);
   fields.targetLatency = number(raw.targetLatency);
+  fields.jitter = number(raw.jitter);
   fields.maxGopDuration = number(raw.maxGopDuration);
   fields.maxGroupDuration = number(raw.maxGroupDuration);
   fields.temporalId = number(raw.temporalId);
@@ -416,6 +426,7 @@ function moqFieldsOf(track: MoqCatalogTrack): MoqTrackFields {
   if (track.renderGroup !== undefined) fields.renderGroup = track.renderGroup;
   if (track.altGroup !== undefined) fields.altGroup = track.altGroup;
   if (track.targetLatency !== undefined) fields.targetLatency = track.targetLatency;
+  if (track.jitter !== undefined) fields.jitter = track.jitter;
   if (track.buffers !== undefined) fields.buffers = track.buffers;
   if (track.maxGopDuration !== undefined) fields.maxGopDuration = track.maxGopDuration;
   if (track.maxGroupDuration !== undefined) fields.maxGroupDuration = track.maxGroupDuration;
@@ -431,18 +442,28 @@ function trackUrl(sessionUri: string, track: MoqCatalogTrack): string {
   return `${sessionUri}#msf:${encodeNamespaceName(track.namespace, track.name)}`;
 }
 
+/** Sane upper bound on a decoded channel count (WebCodecs practical ceiling). */
+const MAX_CHANNELS = 255;
+
 /**
- * Channel count from a catalog `channelConfig` (§5.2.21). Accepts a plain
- * count (`'2'`) and the dotted surround form (`'5.1'` → 6, `'7.1.4'` → 12);
- * `parseInt` alone would read `'5.1'` as 5 and silently drop the LFE.
- * Unrecognized values fall back to stereo.
+ * Channel count from a catalog `channelConfig` (§5.2.21), or `undefined` if
+ * it doesn't resolve to one. Accepts a plain count (`'2'`) and the dotted
+ * surround form (`'5.1'` → 6, `'7.1.4'` → 12); `parseInt` alone would read
+ * `'5.1'` as 5 and silently drop the LFE channel.
+ *
+ * `channelConfig` is intentionally flexible (codec-specific layout strings
+ * are allowed alongside numeric ones), so anything this parser doesn't
+ * recognize — and any numeric total that isn't a sane positive channel
+ * count, guarding against overflowed or hostile input producing `Infinity`
+ * — returns `undefined` rather than guessing stereo. Callers decide how to
+ * substitute (see `moqCatalogToPresentation` and `toAudioDecoderConfig`).
  */
-export function parseChannelConfig(channelConfig: string | undefined): number {
-  if (!channelConfig) return 2;
+export function parseChannelConfig(channelConfig: string | undefined): number | undefined {
+  if (!channelConfig) return undefined;
   const trimmed = channelConfig.trim();
-  if (!/^\d+(\.\d+)*$/.test(trimmed)) return 2;
+  if (!/^\d+(\.\d+)*$/.test(trimmed)) return undefined;
   const total = trimmed.split('.').reduce((sum, part) => sum + Number(part), 0);
-  return total > 0 ? total : 2;
+  return Number.isSafeInteger(total) && total > 0 && total <= MAX_CHANNELS ? total : undefined;
 }
 
 /**
@@ -497,7 +518,7 @@ export function moqCatalogToPresentation(
         // carry the raw values — `toAudioDecoderConfig` reads those rather
         // than trusting these for decoder configuration.
         sampleRate: track.samplerate ?? 48_000,
-        channels: parseChannelConfig(track.channelConfig),
+        channels: parseChannelConfig(track.channelConfig) ?? 2,
       });
     } else {
       text.push({

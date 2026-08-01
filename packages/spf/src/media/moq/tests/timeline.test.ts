@@ -5,6 +5,7 @@ import {
   isTimeAligned,
   nextSwitchGroup,
   parseMediaTimelineTemplate,
+  preferredTargetLatencySeconds,
   templateGroupForMediaTime,
   templateMediaTimeForGroup,
 } from '../timeline';
@@ -93,5 +94,17 @@ describe('bufferDepthSeconds', () => {
   it('measures newest-minus-playout and clamps at zero', () => {
     expect(bufferDepthSeconds(2_000_000, 500_000)).toBeCloseTo(1.5);
     expect(bufferDepthSeconds(500_000, 2_000_000)).toBe(0);
+  });
+});
+
+describe('preferredTargetLatencySeconds', () => {
+  // The whole additive contract in one function: adaptation can only ever
+  // fill in where the consumer stated nothing, and with neither stated the
+  // catalog → default chain below it sees exactly what it always saw.
+  it('lets an explicit consumer target beat the adaptive proposal', () => {
+    expect(preferredTargetLatencySeconds(2, 0.3)).toBe(2);
+    expect(preferredTargetLatencySeconds(undefined, 0.3)).toBe(0.3);
+    expect(preferredTargetLatencySeconds(2, undefined)).toBe(2);
+    expect(preferredTargetLatencySeconds(undefined, undefined)).toBeUndefined();
   });
 });

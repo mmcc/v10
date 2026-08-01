@@ -12,7 +12,13 @@ import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audi
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
-import { setupAudioRenderer, setupVideoRenderer } from '../../behaviors/dom/setup-moq-renderers';
+import { type AdaptiveLatencyConfig, adaptLatencyTarget } from '../../behaviors/adapt-latency-target';
+import {
+  setupAudioRenderer,
+  setupVideoRenderer,
+  trackPlayoutHealth,
+  trackPlayoutTime,
+} from '../../behaviors/dom/setup-moq-renderers';
 import type { ApplyCatalogUpdate } from '../../behaviors/resolve-catalog';
 import { resolveCatalog } from '../../behaviors/resolve-catalog';
 import { setupMoqSession } from '../../behaviors/setup-moq-session';
@@ -33,8 +39,8 @@ import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behav
  * Notable differences from the HLS engine: latency-control slots
  * (`targetLatency` / `measuredLatency` / `playoutRate` / `playoutState`)
  * exist because playout is clock-steered rather than element-driven, and
- * `currentTime` is **derived from the audio master clock** (written by the
- * audio renderer behavior, not read from a media element).
+ * `currentTime` is **derived from whichever playout clock is running**
+ * (written by `trackPlayoutTime`, not read from a media element).
  */
 export interface MoqEngineState {
   /** A caller writes `{ url: 'moqt://…#msf:…' }`; `resolveCatalog` populates the rest. */
@@ -72,10 +78,34 @@ export interface MoqEngineState {
   audioSuspended?: boolean;
   /** Consumer-set target latency in seconds (input slot). */
   targetLatency?: number;
+  /**
+   * Consumer opt-in to adaptive latency (input slot). `undefined` defers
+   * to `config.adaptiveLatency.enabled`, which is off.
+   */
+  adaptiveLatencyEnabled?: boolean;
+  /**
+   * `adaptLatencyTarget`'s proposed target in seconds, or `undefined`
+   * while adaptation is off or warming up. Ranks below `targetLatency`
+   * and above the catalog target.
+   */
+  adaptiveTargetLatency?: number;
+  /**
+   * The setpoint `syncLatency` resolved and is actually holding, in
+   * seconds — the only slot that states the *resolved* target rather than
+   * an input to the resolution.
+   */
+  effectiveTargetLatency?: number;
+  /** Real edge-to-playout latency in seconds, measured by `syncLatency`. */
   measuredLatency?: number;
+  /** Catch-up group skips since the latency controller became active. */
+  catchUpSkips?: number;
+  /** Video frames discarded for arriving behind the clock. */
+  framesDropped?: number;
+  /** Times the audio schedule ran dry. */
+  audioUnderruns?: number;
   playoutRate?: number;
   playoutState?: PlayoutState;
-  /** Derived from the audio master clock (media seconds). */
+  /** Playout position in media seconds (audio master clock, else video). */
   currentTime?: number;
 }
 
@@ -121,8 +151,20 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
   quality?: Partial<QualityConfig>;
   /** Arrival-timing estimator tuning (`trackMoqBandwidth`). */
   moqBandwidth?: Partial<BandwidthConfig>;
-  /** Latency-controller tuning (`syncLatency`). */
+  /** Latency tuning: the controller (`syncLatency`) plus the renderers' join-at-edge anchor. */
   latency?: Partial<LatencyControlConfig>;
+  /**
+   * Adaptive-latency tuning (`adaptLatencyTarget`), including its
+   * `enabled` switch — **off by default**, so an untouched engine holds
+   * the fixed setpoint `latency` describes and this behavior registers no
+   * timer. Deliberately its own object rather than a flag inside
+   * `latency`: `latency` is shared verbatim with the renderers and the
+   * pause-suspension window, and the adaptive knobs mean nothing to
+   * either. The two are still coupled — `adaptLatencyTarget` validates
+   * its rate bounds against `latency.clockSlewRate` and `intervalMs` and
+   * throws on a combination whose control loops cannot settle.
+   */
+  adaptiveLatency?: Partial<AdaptiveLatencyConfig>;
   /**
    * Continuous pause duration, in seconds, before media subscriptions
    * release (`suspendMediaWhilePaused`). Defaults to target latency +
@@ -224,9 +266,20 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
       trackMoqBandwidth,
 
       // Renderers, fed from the subscriber jitter buffers; audio owns the
-      // master clock and currentTime.
+      // master clock.
       setupVideoRenderer,
       setupAudioRenderer,
+      // Whichever clock is running → state.currentTime. Before the
+      // controller: it is the controller's setpoint.
+      trackPlayoutTime,
+      // Renderer cost counters → state. Before the adaptive controller,
+      // which reads them as its failure feedback.
+      trackPlayoutHealth,
+
+      // Observed delivery → adaptiveTargetLatency. Before the controller
+      // for the same reason `trackPlayoutTime` is: it supplies an input.
+      // Inactive (and timer-free) unless adaptation is switched on.
+      adaptLatencyTarget,
 
       // Target-latency hold: rate nudges / group-skip catch-up.
       syncLatency,

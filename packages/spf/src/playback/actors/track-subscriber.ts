@@ -58,6 +58,22 @@ export interface TrackSubscriberContext {
    * `seq` increments per arrival as a cheap change marker.
    */
   arrivals?: { seq: number; totalBytes: number; totalDurationMs: number };
+  /**
+   * **Decaying arrival-offset envelope** — the path-jitter primitive the
+   * adaptive latency controller reads.
+   *
+   * Each admitted frame samples `arrivalWallMs − mediaTimeMs`. That number
+   * has no absolute meaning (the two clocks have unrelated epochs), so the
+   * envelope publishes the *spread*: `maxOffsetMs − minOffsetMs` is how
+   * much later the worst recently-observed frame arrived than the best
+   * one, i.e. exactly the jitter a buffer has to absorb.
+   *
+   * The bounds decay toward the current sample with a fixed time constant
+   * rather than being an unbounded running min/max. An unbounded minimum
+   * is what makes an offset-based latency estimate drift permanently
+   * pessimistic after one lucky early frame — the bound has to forget.
+   */
+  arrivalJitter?: { minOffsetMs: number; maxOffsetMs: number; sampleCount: number };
   error?: RequestError | unknown;
   done?: PublishDone;
 }
@@ -75,7 +91,13 @@ export interface CreateTrackSubscriberOptions {
 
 type SubscriberMessage =
   | { type: 'subscribed' }
-  | { type: 'frame-buffered'; frame: JitterFrame; totalBytes: number; totalDurationMs: number }
+  | {
+      type: 'frame-buffered';
+      frame: JitterFrame;
+      totalBytes: number;
+      totalDurationMs: number;
+      arrivalJitter: TrackSubscriberContext['arrivalJitter'];
+    }
   | { type: 'buffer-drained'; frameCount: number; oldestTimestampUs?: number; newestTimestampUs?: number }
   | { type: 'done'; done: PublishDone }
   | { type: 'error'; error: RequestError | unknown };
@@ -99,6 +121,16 @@ export interface TrackSubscriberActor
 
 const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'largest-object' };
 
+/**
+ * Time constant of the arrival-offset envelope's decay, in milliseconds.
+ * The bounds relax toward the current sample by `1 − e^(−Δt/τ)` per
+ * arrival, so the envelope describes roughly the last 4 seconds: long
+ * enough to see several GOP boundaries at any sane cadence, short enough
+ * that a single congestion spike stops widening the estimate a few seconds
+ * after the path recovers.
+ */
+const ARRIVAL_ENVELOPE_TAU_MS = 4_000;
+
 export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions): TrackSubscriberActor {
   const { session, track } = options;
   const timescale = track.moq.timescale;
@@ -114,6 +146,32 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   let lastArrivalMs: number | undefined;
   let authRetried = false;
   let subscription: Subscription | undefined;
+
+  // Decaying arrival-offset envelope (see `arrivalJitter` on the context).
+  // Two numbers and no allocation, deliberately: this runs on every
+  // admitted frame whether or not anything is reading it.
+  let offsetMinMs: number | undefined;
+  let offsetMaxMs = 0;
+  let offsetSamples = 0;
+
+  const sampleArrivalOffset = (nowMs: number, timestampUs: number, elapsedMs: number | undefined): void => {
+    const offsetMs = nowMs - timestampUs / 1000;
+    if (offsetMinMs === undefined) {
+      offsetMinMs = offsetMs;
+      offsetMaxMs = offsetMs;
+      offsetSamples = 1;
+      return;
+    }
+    // Relax both bounds toward the sample, then let the sample itself
+    // push whichever bound it is outside of. Relaxing first keeps a bound
+    // from being pinned by a value it has already been pulled past.
+    const relax = 1 - Math.exp(-(elapsedMs ?? 0) / ARRIVAL_ENVELOPE_TAU_MS);
+    offsetMinMs += (offsetMs - offsetMinMs) * relax;
+    offsetMaxMs += (offsetMs - offsetMaxMs) * relax;
+    if (offsetMs < offsetMinMs) offsetMinMs = offsetMs;
+    if (offsetMs > offsetMaxMs) offsetMaxMs = offsetMs;
+    offsetSamples++;
+  };
 
   // Drain watermark: the consumer has already taken everything at or
   // behind this (group, object) position. Late arrivals behind it must be
@@ -146,6 +204,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             oldestTimestampUs: frames[0]?.timestampUs,
             latestGroupId: Math.max(context.latestGroupId ?? frame.groupId, frame.groupId),
             arrivals: { seq: ++sampleSeq, totalBytes: message.totalBytes, totalDurationMs: message.totalDurationMs },
+            arrivalJitter: message.arrivalJitter,
           };
         }
         case 'buffer-drained':
@@ -187,15 +246,23 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     insertFrame(frame);
 
     const now = performance.now();
+    const elapsedMs = lastArrivalMs === undefined ? undefined : now - lastArrivalMs;
     // The first arrival only establishes the measurement baseline: its
     // bytes have no arrival interval, so counting them would overstate
     // the first throughput estimate.
-    if (lastArrivalMs !== undefined) {
+    if (elapsedMs !== undefined) {
       totalBytes += object.payload.byteLength;
-      totalDurationMs += now - lastArrivalMs;
+      totalDurationMs += elapsedMs;
     }
     lastArrivalMs = now;
-    inner.send({ type: 'frame-buffered', frame, totalBytes, totalDurationMs });
+    sampleArrivalOffset(now, frame.timestampUs, elapsedMs);
+    inner.send({
+      type: 'frame-buffered',
+      frame,
+      totalBytes,
+      totalDurationMs,
+      arrivalJitter: { minOffsetMs: offsetMinMs!, maxOffsetMs: offsetMaxMs, sampleCount: offsetSamples },
+    });
   };
 
   const notifyDrain = (): void => {

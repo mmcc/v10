@@ -89,13 +89,85 @@ describe('parseMoqCatalog', () => {
     expect(audio.moq).toMatchObject({ samplerate: 48_000, channelConfig: '2' });
   });
 
+  // §5.2.9. The publisher's own statement of the minimum buffer a
+  // receiver has to hold; the adaptive latency controller reads it as one
+  // additive term of its margin, and nothing else in the engine does.
+  it('carries the declared jitter through to the moq side-channel', () => {
+    const catalog = JSON.stringify({
+      version: '1',
+      tracks: [
+        {
+          name: 'video',
+          namespace: 'live',
+          packaging: 'loc',
+          isLive: true,
+          role: 'video',
+          codec: 'avc1.42001f',
+          width: 640,
+          height: 360,
+          framerate: 30,
+          jitter: 34,
+        },
+      ],
+    });
+    const presentation = parseMoqCatalog(catalog, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+    expect(video.moq.jitter).toBe(34);
+  });
+
+  it('leaves jitter absent when the catalog declares none', () => {
+    const presentation = parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+    expect(video.moq.jitter).toBeUndefined();
+  });
+
   it('sums dotted surround channel configurations', () => {
     expect(parseChannelConfig('2')).toBe(2);
     // `parseInt('5.1')` reads 5 and silently drops the LFE channel.
     expect(parseChannelConfig('5.1')).toBe(6);
     expect(parseChannelConfig('7.1.4')).toBe(12);
-    expect(parseChannelConfig(undefined)).toBe(2);
-    expect(parseChannelConfig('stereo')).toBe(2);
+  });
+
+  it('does not guess stereo for an absent or unrecognized channelConfig', () => {
+    expect(parseChannelConfig(undefined)).toBeUndefined();
+    // A codec-specific or otherwise unrecognized layout string — callers
+    // decide whether/how to substitute, this parser doesn't guess.
+    expect(parseChannelConfig('stereo')).toBeUndefined();
+  });
+
+  it('rejects a malformed or hostile channelConfig total instead of overflowing', () => {
+    // `Number('9'.repeat(400))` overflows `Number.MAX_VALUE` to `Infinity`;
+    // that must not sail through as a channel count.
+    expect(parseChannelConfig('9'.repeat(400))).toBeUndefined();
+    expect(parseChannelConfig('0')).toBeUndefined();
+    // Comfortably past any real-world layout — guards the sane upper bound.
+    expect(parseChannelConfig('1000')).toBeUndefined();
+  });
+
+  it('substitutes a conventional channel count in the projection while keeping the raw channelConfig', () => {
+    // `AudioTrack.channels` is a required number, so the projection still
+    // needs a value even for a layout `parseChannelConfig` can't resolve —
+    // but the raw string rides along on `moq.channelConfig` so
+    // `toAudioDecoderConfig` can tell "declared 2" from "unresolved" and
+    // reject rather than silently decode as stereo.
+    const text = JSON.stringify({
+      version: '1',
+      tracks: [
+        {
+          name: 'audio',
+          packaging: 'loc',
+          isLive: true,
+          role: 'audio',
+          codec: 'mp4a.40.2',
+          samplerate: 44_100,
+          channelConfig: 'JOC',
+        },
+      ],
+    });
+    const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+    const audio = getTracksByType(presentation, 'audio')[0] as MoqAudioTrack;
+    expect(audio.channels).toBe(2);
+    expect(audio.moq.channelConfig).toBe('JOC');
   });
 
   it('derives stable track ids from full track names', () => {
