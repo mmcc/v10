@@ -238,6 +238,29 @@ describe('readSubgroupObjects', () => {
     expect(objects[0]!.payload.length).toBe(MAX_OBJECT_PAYLOAD_LENGTH);
   });
 
+  it('accepts a properties block holding a maximum-size KVP value', async () => {
+    // One odd-type KVP whose byte value is the largest the KVP codec
+    // permits (2^16-1): the aggregate block bound must not reject what the
+    // per-value rule allows.
+    const props = new ByteWriter();
+    props.writeVarint(0x07);
+    props.writeVarint(0xffff);
+    props.writeBytes(new Uint8Array(0xffff).fill(1));
+    const bytes = encodeSubgroupStream({
+      type: 0x39, // 0x38 | PROPERTIES
+      trackAlias: 1,
+      groupId: 7,
+      objects: [{ objectIdDelta: 0, payload: utf8Encode('a'), properties: props.toBytes() }],
+    });
+    const reader = new StreamReader(streamOf(bytes));
+    await reader.readVarint();
+    const header = await readSubgroupHeader(reader, 0x39);
+    const objects = await collect(readSubgroupObjects(reader, header));
+    expect(objects[0]!.properties).toHaveLength(1);
+    expect(objects[0]!.properties[0]).toMatchObject({ type: 0x07 });
+    expect((objects[0]!.properties[0]!.value as Uint8Array).length).toBe(0xffff);
+  });
+
   it('parses per-object properties when the header PROPERTIES bit is set', async () => {
     // Properties KVP: type 0x06 (Timestamp), varint value 90000.
     const props = new ByteWriter();
