@@ -431,18 +431,28 @@ function trackUrl(sessionUri: string, track: MoqCatalogTrack): string {
   return `${sessionUri}#msf:${encodeNamespaceName(track.namespace, track.name)}`;
 }
 
+/** Sane upper bound on a decoded channel count (WebCodecs practical ceiling). */
+const MAX_CHANNELS = 255;
+
 /**
- * Channel count from a catalog `channelConfig` (§5.2.21). Accepts a plain
- * count (`'2'`) and the dotted surround form (`'5.1'` → 6, `'7.1.4'` → 12);
- * `parseInt` alone would read `'5.1'` as 5 and silently drop the LFE.
- * Unrecognized values fall back to stereo.
+ * Channel count from a catalog `channelConfig` (§5.2.21), or `undefined` if
+ * it doesn't resolve to one. Accepts a plain count (`'2'`) and the dotted
+ * surround form (`'5.1'` → 6, `'7.1.4'` → 12); `parseInt` alone would read
+ * `'5.1'` as 5 and silently drop the LFE channel.
+ *
+ * `channelConfig` is intentionally flexible (codec-specific layout strings
+ * are allowed alongside numeric ones), so anything this parser doesn't
+ * recognize — and any numeric total that isn't a sane positive channel
+ * count, guarding against overflowed or hostile input producing `Infinity`
+ * — returns `undefined` rather than guessing stereo. Callers decide how to
+ * substitute (see `moqCatalogToPresentation` and `toAudioDecoderConfig`).
  */
-export function parseChannelConfig(channelConfig: string | undefined): number {
-  if (!channelConfig) return 2;
+export function parseChannelConfig(channelConfig: string | undefined): number | undefined {
+  if (!channelConfig) return undefined;
   const trimmed = channelConfig.trim();
-  if (!/^\d+(\.\d+)*$/.test(trimmed)) return 2;
+  if (!/^\d+(\.\d+)*$/.test(trimmed)) return undefined;
   const total = trimmed.split('.').reduce((sum, part) => sum + Number(part), 0);
-  return total > 0 ? total : 2;
+  return Number.isSafeInteger(total) && total > 0 && total <= MAX_CHANNELS ? total : undefined;
 }
 
 /**
@@ -497,7 +507,7 @@ export function moqCatalogToPresentation(
         // carry the raw values — `toAudioDecoderConfig` reads those rather
         // than trusting these for decoder configuration.
         sampleRate: track.samplerate ?? 48_000,
-        channels: parseChannelConfig(track.channelConfig),
+        channels: parseChannelConfig(track.channelConfig) ?? 2,
       });
     } else {
       text.push({
