@@ -13,7 +13,10 @@ import '@app/styles.css';
 //   ?real            publish to an actual MoQ relay via <moq-publish-video>
 //   ?relay=<url>     relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>  publish namespace for ?real (default: persisted random name)
-//   ?token=<token>   auth token for ?real (MOQT AUTHORIZATION TOKEN; not persisted)
+//   ?token=<token>   auth token for ?real — the engine offers it as a ?jwt=
+//                    connect-URL param (kixelated-lineage relays), a SETUP
+//                    Authorization Token option, and request parameters
+//                    (draft-19); never persisted
 //   ?fake            real capture, fake publish transport (FakePublishMedia)
 //   ?synthetic       stub getUserMedia with canvas+oscillator capture, so the
 //                    demo runs headlessly / without a camera
@@ -203,6 +206,7 @@ const settingsRow = {
     <div class="flex flex-wrap items-center gap-2">
       <label class="flex items-center gap-1">Relay <input id="relay" class="${input}" value="${escapeAttr(relay)}" spellcheck="false" /></label>
       <label class="flex items-center gap-1">Namespace <input id="ns" class="${input}" value="${escapeAttr(namespace)}" spellcheck="false" /></label>
+      <label class="flex items-center gap-1">Token <input id="token" class="${input}" value="${escapeAttr(authToken)}" spellcheck="false" placeholder="optional" /></label>
       <button id="apply" type="button" class="${button}">Apply</button>
     </div>
     <p class="text-xs text-zinc-500">
@@ -357,10 +361,12 @@ if (mode === 'loopback' && player) {
 if (mode === 'real') {
   const relayInput = document.getElementById('relay') as HTMLInputElement;
   const nsInput = document.getElementById('ns') as HTMLInputElement;
+  const tokenInput = document.getElementById('token') as HTMLInputElement;
 
   document.getElementById('apply')!.addEventListener('click', () => {
     const nextRelay = relayInput.value.trim() || DEFAULT_RELAY;
     const nextNs = nsInput.value.trim();
+    const nextToken = tokenInput.value.trim();
 
     localStorage.setItem(RELAY_STORAGE_KEY, nextRelay);
     localStorage.setItem(NS_STORAGE_KEY, nextNs);
@@ -368,6 +374,10 @@ if (mode === 'real') {
     const next = new URLSearchParams(window.location.search);
     next.set('relay', nextRelay);
     next.set('ns', nextNs);
+    // The token stays a URL param only (never localStorage) — short-lived
+    // credentials shouldn't outlive the tab's address bar.
+    if (nextToken) next.set('token', nextToken);
+    else next.delete('token');
     window.location.search = next.toString();
   });
 }
