@@ -59,6 +59,7 @@ describe('setupAudioRenderer', () => {
     const state = {
       playoutRate: signal<number | undefined>(undefined),
       targetLatency: signal<number | undefined>(undefined),
+      adaptiveTargetLatency: signal<number | undefined>(undefined),
     };
     const context = {
       audioContext: signal<AudioContextLike | undefined>({} as AudioContextLike),
@@ -283,6 +284,7 @@ describe('setupVideoRenderer', () => {
     const state = {
       playoutRate: signal<number | undefined>(undefined),
       targetLatency: signal<number | undefined>(undefined),
+      adaptiveTargetLatency: signal<number | undefined>(undefined),
       paused: signal<boolean | undefined>(undefined),
     };
     const context = {

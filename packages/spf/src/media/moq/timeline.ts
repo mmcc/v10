@@ -139,6 +139,26 @@ export function resolveTargetLatencySeconds(
 }
 
 /**
+ * The value to feed `resolveTargetLatencySeconds` as its consumer target
+ * when adaptive latency is in play: **an explicit consumer target always
+ * wins over the adaptive controller's proposal.** Setting `targetLatency`
+ * therefore pins the setpoint whether or not adaptation is running, and
+ * `undefined` from both leaves the catalog → default chain below it
+ * untouched — which is exactly what a warming-up (or disabled) adaptive
+ * controller publishes.
+ *
+ * A one-line rule with two readers (`syncLatency` and the renderers'
+ * `makeEdgeTargetUs`), named so the precedence lives in one place rather
+ * than as a `??` that can be spelled differently in each.
+ */
+export function preferredTargetLatencySeconds(
+  consumerTargetSeconds: number | undefined,
+  adaptiveTargetSeconds: number | undefined
+): number | undefined {
+  return consumerTargetSeconds ?? adaptiveTargetSeconds;
+}
+
+/**
  * Media timestamp playout should join a jitter buffer at:
  * `targetLatencySeconds` behind the newest buffered frame. A relay replays
  * several recent groups to every joining subscriber, so anchoring at the

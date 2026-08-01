@@ -65,6 +65,13 @@ export interface MoqMediaProps {
   /** Target latency in seconds. */
   targetLatency: number | undefined;
   /**
+   * Let the engine choose the target latency from observed delivery
+   * instead of holding a fixed one. An explicit `targetLatency` still
+   * wins — this only fills in where the consumer stated nothing. Leaving
+   * it alone defers to `engineConfig.adaptiveLatency.enabled` (off).
+   */
+  adaptiveLatency: boolean;
+  /**
    * Begin playback as soon as a source is set, without waiting for
    * `play()`. Autoplay policy still gates the audio clock: outside a user
    * gesture the AudioContext cannot resume, so video starts on the
@@ -78,6 +85,7 @@ export const moqMediaDefaultProps: MoqMediaProps = {
   src: '',
   preload: '',
   targetLatency: undefined,
+  adaptiveLatency: false,
   autoplay: false,
 };
 
@@ -98,6 +106,15 @@ export interface MoqMediaAPI extends MoqMediaProps {
   /** Live streams have no bounded duration. */
   readonly duration: number;
   readonly measuredLatency: number | undefined;
+  /**
+   * The target the latency controller is actually holding, in seconds,
+   * after consumer → adaptive → catalog → default resolution. Pair it
+   * with `measuredLatency` to read the controller: they are the setpoint
+   * and the process variable.
+   */
+  readonly effectiveTargetLatency: number | undefined;
+  /** The adaptive controller's proposal, or `undefined` when it has none. */
+  readonly adaptiveTargetLatency: number | undefined;
 }
 
 /**
@@ -201,6 +218,14 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     set targetLatency(value: number | undefined) {
       this.#signals.state.targetLatency.set(value);
+    }
+
+    get adaptiveLatency(): boolean {
+      return this.#signals.state.adaptiveLatencyEnabled.get() ?? false;
+    }
+
+    set adaptiveLatency(value: boolean) {
+      this.#signals.state.adaptiveLatencyEnabled.set(value);
     }
 
     get autoplay(): boolean {
@@ -402,6 +427,14 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     get measuredLatency(): number | undefined {
       return this.#signals.state.measuredLatency.get();
+    }
+
+    get effectiveTargetLatency(): number | undefined {
+      return this.#signals.state.effectiveTargetLatency.get();
+    }
+
+    get adaptiveTargetLatency(): number | undefined {
+      return this.#signals.state.adaptiveTargetLatency.get();
     }
 
     destroy(): void {

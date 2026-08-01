@@ -57,6 +57,13 @@ export interface MoqCatalogTrack {
   renderGroup?: number;
   altGroup?: number;
   targetLatency?: number;
+  /**
+   * Publisher-declared minimum buffer in milliseconds (msf-01 §5.2.9) —
+   * the packaging/encode jitter a receiver has to absorb even on a perfect
+   * path. Read by the adaptive latency controller as one additive term of
+   * its margin; unused by the fixed-setpoint chain.
+   */
+  jitter?: number;
   buffers?: { target?: number; min?: number; max?: number };
   maxGopDuration?: number;
   maxGroupDuration?: number;
@@ -88,6 +95,8 @@ export interface MoqTrackFields {
   renderGroup?: number;
   altGroup?: number;
   targetLatency?: number;
+  /** Publisher-declared minimum buffer in milliseconds (msf-01 §5.2.9). */
+  jitter?: number;
   buffers?: { target?: number; min?: number; max?: number };
   maxGopDuration?: number;
   maxGroupDuration?: number;
@@ -223,6 +232,7 @@ function parseCatalogTrackFields(
   fields.renderGroup = number(raw.renderGroup);
   fields.altGroup = number(raw.altGroup);
   fields.targetLatency = number(raw.targetLatency);
+  fields.jitter = number(raw.jitter);
   fields.maxGopDuration = number(raw.maxGopDuration);
   fields.maxGroupDuration = number(raw.maxGroupDuration);
   fields.temporalId = number(raw.temporalId);
@@ -416,6 +426,7 @@ function moqFieldsOf(track: MoqCatalogTrack): MoqTrackFields {
   if (track.renderGroup !== undefined) fields.renderGroup = track.renderGroup;
   if (track.altGroup !== undefined) fields.altGroup = track.altGroup;
   if (track.targetLatency !== undefined) fields.targetLatency = track.targetLatency;
+  if (track.jitter !== undefined) fields.jitter = track.jitter;
   if (track.buffers !== undefined) fields.buffers = track.buffers;
   if (track.maxGopDuration !== undefined) fields.maxGopDuration = track.maxGopDuration;
   if (track.maxGroupDuration !== undefined) fields.maxGroupDuration = track.maxGroupDuration;

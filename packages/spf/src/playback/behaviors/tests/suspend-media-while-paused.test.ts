@@ -7,6 +7,7 @@ function makeDeps() {
     state: {
       paused: signal<boolean | undefined>(undefined),
       targetLatency: signal<number | undefined>(undefined),
+      adaptiveTargetLatency: signal<number | undefined>(undefined),
       mediaSuspended: signal<boolean | undefined>(undefined),
     },
   };

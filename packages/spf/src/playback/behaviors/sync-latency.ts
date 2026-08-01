@@ -31,6 +31,17 @@
  * The target comes from `state.targetLatency` (seconds; consumer input),
  * falling back to the selected track's catalog `targetLatency`
  * (milliseconds, msf-01 §5.2.8), then `config.defaultTargetLatency`.
+ * `state.adaptiveTargetLatency` — written by `adaptLatencyTarget` when
+ * adaptation is enabled — slots in *behind* the consumer input and ahead
+ * of the catalog (`preferredTargetLatencySeconds`), so an explicit
+ * consumer target always wins and an absent adaptive proposal leaves the
+ * original chain byte-for-byte intact.
+ *
+ * Whatever it lands on is republished as `state.effectiveTargetLatency`:
+ * the resolved setpoint, resolved against the subscriber actually being
+ * controlled, at the moment it was used. Nothing else in the engine can
+ * state that number — every other slot is an *input* to the resolution —
+ * and without it "did the lower target cost anything" has no baseline.
  *
  * `LatencyControlConfig` spans two layers: this behavior steers playout,
  * and the renderers (`setup-moq-renderers`) anchor and (for video)
@@ -47,7 +58,11 @@ import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
-import { bufferDepthSeconds, resolveTargetLatencySeconds } from '../../media/moq/timeline';
+import {
+  bufferDepthSeconds,
+  preferredTargetLatencySeconds,
+  resolveTargetLatencySeconds,
+} from '../../media/moq/timeline';
 import type { TrackSubscriberActor } from '../actors/track-subscriber';
 
 export type PlayoutState = 'stable' | 'nudging' | 'catching-up';
@@ -55,6 +70,23 @@ export type PlayoutState = 'stable' | 'nudging' | 'catching-up';
 export interface SyncLatencyState {
   /** Consumer-set target latency in seconds. */
   targetLatency?: number;
+  /**
+   * Adaptive controller's proposed target in seconds, or `undefined` while
+   * adaptation is off or still warming up. Ranks below `targetLatency`.
+   */
+  adaptiveTargetLatency?: number;
+  /**
+   * The setpoint this controller is actually holding, in seconds, after
+   * the whole consumer → adaptive → catalog → default resolution. Output
+   * only; the instrument the A/B between fixed and adaptive is read from.
+   */
+  effectiveTargetLatency?: number;
+  /**
+   * Catch-up group skips performed since this controller became active.
+   * A skip is a visible jump, so its rate is the cost side of any target
+   * the adaptive controller proposes.
+   */
+  catchUpSkips?: number;
   /**
    * Measured playout latency in seconds: newest buffered − the position
    * being presented. This is real edge-to-playout latency, not jitter-
@@ -133,6 +165,9 @@ function setupSyncLatency({
 }: {
   state: {
     targetLatency: ReadonlySignal<SyncLatencyState['targetLatency']>;
+    adaptiveTargetLatency: ReadonlySignal<SyncLatencyState['adaptiveTargetLatency']>;
+    effectiveTargetLatency: Signal<SyncLatencyState['effectiveTargetLatency']>;
+    catchUpSkips: Signal<SyncLatencyState['catchUpSkips']>;
     measuredLatency: Signal<SyncLatencyState['measuredLatency']>;
     playoutRate: Signal<SyncLatencyState['playoutRate']>;
     playoutState: Signal<SyncLatencyState['playoutState']>;
@@ -162,12 +197,23 @@ function setupSyncLatency({
 
   const targetSeconds = (subscriber: TrackSubscriberActor | undefined): number =>
     resolveTargetLatencySeconds(
-      state.targetLatency.get(),
+      preferredTargetLatencySeconds(state.targetLatency.get(), state.adaptiveTargetLatency.get()),
       subscriber?.track.moq.targetLatency,
       controlConfig.defaultTargetLatency
     );
 
   const evaluate = (): void => {
+    // The audio buffer is the master-clock side; prefer it as the
+    // controlled quantity and fall back to video for video-only playback.
+    const audio = peek(context.audioSubscriberActor);
+    const video = peek(context.videoSubscriberActor);
+    const subscriber = audio ?? video;
+    // Published before the guards below: the resolved setpoint is a fact
+    // about the configuration, readable from the moment the controller is
+    // active, and the adaptive controller's own hysteresis reads it back.
+    const target = targetSeconds(subscriber);
+    state.effectiveTargetLatency.set(target);
+
     // Nothing is being presented yet (pre-roll, or a renderer that has not
     // been handed a surface): there is no playout position to hold, and
     // guessing one from the buffer is what produced the old understatement.
@@ -175,21 +221,16 @@ function setupSyncLatency({
     if (currentTime === undefined) return;
     const playoutTimestampUs = currentTime * 1_000_000;
 
-    // The audio buffer is the master-clock side; prefer it as the
-    // controlled quantity and fall back to video for video-only playback.
-    const audio = peek(context.audioSubscriberActor);
-    const video = peek(context.videoSubscriberActor);
-    const subscriber = audio ?? video;
     const depth =
       subscriberLatencySeconds(audio, playoutTimestampUs) ?? subscriberLatencySeconds(video, playoutTimestampUs);
     if (depth === undefined) return;
 
-    const target = targetSeconds(subscriber);
     state.measuredLatency.set(depth);
 
     if (depth > target + controlConfig.catchUpThreshold) {
       audio?.skipToLatestGroup();
       video?.skipToLatestGroup();
+      state.catchUpSkips.set((peek(state.catchUpSkips) ?? 0) + 1);
       state.playoutRate.set(1);
       state.playoutState.set('catching-up');
       return;
@@ -213,12 +254,15 @@ function setupSyncLatency({
       inactive: {},
       controlling: {
         entry: () => {
+          state.catchUpSkips.set(0);
           const timer = setInterval(evaluate, controlConfig.intervalMs);
           return () => {
             clearInterval(timer);
             state.playoutRate.set(undefined);
             state.playoutState.set(undefined);
             state.measuredLatency.set(undefined);
+            state.effectiveTargetLatency.set(undefined);
+            state.catchUpSkips.set(undefined);
           };
         },
       },
@@ -227,7 +271,16 @@ function setupSyncLatency({
 }
 
 export const syncLatency = defineBehavior({
-  stateKeys: ['targetLatency', 'measuredLatency', 'playoutRate', 'playoutState', 'currentTime'],
+  stateKeys: [
+    'targetLatency',
+    'adaptiveTargetLatency',
+    'effectiveTargetLatency',
+    'catchUpSkips',
+    'measuredLatency',
+    'playoutRate',
+    'playoutState',
+    'currentTime',
+  ],
   contextKeys: ['videoSubscriberActor', 'audioSubscriberActor'],
   setup: setupSyncLatency,
 });

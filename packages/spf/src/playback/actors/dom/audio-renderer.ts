@@ -54,6 +54,19 @@ export interface AudioRendererContext {
   framesScheduled: number;
   /** Media time of the newest scheduled audio, in microseconds. */
   scheduledUntilUs?: number;
+  /**
+   * **Times the schedule ran dry** — the context clock passed the end of
+   * everything scheduled while a track was still attached. Counted per
+   * rising edge, not per tick, so one starvation is one increment.
+   *
+   * The clock itself hides this: `getClockTimeUs` clamps to the segment
+   * end and resumes seamlessly, which is right for presentation and
+   * useless as a signal. This is the direct "the target latency is below
+   * what the path can sustain" evidence the adaptive controller has no
+   * other way to obtain — a shallow buffer looks identical to a
+   * well-behaved one right up until it is empty.
+   */
+  underruns: number;
   error?: unknown;
 }
 
@@ -78,7 +91,8 @@ export interface CreateAudioRendererOptions {
 
 type RendererMessage =
   | { type: 'status'; status: AudioRendererStatus; error?: unknown }
-  | { type: 'scheduled'; untilUs: number };
+  | { type: 'scheduled'; untilUs: number }
+  | { type: 'underrun' };
 
 export interface AudioRendererActor extends Pick<TransitionActor<AudioRendererContext, RendererMessage>, 'snapshot'> {
   /** Point the renderer at a (new) frame source + decoder config. */
@@ -118,7 +132,7 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   const scheduleMargin = options.scheduleMargin ?? DEFAULT_SCHEDULE_MARGIN_S;
 
   const inner = createTransitionActor<AudioRendererContext, RendererMessage>(
-    { status: 'idle', framesScheduled: 0 },
+    { status: 'idle', framesScheduled: 0, underruns: 0 },
     (context, message) => {
       switch (message.type) {
         case 'status':
@@ -130,6 +144,8 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
             framesScheduled: context.framesScheduled + 1,
             scheduledUntilUs: message.untilUs,
           };
+        case 'underrun':
+          return { ...context, underruns: context.underruns + 1 };
       }
     }
   );
@@ -167,6 +183,25 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
 
   const segmentEndMediaUs = (segment: ClockSegment): number =>
     segment.mediaUs + (segment.endCtx - segment.startCtx) * 1_000_000 * segment.rate;
+
+  /** True while the context clock is past everything scheduled (see `underruns`). */
+  let starved = false;
+
+  /**
+   * Count the rising edge of a schedule that has run dry. An empty
+   * schedule is not an underrun — at join, and after every re-anchor that
+   * clears it, there was no schedule to starve.
+   */
+  const detectUnderrun = (): void => {
+    const last = segments[segments.length - 1];
+    if (!last) {
+      starved = false;
+      return;
+    }
+    const dry = last.endCtx <= audioContext.currentTime;
+    if (dry && !starved) inner.send({ type: 'underrun' });
+    starved = dry;
+  };
 
   /** Drop segments that finished playing; keep the current/newest one so the clock can hold on underrun. */
   const pruneSegments = (): void => {
@@ -285,6 +320,7 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     if (destroyed || !source || inner.snapshot.get().context.status === 'error') return;
     try {
       pruneSegments();
+      detectUnderrun();
       // Keep the schedule topped up to the margin horizon; every audio
       // frame is independently decodable, so no keyframe gating.
       while (

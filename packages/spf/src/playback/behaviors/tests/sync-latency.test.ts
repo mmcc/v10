@@ -57,6 +57,9 @@ function makeDeps(subscriber: TrackSubscriberActor | undefined) {
   return {
     state: {
       targetLatency: signal<number | undefined>(undefined),
+      adaptiveTargetLatency: signal<number | undefined>(undefined),
+      effectiveTargetLatency: signal<number | undefined>(undefined),
+      catchUpSkips: signal<number | undefined>(undefined),
       measuredLatency: signal<number | undefined>(undefined),
       playoutRate: signal<number | undefined>(undefined),
       playoutState: signal<PlayoutState | undefined>(undefined),

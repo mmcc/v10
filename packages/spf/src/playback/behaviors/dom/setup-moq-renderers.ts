@@ -43,7 +43,11 @@ import { createMachineReactor } from '../../../core/reactors/create-machine-reac
 import { computed, peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import { toAudioDecoderConfig, toVideoDecoderConfig } from '../../../media/moq/codec-mapping';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
-import { joinAnchorUs, resolveTargetLatencySeconds } from '../../../media/moq/timeline';
+import {
+  joinAnchorUs,
+  preferredTargetLatencySeconds,
+  resolveTargetLatencySeconds,
+} from '../../../media/moq/timeline';
 import {
   type AudioContextLike,
   type AudioRendererActor,
@@ -61,6 +65,12 @@ export interface MoqRendererState {
   playoutRate?: number;
   /** Consumer-set target latency in seconds; the anchor's distance from the live edge. */
   targetLatency?: number;
+  /** Adaptive controller's proposal in seconds; ranks below `targetLatency`. */
+  adaptiveTargetLatency?: number;
+  /** Frames the video renderer discarded for arriving behind the clock. */
+  framesDropped?: number;
+  /** Times the audio schedule ran dry (see `AudioRendererContext.underruns`). */
+  audioUnderruns?: number;
   /**
    * Adapter-written pause flag; `undefined` means playing. Gates the
    * renderers' playout rate to 0 — the video self-clock re-anchors on rate
@@ -97,6 +107,7 @@ export interface MoqRendererConfig {
 function makeEdgeTargetUs(
   subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
   targetLatencySignal: ReadonlySignal<number | undefined>,
+  adaptiveTargetLatencySignal: ReadonlySignal<number | undefined>,
   latency: LatencyControlConfig
 ): (() => number | undefined) | undefined {
   if (!latency.joinAtEdge) return undefined;
@@ -104,8 +115,12 @@ function makeEdgeTargetUs(
     const subscriber = peek(subscriberSignal);
     const newestTimestampUs = subscriber?.snapshot.get().context.newestTimestampUs;
     if (newestTimestampUs === undefined) return undefined;
+    // Same resolution `syncLatency` performs, from the same two input
+    // slots — the clocks and the controller must aim at one number, and
+    // the adaptive proposal has to reach both or the slew would chase an
+    // edge the controller is not steering toward.
     const targetSeconds = resolveTargetLatencySeconds(
-      peek(targetLatencySignal),
+      preferredTargetLatencySeconds(peek(targetLatencySignal), peek(adaptiveTargetLatencySignal)),
       subscriber?.track.moq.targetLatency,
       latency.defaultTargetLatency
     );
@@ -129,10 +144,11 @@ function makeEdgeTargetUs(
 function makeAudioJoinAnchor(
   subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
   targetLatencySignal: ReadonlySignal<number | undefined>,
+  adaptiveTargetLatencySignal: ReadonlySignal<number | undefined>,
   latency: LatencyControlConfig,
   videoRendererSignal: ReadonlySignal<VideoRendererActor | undefined>
 ): (() => number | undefined) | undefined {
-  const edgeTargetUs = makeEdgeTargetUs(subscriberSignal, targetLatencySignal, latency);
+  const edgeTargetUs = makeEdgeTargetUs(subscriberSignal, targetLatencySignal, adaptiveTargetLatencySignal, latency);
   if (!edgeTargetUs) return undefined;
   return () => {
     const anchorUs = edgeTargetUs();
@@ -154,6 +170,7 @@ function setupAudioRendererSetup({
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
     targetLatency: ReadonlySignal<number | undefined>;
+    adaptiveTargetLatency: ReadonlySignal<number | undefined>;
   };
   context: {
     audioContext: ReadonlySignal<AudioContextLike | undefined>;
@@ -187,6 +204,7 @@ function setupAudioRendererSetup({
             getJoinAnchorUs: makeAudioJoinAnchor(
               context.audioSubscriberActor,
               state.targetLatency,
+              state.adaptiveTargetLatency,
               latencyConfig,
               context.videoRendererActor
             ),
@@ -219,7 +237,7 @@ function setupAudioRendererSetup({
  * const reactor = setupAudioRenderer.setup({ state, context });
  */
 export const setupAudioRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'targetLatency'],
+  stateKeys: ['playoutRate', 'targetLatency', 'adaptiveTargetLatency'],
   contextKeys: ['audioContext', 'audioSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupAudioRendererSetup,
 });
@@ -236,6 +254,7 @@ function setupVideoRendererSetup({
   state: {
     playoutRate: ReadonlySignal<number | undefined>;
     targetLatency: ReadonlySignal<number | undefined>;
+    adaptiveTargetLatency: ReadonlySignal<number | undefined>;
     paused: ReadonlySignal<boolean | undefined>;
   };
   context: {
@@ -270,7 +289,12 @@ function setupVideoRendererSetup({
             getPlaybackRate: () => (peek(state.paused) ? 0 : (peek(state.playoutRate) ?? 1)),
             // Only consulted on the self-clock path: with audio present the
             // master clock already tracks the edge itself.
-            getTargetClockUs: makeEdgeTargetUs(context.videoSubscriberActor, state.targetLatency, latencyConfig),
+            getTargetClockUs: makeEdgeTargetUs(
+              context.videoSubscriberActor,
+              state.targetLatency,
+              state.adaptiveTargetLatency,
+              latencyConfig
+            ),
             clockSlewRate: latencyConfig.clockSlewRate,
             clockSlewToleranceUs: latencyConfig.clockSlewTolerance * 1_000_000,
           });
@@ -302,7 +326,7 @@ function setupVideoRendererSetup({
  * const reactor = setupVideoRenderer.setup({ state, context });
  */
 export const setupVideoRenderer = defineBehavior({
-  stateKeys: ['playoutRate', 'targetLatency', 'paused'],
+  stateKeys: ['playoutRate', 'targetLatency', 'adaptiveTargetLatency', 'paused'],
   contextKeys: ['renderSurface', 'videoSubscriberActor', 'audioRendererActor', 'videoRendererActor'],
   setup: setupVideoRendererSetup,
 });
@@ -358,4 +382,57 @@ export const trackPlayoutTime = defineBehavior({
   stateKeys: ['currentTime'],
   contextKeys: ['audioRendererActor', 'videoRendererActor'],
   setup: trackPlayoutTimeSetup,
+});
+
+// =============================================================================
+// Playout health
+// =============================================================================
+
+const HEALTH_PUBLISH_INTERVAL_MS = 500;
+
+function trackPlayoutHealthSetup({
+  state,
+  context,
+}: {
+  state: {
+    framesDropped: Signal<number | undefined>;
+    audioUnderruns: Signal<number | undefined>;
+  };
+  context: {
+    audioRendererActor: ReadonlySignal<AudioRendererActor | undefined>;
+    videoRendererActor: ReadonlySignal<VideoRendererActor | undefined>;
+  };
+}): () => void {
+  const timer = setInterval(() => {
+    state.framesDropped.set(peek(context.videoRendererActor)?.snapshot.get().context.framesDropped);
+    state.audioUnderruns.set(peek(context.audioRendererActor)?.snapshot.get().context.underruns);
+  }, HEALTH_PUBLISH_INTERVAL_MS);
+  return () => clearInterval(timer);
+}
+
+/**
+ * **Publish the renderers' quality-cost counters as engine state**:
+ * `framesDropped` (video presented-late discards) and `audioUnderruns`
+ * (times the audio schedule ran dry).
+ *
+ * Both already exist inside the renderer actors and neither was readable
+ * from outside them. They are the *cost* half of any latency decision —
+ * "the target came down" is only half an answer without "and nothing
+ * started dropping" — so they are published whether or not adaptation is
+ * running: an A/B whose control arm is uninstrumented cannot be read.
+ * `adaptLatencyTarget` is the other reader, which is why this is a
+ * separate always-on behavior rather than part of it.
+ *
+ * Interval-sampled rather than effect-driven on purpose: `framesDropped`
+ * lives in the same actor snapshot as `lastPresentedTimestampUs`, so an
+ * effect over it would re-run on every presented frame to copy a number
+ * that changes far more rarely.
+ *
+ * @example
+ * const cleanup = trackPlayoutHealth.setup({ state, context });
+ */
+export const trackPlayoutHealth = defineBehavior({
+  stateKeys: ['framesDropped', 'audioUnderruns'],
+  contextKeys: ['audioRendererActor', 'videoRendererActor'],
+  setup: trackPlayoutHealthSetup,
 });
