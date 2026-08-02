@@ -1,5 +1,5 @@
 /**
- * LOC (Low Overhead Media Container, draft-ietf-moq-loc-02) frame
+ * LOC (Low Overhead Media Container, draft-ietf-moq-loc-04) frame
  * extraction.
  *
  * With LOC packaging each MOQT object carries exactly one encoded frame:
@@ -20,17 +20,30 @@ export interface PropertyPair {
 }
 
 /**
- * LOC property IDs from the MOQ Properties registry (loc-02 §2.3).
- * Even IDs carry varint values, odd IDs carry length-prefixed bytes.
- * Note: loc-02's pre-IANA Video Frame Marking (4) and Audio Level (6)
- * assignments collide with Timestamp (0x06); until the registry settles
- * (a Phase 0 interop pin), only Timestamp/Timescale/Video Config are
- * interpreted.
+ * LOC property IDs from the MOQ Properties registry (loc-04 §6.1), which
+ * settled the pre-IANA collisions of loc-02/03: 0x08 TIMESCALE (Track,
+ * Object), 0x09 VIDEO_FRAME_MARKING (Object), 0x0C AUDIO_LEVEL (Object),
+ * 0x0D VIDEO_CONFIG (Track, Object), 0x0F AUDIO_CONFIG (Track, Object),
+ * 0x10 TIMESTAMP (Object). Even IDs carry varint values, odd IDs carry
+ * length-prefixed bytes.
+ *
+ * Only the IDs this decode path acts on are named. AUDIO_CONFIG (0x0F) has
+ * no named constant because nothing consumes it: an audio decoder's
+ * `description` comes from the catalog's initDataList, and `LocFrame`
+ * carries no audio-config field to put it in.
+ *
+ * TIMESTAMP moved from 0x06 to 0x10 in loc-04. 0x06 stays accepted on
+ * decode — deployed draft-03 publishers still emit it, and SPF only ever
+ * reads LOC. 0x0A, draft-03's other Timestamp candidate, is NOT accepted:
+ * loc-04 gives it to Secure Objects private properties (§3.1.3), so
+ * reading it as a timestamp would misparse encrypted metadata.
  */
 export const LOC_PROPERTY = {
-  TIMESTAMP: 0x06,
+  TIMESTAMP: 0x10,
+  /** draft-03 Timestamp, decode-only. Loses to 0x10 when both are present. */
+  TIMESTAMP_DRAFT03: 0x06,
   TIMESCALE: 0x08,
-  VIDEO_CONFIG: 13,
+  VIDEO_CONFIG: 0x0d,
 } as const;
 
 export const MICROSECONDS_PER_SECOND = 1_000_000;
@@ -46,11 +59,16 @@ export interface LocProperties {
 
 export function parseLocProperties(properties: readonly PropertyPair[]): LocProperties {
   const parsed: LocProperties = {};
+  let legacyTimestamp: number | undefined;
   for (const { type, value } of properties) {
     if (type === LOC_PROPERTY.TIMESTAMP && typeof value === 'number') parsed.timestamp = value;
+    else if (type === LOC_PROPERTY.TIMESTAMP_DRAFT03 && typeof value === 'number') legacyTimestamp = value;
     else if (type === LOC_PROPERTY.TIMESCALE && typeof value === 'number') parsed.timescale = value;
     else if (type === LOC_PROPERTY.VIDEO_CONFIG && typeof value !== 'number') parsed.videoConfig = value;
   }
+  // Applied after the loop, not in it: 0x10 wins over 0x06 in whichever
+  // order a mixed-draft publisher emits them.
+  if (parsed.timestamp === undefined && legacyTimestamp !== undefined) parsed.timestamp = legacyTimestamp;
   return parsed;
 }
 
@@ -81,7 +99,7 @@ export interface ToLocFrameOptions {
 
 /**
  * Convert a LOC timestamp to WebCodecs microseconds. Without any
- * timescale the value is already microseconds (loc-02 §2.3.1.1).
+ * timescale the value is already microseconds (loc-04 §2.3.1.1).
  */
 export function locTimestampToMicroseconds(timestamp: number, timescale?: number): number {
   if (timescale === undefined || timescale === MICROSECONDS_PER_SECOND) return timestamp;

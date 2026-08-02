@@ -12,8 +12,25 @@ describe('parseLocProperties', () => {
     expect(parsed).toEqual({ timestamp: 90_000, timescale: 90_000, videoConfig: config });
   });
 
+  it('accepts the draft-03 timestamp id', () => {
+    expect(parseLocProperties([{ type: LOC_PROPERTY.TIMESTAMP_DRAFT03, value: 42 }])).toEqual({ timestamp: 42 });
+  });
+
+  it('prefers the draft-04 timestamp when both ids are present, in either order', () => {
+    const draft04 = { type: LOC_PROPERTY.TIMESTAMP, value: 100 };
+    const draft03 = { type: LOC_PROPERTY.TIMESTAMP_DRAFT03, value: 7 };
+    expect(parseLocProperties([draft03, draft04])).toEqual({ timestamp: 100 });
+    expect(parseLocProperties([draft04, draft03])).toEqual({ timestamp: 100 });
+  });
+
   it('ignores unknown properties', () => {
     expect(parseLocProperties([{ type: 0x7a, value: 5 }])).toEqual({});
+  });
+
+  it('ignores the Secure Objects private-properties id', () => {
+    // loc-04 §3.1.3 reassigns 0x0A, which draft-03's body text used for
+    // Timestamp — reading it as one would misparse encrypted metadata.
+    expect(parseLocProperties([{ type: 0x0a, value: 5 }])).toEqual({});
   });
 });
 
@@ -60,6 +77,21 @@ describe('toLocFrame', () => {
       { timescale: 90_000 }
     );
     expect(frame?.timestampUs).toBe(1_000_000);
+  });
+
+  it('reads a wire property block written against either draft', () => {
+    // Literal ids, not LOC_PROPERTY: these are what publishers put on the
+    // wire, so the test has to fail if the constants drift.
+    const draft04 = toLocFrame(
+      { objectId: 0, properties: [{ type: 0x10, value: 90_000 }], payload },
+      { timescale: 90_000 }
+    );
+    const draft03 = toLocFrame(
+      { objectId: 0, properties: [{ type: 0x06, value: 90_000 }], payload },
+      { timescale: 90_000 }
+    );
+    expect(draft04).toMatchObject({ isKey: true, timestampUs: 1_000_000, payload });
+    expect(draft03).toMatchObject({ isKey: true, timestampUs: 1_000_000, payload });
   });
 
   it('returns null for payload-less or timestamp-less objects', () => {

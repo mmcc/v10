@@ -327,6 +327,100 @@ describe('applyMoqCatalogUpdate', () => {
     expect(videoIds).toContain(moqTrackId(['conference.example.com', 'conference123', 'alice'], '540p-video'));
   });
 
+  it('updates a subset of fields on an existing track, preserving the rest (§5.1.6)', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    // The §5.6.4 example form: the target is named by `name`, not parentName.
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [
+        {
+          op: 'update',
+          tracks: [{ name: '1080p-video', namespace: 'conference.example.com/conference123/alice', bitrate: 4000000 }],
+        },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, options);
+    // Position held, and every undeclared attribute survived.
+    expect(updated.tracks.map((track) => track.name)).toEqual(['1080p-video', 'audio']);
+    expect(updated.tracks[0]).toMatchObject({
+      name: '1080p-video',
+      bitrate: 4000000, // overridden
+      codec: 'av01.0.08M.10.0.110.09', // preserved
+      width: 1920, // preserved
+      height: 1080, // preserved
+      targetLatency: 2000, // preserved
+    });
+  });
+
+  it('identifies an update target by parentName, like clone (§5.2.33)', () => {
+    const updateOptions = { catalogNamespace: ['other', 'catalog'] };
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, updateOptions);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [
+        {
+          op: 'update',
+          tracks: [
+            {
+              parentName: 'audio',
+              parentNamespace: 'conference.example.com/conference123/alice',
+              bitrate: 64000,
+            },
+          ],
+        },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, updateOptions);
+    expect(updated.tracks).toHaveLength(2);
+    expect(updated.tracks.find((track) => track.name === 'audio')).toMatchObject({
+      bitrate: 64000,
+      codec: 'opus', // preserved
+      samplerate: 48000, // preserved
+      namespace: ['conference.example.com', 'conference123', 'alice'], // unchanged
+    });
+  });
+
+  it('rejects an update targeting a track that does not exist', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [{ op: 'update', tracks: [{ parentName: 'no-such-track', bitrate: 1 }] }],
+    });
+    expect(() => applyMoqCatalogUpdate(initial, delta, options)).toThrow(/unknown track/);
+  });
+
+  it('applies an add and a later update to it in array order (§5.3)', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [
+        {
+          op: 'add',
+          tracks: [
+            {
+              name: '720p-video',
+              packaging: 'loc',
+              isLive: true,
+              role: 'video',
+              codec: 'avc1.64001f',
+              bitrate: 800000,
+            },
+          ],
+        },
+        { op: 'update', tracks: [{ name: '720p-video', bitrate: 900000, width: 1280 }] },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, options);
+    const added = updated.tracks.find((track) => track.name === '720p-video');
+    expect(added).toMatchObject({
+      namespace: ['conference', 'alice'], // catalog namespace, from the add
+      bitrate: 900000,
+      width: 1280,
+      codec: 'avc1.64001f',
+    });
+    expect(updated.tracks).toHaveLength(3);
+  });
+
   it('resolves a delta-added track initRef against the delta root initDataList', () => {
     const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
     const delta = JSON.stringify({

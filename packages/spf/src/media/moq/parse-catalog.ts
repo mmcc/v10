@@ -286,8 +286,8 @@ export interface MoqCatalogUpdateOptions {
 /**
  * Apply one catalog object to the current catalog state. An independent
  * catalog (no `deltaUpdate`) replaces the state; a delta update requires
- * a current catalog and applies its `add`/`remove`/`clone` operations in
- * order (§5.1.6). Returns the new catalog.
+ * a current catalog and applies its `add`/`remove`/`clone`/`update`
+ * operations in order (§5.1.6). Returns the new catalog.
  */
 export function applyMoqCatalogUpdate(
   current: MoqCatalog | undefined,
@@ -374,6 +374,32 @@ function applyDelta(
             throw new Error('MSF clone operation requires a new track name');
           }
           tracks.push({ ...parent, ...pruneUndefined(overrides) });
+        }
+        break;
+      }
+      case 'update': {
+        for (const entry of entries) {
+          // §5.1.6 requires parentName on an update track object, but the
+          // §5.6.4 example identifies its target with `name` — the two
+          // readings of the same draft disagree. Both are accepted: under
+          // the strict one, a publisher following the spec's own example
+          // takes down the catalog subscription.
+          const targetName = isString(entry.parentName) ? entry.parentName : entry.name;
+          if (!isString(targetName)) throw new Error('MSF update operation is missing parentName');
+          const scope = isString(entry.parentName) ? entry.parentNamespace : entry.namespace;
+          const targetNamespace = isString(scope) ? parseNamespaceString(scope) : options.catalogNamespace;
+          const index = tracks.findIndex(
+            (track) => keyOf(track.namespace, track.name) === keyOf(targetNamespace, targetName)
+          );
+          // msf-01 does not say what to do when the target is absent.
+          // Treated as an error, matching clone's unknown-parent handling
+          // and §5.3's "evaluation continues until all operations are
+          // successfully applied".
+          if (index === -1) throw new Error(`MSF update operation references unknown track ${targetName}`);
+          // Declared attributes override, absent ones survive (§5.1.6), and
+          // the track holds its position so a later operation sees the list
+          // the publisher built.
+          tracks[index] = { ...tracks[index]!, ...pruneUndefined(parseCatalogTrackFields(entry, initDataList)) };
         }
         break;
       }
