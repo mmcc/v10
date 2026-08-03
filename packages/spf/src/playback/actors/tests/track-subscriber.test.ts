@@ -318,4 +318,36 @@ describe('createTrackSubscriberActor', () => {
 
     subscriber.destroy();
   });
+
+  it('prefers the SUBSCRIBE_OK track timescale over the catalog, because it describes these bytes', () => {
+    // The catalog says milliseconds; the peer serving this subscription declares
+    // 90kHz. A relay converts timestamps into the timescale it declares, so the
+    // transport's number is the one the objects are actually in — reading the
+    // catalog here would be wrong by 90x.
+    const { session, subscriptions } = createFakeSession();
+    const track: MoqTrack = { ...TRACK, moq: { ...TRACK.moq, timescale: 1_000 } };
+    const subscriber = createTrackSubscriberActor({ session, track });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 0, parameters: {}, trackProperties: [{ type: 0x08, value: 90_000 }] });
+    handlers.onObject?.(locObject(41, 0, 90_000));
+
+    expect(subscriber.peek()).toMatchObject({ timestampUs: 1_000_000 });
+
+    subscriber.destroy();
+  });
+
+  it('falls back to the catalog timescale when the peer declares none', () => {
+    const { session, subscriptions } = createFakeSession();
+    const track: MoqTrack = { ...TRACK, moq: { ...TRACK.moq, timescale: 1_000 } };
+    const subscriber = createTrackSubscriberActor({ session, track });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 0, parameters: {}, trackProperties: [] });
+    handlers.onObject?.(locObject(41, 0, 1_000));
+
+    expect(subscriber.peek()).toMatchObject({ timestampUs: 1_000_000 });
+
+    subscriber.destroy();
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LOC_PROPERTY, locTimestampToMicroseconds, parseLocProperties, toLocFrame } from '../loc';
+import { LOC_PROPERTY, locTimestampToMicroseconds, parseLocProperties, parseTrackTimescale, toLocFrame } from '../loc';
 
 describe('parseLocProperties', () => {
   it('extracts timestamp, timescale, and video config', () => {
@@ -97,5 +97,23 @@ describe('toLocFrame', () => {
   it('returns null for payload-less or timestamp-less objects', () => {
     expect(toLocFrame({ objectId: 0, properties: [], payload: new Uint8Array(0) })).toBeNull();
     expect(toLocFrame({ objectId: 0, properties: [], payload })).toBeNull();
+  });
+});
+
+describe('parseTrackTimescale', () => {
+  it('reads the track-scope TIMESCALE (0x08)', () => {
+    expect(parseTrackTimescale([{ type: 0x08, value: 90_000 }])).toBe(90_000);
+  });
+
+  it('is undefined when the peer declared none', () => {
+    expect(parseTrackTimescale([])).toBeUndefined();
+    expect(parseTrackTimescale([{ type: 0x10, value: 1_000 }])).toBeUndefined();
+  });
+
+  it('treats a zero or byte-valued declaration as absent rather than trusting it', () => {
+    // Zero would make every conversion a division by zero; a byte string is the
+    // wrong shape for an even-numbered property. Both fall back to the chain.
+    expect(parseTrackTimescale([{ type: 0x08, value: 0 }])).toBeUndefined();
+    expect(parseTrackTimescale([{ type: 0x08, value: new Uint8Array([1]) }])).toBeUndefined();
   });
 });

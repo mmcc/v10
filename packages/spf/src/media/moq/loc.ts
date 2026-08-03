@@ -37,6 +37,16 @@ export interface PropertyPair {
  * reads LOC. 0x0A, draft-03's other Timestamp candidate, is NOT accepted:
  * loc-04 gives it to Secure Objects private properties (§3.1.3), so
  * reading it as a timestamp would misparse encrypted metadata.
+ *
+ * **The 0x06 branch is two lines and it is not dead weight — name what still
+ * needs it before removing it.** Two live publishers do: a moq-dev relay before
+ * 0.14.6 re-emits Object Property timestamps as 0x06 (upstream moved the encoder
+ * to 0x10 in `08224275`, released in 0.14.6, and kept 0x06 accepted on decode
+ * indefinitely — so the two implementations are symmetric here rather than one
+ * compensating for the other), and the `mmcc/moq-publisher` browser publisher
+ * emits 0x06 as its *primary* because it was written against loc-02. Dropping
+ * this makes SPF unable to time either. When both have moved, this constant and
+ * its branch go together.
  */
 export const LOC_PROPERTY = {
   TIMESTAMP: 0x10,
@@ -70,6 +80,31 @@ export function parseLocProperties(properties: readonly PropertyPair[]): LocProp
   // order a mixed-draft publisher emits them.
   if (parsed.timestamp === undefined && legacyTimestamp !== undefined) parsed.timestamp = legacyTimestamp;
   return parsed;
+}
+
+/**
+ * The TIMESCALE (0x08) declared at *track* scope, from a SUBSCRIBE_OK's Track
+ * Properties.
+ *
+ * Track Properties and Object Properties share one registry, so this is the same
+ * code point `parseLocProperties` reads per object — the scope is the difference.
+ * Reading it is not optional bookkeeping: a publisher states the units once per
+ * track, and moq-dev relays from 0.14.6 (upstream `08224275`) stopped repeating
+ * TIMESCALE on every object because restating a per-track constant costs bytes per
+ * frame. So for those relays this is the *only* declaration on the wire, and a
+ * reader without it silently falls back to microseconds — correct only while every
+ * track happens to be microsecond-scaled, and wrong by a factor of 1000 on the
+ * first track that is not.
+ *
+ * Returns `undefined` when no usable declaration is present, which includes a
+ * zero: a timescale of zero would make every conversion a division by zero, and
+ * treating it as absent lets the documented fallback chain handle it.
+ */
+export function parseTrackTimescale(properties: readonly PropertyPair[]): number | undefined {
+  for (const { type, value } of properties) {
+    if (type === LOC_PROPERTY.TIMESCALE && typeof value === 'number' && value > 0) return value;
+  }
+  return undefined;
 }
 
 /** One decodable frame extracted from a LOC-packaged MOQT object. */

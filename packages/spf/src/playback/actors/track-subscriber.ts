@@ -18,7 +18,7 @@
  * asks `refreshAuth` for fresh parameters and resubscribes once.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
-import { toLocFrame } from '../../media/moq/loc';
+import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
 import type { MoqTrack } from '../../media/moq/parse-catalog';
 import type { LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
 import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
@@ -133,7 +133,19 @@ const ARRIVAL_ENVELOPE_TAU_MS = 4_000;
 
 export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions): TrackSubscriberActor {
   const { session, track } = options;
-  const timescale = track.moq.timescale;
+  const catalogTimescale = track.moq.timescale;
+
+  /**
+   * TIMESCALE from the SUBSCRIBE_OK's Track Properties, when the peer sent one.
+   *
+   * It outranks the catalog's `timescale` rather than filling in for it, and the
+   * reason is which of the two describes *these bytes*: a relay converts every
+   * timestamp into the timescale it declares for the track it is serving, so the
+   * transport's declaration is the unit the objects on this subscription are
+   * actually in. The catalog states what the origin published, which is the same
+   * number until something in the path rescales it.
+   */
+  let trackTimescale: number | undefined;
 
   // The jitter buffer proper. Objects can arrive out of order (each MSF
   // object rides its own stream), so insertion keeps (group, object)
@@ -240,6 +252,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   const handleObject = (object: MoqtObject): void => {
     if (destroyed || object.status !== 'normal') return;
     if (isBehindWatermark(object.groupId, object.objectId)) return;
+    const timescale = trackTimescale ?? catalogTimescale;
     const loc = toLocFrame(object, timescale !== undefined ? { timescale } : {});
     if (!loc) return;
     const frame: JitterFrame = { groupId: object.groupId, objectId: object.objectId, ...loc };
@@ -277,7 +290,10 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     subscription = session.subscribe(
       { trackNamespace: track.moq.namespace, trackName: track.moq.name, parameters },
       {
-        onOk: () => inner.send({ type: 'subscribed' }),
+        onOk: (ok) => {
+          trackTimescale = parseTrackTimescale(ok.trackProperties);
+          inner.send({ type: 'subscribed' });
+        },
         onObject: handleObject,
         onDone: (done) => inner.send({ type: 'done', done }),
         onError: (error) => {
