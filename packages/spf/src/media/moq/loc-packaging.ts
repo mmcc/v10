@@ -1,12 +1,14 @@
 /**
- * LOC (Low Overhead Media Container, draft-ietf-moq-loc-02) frame
+ * LOC (Low Overhead Media Container, draft-ietf-moq-loc-04) frame
  * packaging — the encode-direction complement to `loc.ts` extraction.
  *
  * Each encoded WebCodecs chunk becomes one MOQT object: the chunk bytes
  * are the object payload and the frame metadata rides as object
- * properties. Only the properties `loc.ts` interprets are produced
- * (Timestamp / Timescale / Config per its loc-02 registry pins), so a
- * packaged frame always round-trips through `toLocFrame`.
+ * properties, under the loc-04 registry pins in `LOC_PROPERTY`
+ * (Timestamp / Timescale / Video Config / Audio Config). A packaged
+ * video frame always round-trips through `toLocFrame`; a packaged audio
+ * config does not — AUDIO_CONFIG is emitted for loc-04 consumers, but
+ * SPF's own extraction never reads it (see the `LOC_PROPERTY` doc).
  *
  * DOM-free and wire-free: the chunk comes in structurally (no WebCodecs
  * lib dependency) and properties go out as the same generic key/value
@@ -33,17 +35,22 @@ export interface PackageLocFrameMeta {
   /**
    * Codec `extradata` (WebCodecs `decoderConfig.description`) to carry
    * beside independently decodable chunks, e.g. avcC for `avc`-format
-   * H.264. Carried in the LOC Config property on `'key'` chunks only —
-   * the subscribe side (`video-renderer`) applies it as the decoder
-   * `description` when a keyframe arrives. Audio chunks are all `'key'`
-   * (every audio frame starts its own MOQT group), so an audio config
-   * rides every frame; codecs with no extradata (Opus) simply omit it.
+   * H.264. Carried in the LOC Video Config property on `'key'` chunks
+   * only — the subscribe side (`video-renderer`) applies it as the
+   * decoder `description` when a keyframe arrives.
    */
-  config?: Uint8Array;
+  videoConfig?: Uint8Array;
+  /**
+   * Codec `extradata` for audio, e.g. AAC AudioSpecificConfig — Opus
+   * carries none. Carried in the LOC Audio Config property on `'key'`
+   * chunks; audio chunks are all `'key'` (every audio frame starts its
+   * own MOQT group), so a declared audio config rides every frame.
+   */
+  audioConfig?: Uint8Array;
   /**
    * Timestamp units per second to declare on the wire. Defaults to
    * microseconds — WebCodecs' native unit — declared explicitly so
-   * receivers never fall back to loc-02's absent-timescale epoch
+   * receivers never fall back to loc-04's absent-timescale epoch
    * semantics for capture-relative timestamps.
    */
   timescale?: number;
@@ -65,10 +72,9 @@ export function microsecondsToLocTimestamp(timestampUs: number, timescale?: numb
 }
 
 /**
- * Package one encoded chunk as a LOC MOQT object body. Produces exactly
- * what `toLocFrame` extraction consumes: the chunk bytes as the payload
- * plus Timestamp, Timescale, and (for `'key'` chunks with a `config`)
- * the Config property.
+ * Package one encoded chunk as a LOC MOQT object body: the chunk bytes
+ * as the payload plus Timestamp, Timescale, and (for `'key'` chunks with
+ * a declared config) the matching Config property.
  *
  * Group/object numbering is the track publisher's concern — MSF maps one
  * GOP per MOQT group, so the publisher starts a new group at each `'key'`
@@ -84,8 +90,9 @@ export function packageLocFrame(chunk: EncodedChunkLike, meta: PackageLocFrameMe
     { type: LOC_PROPERTY.TIMESTAMP, value: microsecondsToLocTimestamp(chunk.timestamp, timescale) },
     { type: LOC_PROPERTY.TIMESCALE, value: timescale },
   ];
-  if (meta.config !== undefined && chunk.type === 'key') {
-    properties.push({ type: LOC_PROPERTY.VIDEO_CONFIG, value: meta.config });
+  if (chunk.type === 'key') {
+    if (meta.videoConfig !== undefined) properties.push({ type: LOC_PROPERTY.VIDEO_CONFIG, value: meta.videoConfig });
+    if (meta.audioConfig !== undefined) properties.push({ type: LOC_PROPERTY.AUDIO_CONFIG, value: meta.audioConfig });
   }
   return { payload, properties };
 }

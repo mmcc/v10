@@ -27,19 +27,22 @@ function makeChunk(type: 'key' | 'delta', timestamp: number, byte = 0xab): Encod
   };
 }
 
-function descriptionOf(packaged: PackagedLocFrame): Uint8Array | undefined {
-  const property = packaged.properties.find(({ type }) => type === LOC_PROPERTY.VIDEO_CONFIG);
-  return property && typeof property.value !== 'number' ? property.value : undefined;
+function descriptionOf(
+  packaged: PackagedLocFrame,
+  property: number = LOC_PROPERTY.VIDEO_CONFIG
+): Uint8Array | undefined {
+  const pair = packaged.properties.find(({ type }) => type === property);
+  return pair && typeof pair.value !== 'number' ? pair.value : undefined;
 }
 
 const disposals: (() => void)[] = [];
 
-function setupStubbedActor(options: { nowUs?: () => number } = {}) {
+function setupStubbedActor(options: { nowUs?: () => number; track?: 'video' | 'audio' } = {}) {
   const sunk: { packaged: PackagedLocFrame; meta: EncodedChunkSinkMeta }[] = [];
   let output!: (chunk: EncodedChunkLike, metadata?: EncoderOutputMetadata) => void;
   const actor = createEncoderActor<{ id: number }, FakeFrame>({
     ...options,
-    track: 'video',
+    track: options.track ?? 'video',
     sink: (packaged, meta) => sunk.push({ packaged, meta }),
     create: (callbacks) => {
       output = callbacks.output;
@@ -93,6 +96,23 @@ describe('createEncoderActor', () => {
     // Delta frames never carry the Config property.
     for (const { packaged, meta } of sunk) {
       if (!meta.keyframe) expect(descriptionOf(packaged)).toBeUndefined();
+    }
+  });
+
+  it('labels an audio track description as Audio Config, not Video Config', () => {
+    const { actor, sunk, emit } = setupStubbedActor({ track: 'audio' });
+    actor.send({ type: 'configure', config: { id: 1 } });
+
+    // AAC-shaped: an AudioSpecificConfig on the first output, then none —
+    // audio chunks are all 'key', so the config must ride every frame.
+    const description = Uint8Array.from([0x11, 0x90]);
+    emit(makeChunk('key', 0), { decoderConfig: { description } });
+    emit(makeChunk('key', 20_000));
+
+    expect(sunk).toHaveLength(2);
+    for (const { packaged } of sunk) {
+      expect(descriptionOf(packaged, LOC_PROPERTY.AUDIO_CONFIG)).toEqual(description);
+      expect(descriptionOf(packaged, LOC_PROPERTY.VIDEO_CONFIG)).toBeUndefined();
     }
   });
 

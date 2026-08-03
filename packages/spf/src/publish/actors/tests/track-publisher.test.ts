@@ -79,7 +79,7 @@ function locFrame(timestampUs: number, bytes: number[], config?: Uint8Array) {
       byteLength: data.length,
       copyTo: (destination: Uint8Array) => destination.set(data),
     },
-    config ? { config } : {}
+    config ? { videoConfig: config } : {}
   );
 }
 

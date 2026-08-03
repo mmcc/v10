@@ -353,7 +353,7 @@ describe('createMoqtPublishSession', () => {
           byteLength: data.length,
           copyTo: (destination: Uint8Array) => destination.set(data),
         },
-        frame.key ? { config: new Uint8Array([0xc0]) } : {}
+        frame.key ? { videoConfig: new Uint8Array([0xc0]) } : {}
       );
       videoPublisher.send({
         type: 'frame',

@@ -55,11 +55,11 @@ describe('packageLocFrame', () => {
     expect(frame).toMatchObject({ timestampUs: 2_000_000, isKey: false });
   });
 
-  it('carries the decoder config beside key chunks only', () => {
+  it('carries the video decoder config beside key chunks only', () => {
     const config = new Uint8Array([1, 100, 0, 31]);
 
-    const key = packageLocFrame(chunkOf(bytes, { type: 'key', timestamp: 1 }), { config });
-    const delta = packageLocFrame(chunkOf(bytes, { type: 'delta', timestamp: 2 }), { config });
+    const key = packageLocFrame(chunkOf(bytes, { type: 'key', timestamp: 1 }), { videoConfig: config });
+    const delta = packageLocFrame(chunkOf(bytes, { type: 'delta', timestamp: 2 }), { videoConfig: config });
 
     expect(key.properties).toContainEqual({ type: LOC_PROPERTY.VIDEO_CONFIG, value: config });
     expect(delta.properties.some(({ type }) => type === LOC_PROPERTY.VIDEO_CONFIG)).toBe(false);
@@ -68,6 +68,27 @@ describe('packageLocFrame', () => {
     expect(keyFrame?.videoConfig).toEqual(config);
     const deltaFrame = toLocFrame({ objectId: 1, properties: delta.properties, payload: delta.payload });
     expect(deltaFrame?.videoConfig).toBeUndefined();
+  });
+
+  it('labels an audio decoder config as Audio Config, not Video Config', () => {
+    const config = new Uint8Array([0x11, 0x90]);
+
+    const packaged = packageLocFrame(chunkOf(bytes, { type: 'key', timestamp: 1 }), { audioConfig: config });
+
+    expect(packaged.properties).toContainEqual({ type: LOC_PROPERTY.AUDIO_CONFIG, value: config });
+    expect(packaged.properties.some(({ type }) => type === LOC_PROPERTY.VIDEO_CONFIG)).toBe(false);
+  });
+
+  it('emits the loc-04 wire ids', () => {
+    // Literal ids, not LOC_PROPERTY: these are the codepoints loc-04 §6.1
+    // registers, so the test has to fail if the constants drift. 0x10
+    // TIMESTAMP in particular replaced draft-02/03's 0x06.
+    const packaged = packageLocFrame(chunkOf(bytes, { type: 'key', timestamp: 1 }), {
+      videoConfig: new Uint8Array([1]),
+      audioConfig: new Uint8Array([2]),
+    });
+
+    expect(packaged.properties.map(({ type }) => type)).toEqual([0x10, 0x08, 0x0d, 0x0f]);
   });
 
   it('copies the payload out of the chunk', () => {

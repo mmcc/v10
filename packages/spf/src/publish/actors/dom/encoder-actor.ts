@@ -203,7 +203,16 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
         byteLength: chunk.byteLength,
         copyTo: (destination) => chunk.copyTo(destination),
       };
-      const packaged = packageLocFrame(rebased, latestConfig === undefined ? {} : { config: latestConfig });
+      // The config property is kind-specific on the wire (loc-04 §2.3.2.1
+      // vs §2.3.3.1); the actor's track kind picks which one to label.
+      const packaged = packageLocFrame(
+        rebased,
+        latestConfig === undefined
+          ? {}
+          : track === 'video'
+            ? { videoConfig: latestConfig }
+            : { audioConfig: latestConfig }
+      );
       sink(packaged, { keyframe, timestampUs, byteLength: chunk.byteLength, track });
       inner?.send({ type: 'chunk-output', byteLength: chunk.byteLength, keyframe, timestampUs });
     },
