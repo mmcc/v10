@@ -77,6 +77,11 @@ describe('packageLocFrame', () => {
 
     expect(packaged.properties).toContainEqual({ type: LOC_PROPERTY.AUDIO_CONFIG, value: config });
     expect(packaged.properties.some(({ type }) => type === LOC_PROPERTY.VIDEO_CONFIG)).toBe(false);
+
+    // Same key-only rule as Video Config — WebCodecs audio chunks are all
+    // 'key' in practice, but the packaging contract is kind-agnostic.
+    const delta = packageLocFrame(chunkOf(bytes, { type: 'delta', timestamp: 2 }), { audioConfig: config });
+    expect(delta.properties.some(({ type }) => type === LOC_PROPERTY.AUDIO_CONFIG)).toBe(false);
   });
 
   it('emits the loc-04 wire ids', () => {
