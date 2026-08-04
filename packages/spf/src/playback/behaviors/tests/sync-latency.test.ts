@@ -78,6 +78,37 @@ describe('syncLatency', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
+
+  // Measured against a live 0.14.6 stack: `measuredLatency` sawtoothed between ~0
+  // and about one audio group of media while the target held at 1.5, pinning
+  // `playoutRate` at 0.95 for the whole session. The cause is which track the depth
+  // is read from: `bufferDepthSeconds(newest, playout)` is a fair proxy for latency
+  // only when `newest` tracks the live edge, and audio delivered a group at a time
+  // does not — it is consumed as fast as it lands, so newest sits at playout and
+  // the depth reads ~0. Video arrives frame by frame, so its newest does track the
+  // edge.
+  it('measures depth from video when both tracks are present', async () => {
+    const audio = fakeSubscriber();
+    const video = fakeSubscriber();
+    const deps = makeDeps(audio.subscriber);
+    deps.context.videoSubscriberActor.set(video.subscriber);
+    deps.state.targetLatency.set(1.5);
+
+    // Video holds a real 1.5s behind the edge; audio's buffer has just drained
+    // after its group was consumed, so its depth reads zero.
+    video.setBufferDepth(1.5);
+    audio.setBufferDepth(0);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1.5, 3);
+    // At target, so no nudge: the 0.95 pin was the symptom.
+    expect(deps.state.playoutRate.get()).toBe(1);
+
+    reactor.destroy();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

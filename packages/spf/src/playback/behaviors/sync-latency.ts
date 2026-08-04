@@ -221,8 +221,27 @@ function setupSyncLatency({
     if (currentTime === undefined) return;
     const playoutTimestampUs = currentTime * 1_000_000;
 
+    // **Video first, and the order is the measurement.** `bufferDepthSeconds` is
+    // `newest buffered − playout`, which stands in for latency only while `newest`
+    // tracks the live edge. Video arrives frame by frame, so it does. Audio arrives
+    // a *group* at a time and is consumed as fast as it lands, so its newest sits
+    // at the playout position and the depth reads ~0 however much real latency
+    // there is. Group size only sets the amplitude of the resulting sawtooth, not
+    // whether it happens.
+    //
+    // Measured against a moq-relay 0.14.6 stack with a browser origin: with the
+    // target held at 1.5s, audio-first made `measuredLatency` sawtooth between ~0
+    // and roughly one group of media in step with each group landing and draining,
+    // so the controller saw a permanently starved buffer and pinned `playoutRate`
+    // at 0.95 — playing the whole session 5% slow, with audio as the master clock
+    // and video slewing to follow it. That is the same failure the V18 note
+    // describes in mirror image (1.05, 5% fast). Video-only playback was
+    // unaffected, which is the tell.
+    //
+    // Audio remains the fallback for an audio-only broadcast, where its buffer is
+    // the only signal there is.
     const depth =
-      subscriberLatencySeconds(audio, playoutTimestampUs) ?? subscriberLatencySeconds(video, playoutTimestampUs);
+      subscriberLatencySeconds(video, playoutTimestampUs) ?? subscriberLatencySeconds(audio, playoutTimestampUs);
     if (depth === undefined) return;
 
     state.measuredLatency.set(depth);
