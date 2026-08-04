@@ -316,13 +316,15 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
    * feedback on the *same* error — the controller measures edge-to-playout
    * against the same resolved target this reads — so they always pull the
    * same direction and cannot fight. They divide by scale: the slew works
-   * continuously and owns fine error inside the controller's deadband,
-   * where the controller is parked at rate 1; the controller owns error
-   * coarse enough to leave the deadband. Outside it the two compound to at
-   * most `slewRate + rateNudge` of real time, still bounded and still
-   * sub-perceptual on a video-only self-clock. Error beyond
-   * `DISCONTINUITY_THRESHOLD_US` is neither's job — that is a timeline
-   * reset and takes the hard re-anchor below.
+   * continuously and owns fine error, including inside the controller's
+   * deadband where nothing has engaged the controller; the controller owns
+   * error coarse enough to leave the deadband, and holds its correction
+   * back down to its own reclaim band rather than to the deadband edge —
+   * so both are active over part of the deadband, in the same direction.
+   * They compound to at most `slewRate + rateNudge` of real time, still
+   * bounded and still sub-perceptual on a video-only self-clock. Error
+   * beyond `DISCONTINUITY_THRESHOLD_US` is neither's job — that is a
+   * timeline reset and takes the hard re-anchor below.
    */
   const slewTowardEdge = (clock: number, nowMs: number, rate: number): number => {
     const elapsedMs = lastSlewWallMs === null ? 0 : Math.max(0, nowMs - lastSlewWallMs);

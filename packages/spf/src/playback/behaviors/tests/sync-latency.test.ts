@@ -235,6 +235,190 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
+  // The creep this exists to stop: playout latency only ever grows between
+  // corrections (the audio renderer never schedules a buffer earlier than the
+  // context clock, so every late arrival ratchets the master clock further
+  // back), so a nudge that released at the deadband edge made the edge the
+  // equilibrium and the target unreachable. The correction now holds until the
+  // deviation is back inside the reclaim band.
+  it('holds the drain until latency is back near the target, not at the band edge', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(1.2); // 0.7s over target: past the 0.25s deadband
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    // Back inside the deadband — where this used to release — but still 0.2s
+    // of latency nobody asked for.
+    setBufferDepth(0.7);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+    expect(deps.state.playoutState.get()).toBe('nudging');
+
+    // Inside the reclaim band (2 × rateNudge × intervalMs = 50ms at the
+    // defaults): as close to target as a 500ms evaluation can settle.
+    setBufferDepth(0.54);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  it('holds the refill until latency is back near the target', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(0.1); // 0.4s short of target
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(0.95);
+
+    setBufferDepth(0.3); // inside the deadband, still 0.2s short
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(0.95);
+
+    setBufferDepth(0.47);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBe(1);
+
+    reactor.destroy();
+  });
+
+  // The deadband still has to *engage* nothing on its own, or every stream
+  // would spend its life correcting toward a setpoint it is already holding.
+  it('engages nothing while depth stays inside the deadband from the start', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    for (const depth of [0.7, 0.6, 0.74, 0.3]) {
+      setBufferDepth(depth);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(deps.state.playoutRate.get()).toBe(1);
+      expect(deps.state.playoutState.get()).toBe('stable');
+    }
+
+    reactor.destroy();
+  });
+
+  // Without the sign check a drain latched past the target would keep draining
+  // an already-shallow buffer — the reclaim band alone never sees the crossing
+  // when playout overshoots it in one step.
+  it('releases a drain that overshoots the target', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(1.2);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    // Overshot to 0.2s under target: past the reclaim band, still inside the
+    // deadband, so nothing re-engages.
+    setBufferDepth(0.3);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  it('turns a drain straight into a refill when the overshoot clears the far edge', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(1.2);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    // 0.5s under target — release and re-engage the other way in the same
+    // evaluation, rather than spending one parked at rate 1.
+    setBufferDepth(0);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(0.95);
+    expect(deps.state.playoutState.get()).toBe('nudging');
+
+    reactor.destroy();
+  });
+
+  // A skip re-places the whole timeline, so the correction it was holding
+  // describes a depth that no longer exists.
+  it('drops the engaged correction across a catch-up skip', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(1.2);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutState.get()).toBe('nudging');
+
+    setBufferDepth(10);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutState.get()).toBe('catching-up');
+
+    // Post-skip depth is inside the deadband: the pre-skip drain must not
+    // resume, or the rate would still be draining a buffer that is on target.
+    setBufferDepth(0.7);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // The band is derived from the two knobs that decide how far one evaluation
+  // moves the depth, so retuning either retunes it rather than leaving a
+  // controller that overshoots its own release band every evaluation.
+  it('widens the reclaim band with the nudge and the evaluation interval', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    // 2 × 0.1 × 1s = 0.2s of reclaim band, against the same 0.25s deadband.
+    const reactor = syncLatency.setup({ ...deps, config: { latency: { rateNudge: 0.1, intervalMs: 1_000 } } });
+
+    setBufferDepth(1.2);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.1);
+
+    // 0.18s over target: inside this tuning's band, and far outside the 50ms
+    // the defaults would derive — which would still be draining here.
+    setBufferDepth(0.68);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(deps.state.playoutRate.get()).toBe(1);
+
+    reactor.destroy();
+  });
+
+  // The documented degenerate case: a deadband narrower than the reclaim band
+  // the nudge would derive gets release-at-the-edge back, rather than a
+  // release band wider than the band that engaged it.
+  it('caps the reclaim band at a deadband narrower than it', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup({ ...deps, config: { latency: { deadband: 0.02 } } });
+
+    setBufferDepth(0.6); // 0.1s over a 0.02s deadband
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    setBufferDepth(0.515); // inside the 0.02s band, which is also the release band
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBe(1);
+
+    reactor.destroy();
+  });
+
   it('skips to the latest group when the buffer blows past the catch-up threshold', async () => {
     const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
     const deps = makeDeps(subscriber);

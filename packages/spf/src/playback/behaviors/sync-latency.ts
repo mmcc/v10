@@ -15,6 +15,40 @@
  *   keyframe-led group and reset the rate. A visible jump beats a
  *   permanently-latent stream.
  *
+ * **The deadband engages the nudge; only the target releases it.** The
+ * band is asymmetric in *time*, not in size: a correction starts when the
+ * deviation leaves `deadband` and stops when the deviation is back inside
+ * `reclaimBandSeconds` of the target — a small multiple of what one
+ * evaluation can move. Releasing at the deadband edge instead, as this
+ * did, makes the deadband edge the equilibrium rather than the target,
+ * and the difference is not academic: playout latency only ever *grows*
+ * between corrections. The audio renderer schedules every buffer no
+ * earlier than the context clock (`audio-renderer`'s `startAt`), so each
+ * late arrival ratchets the master clock permanently further behind the
+ * delivery edge; the video self-clock's own hold-and-drift does the same
+ * where there is no audio. Nothing walks either clock back on its own, so
+ * a controller that stops at `target + deadband` never returns to target
+ * at all — it settles wherever the last excursion left it inside the band
+ * and accumulates the next one from there.
+ *
+ * The **video self-clock already has this property** — it slews onto
+ * `edge − target` continuously and stops inside `clockSlewTolerance` of
+ * it, not at the controller's deadband. So this is the audio-master case
+ * gaining what the video-only case always had, and the two now stop at
+ * comparable distances from the same setpoint. Where both run they pull
+ * the same direction and compound to at most `clockSlewRate + rateNudge`,
+ * the bound `video-renderer` already documents.
+ *
+ * A correction also releases when the deviation changes *sign* — playout
+ * overshot the target — and re-engages only past `deadband` on the far
+ * side, so an overshoot cannot leave the previous direction latched.
+ *
+ * Long corrections are visible to `adaptLatencyTarget`, which freezes
+ * while `playoutState` is not `'stable'`. That is the intended reading:
+ * a reclaim is the inner loop mid-correction, and a setpoint that moves
+ * under it is the hunting failure that behavior's timescale bounds exist
+ * to prevent.
+ *
  * **Edge-to-playout, not buffer depth.** Measuring newest-buffered minus
  * oldest-buffered would understate real latency by everything held outside
  * the jitter buffer — the video renderer alone keeps `decodeAhead` frames
@@ -115,7 +149,11 @@ export interface SyncLatencyConfig {
 export interface LatencyControlConfig {
   /** Fallback target latency in seconds. */
   defaultTargetLatency: number;
-  /** Latency deviation (seconds) tolerated before a rate nudge. */
+  /**
+   * Latency deviation (seconds) tolerated before a rate nudge **engages**.
+   * It does not also release it — see `reclaimBandSeconds`, and the
+   * header for why an equilibrium at the band edge is not one.
+   */
   deadband: number;
   /** Rate adjustment magnitude (e.g. 0.05 → 5% faster/slower). */
   rateNudge: number;
@@ -160,7 +198,33 @@ export const DEFAULT_LATENCY_CONTROL_CONFIG: LatencyControlConfig = {
   clockSlewTolerance: 0.05,
 };
 
+/**
+ * How close to the target an engaged nudge insists on getting before it
+ * releases, in seconds.
+ *
+ * **Derived, not configured.** One evaluation of a nudge moves the
+ * measured depth by `rateNudge × intervalMs` — 25ms at the defaults — so a
+ * release band narrower than that is a band the loop cannot settle inside:
+ * it would step across the target and reverse on the next evaluation,
+ * which is audible rate flapping rather than control. Two of those steps
+ * is the narrowest band that is reachable *and* still reached from either
+ * side, and it lands on 50ms at the defaults — the same distance
+ * `clockSlewTolerance` lets the video self-clock stop at, so the two
+ * mechanisms give up at comparable error.
+ *
+ * Capped at `deadband`, which is the degenerate case: a release band as
+ * wide as the band that engages the nudge is the old release-at-the-edge
+ * behavior, and a tuning that asks for it gets it rather than getting
+ * hysteresis inverted.
+ */
+function reclaimBandSeconds(config: LatencyControlConfig): number {
+  return Math.min(config.deadband, 2 * config.rateNudge * (config.intervalMs / 1000));
+}
+
 type FsmState = 'inactive' | 'controlling';
+
+/** Direction of an engaged correction: drain (+1), refill (−1), or none. */
+type Correction = -1 | 0 | 1;
 
 function setupSyncLatency({
   state,
@@ -184,6 +248,17 @@ function setupSyncLatency({
   config?: SyncLatencyConfig;
 }): Reactor<FsmState | 'destroying' | 'destroyed'> {
   const controlConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
+  const reclaimBand = reclaimBandSeconds(controlConfig);
+
+  /**
+   * Whether a correction is engaged, and which way — the whole of this
+   * controller's memory, per activation. Reset by `entry` (and by a
+   * catch-up skip, which parks the rate at 1 itself). Deliberately *not*
+   * reset when the controller idles for want of a playout position: the
+   * rate slot is left alone there too, so the correction the renderers are
+   * still applying is the correction this variable has to keep describing.
+   */
+  let correcting: Correction = 0;
 
   const derivedStateSignal = computed<FsmState>(() =>
     context.videoSubscriberActor.get() || context.audioSubscriberActor.get() ? 'controlling' : 'inactive'
@@ -276,19 +351,35 @@ function setupSyncLatency({
       audio?.skipToLatestGroup();
       video?.skipToLatestGroup();
       state.catchUpSkips.set((peek(state.catchUpSkips) ?? 0) + 1);
+      // The skip re-places the whole timeline, so whatever was being
+      // corrected toward no longer describes anything: park the rate and
+      // let the next evaluation decide against the post-skip depth.
+      correcting = 0;
       state.playoutRate.set(1);
       state.playoutState.set('catching-up');
       return;
     }
 
     const deviation = depth - target;
-    if (Math.abs(deviation) <= controlConfig.deadband) {
+    // Release before engage, so an overshoot that lands past the deadband on
+    // the far side turns around in one evaluation instead of spending one
+    // parked at rate 1.
+    if (correcting !== 0 && (Math.abs(deviation) <= reclaimBand || Math.sign(deviation) !== correcting)) {
+      correcting = 0;
+    }
+    if (correcting === 0 && Math.abs(deviation) > controlConfig.deadband) {
+      correcting = deviation > 0 ? 1 : -1;
+    }
+
+    if (correcting === 0) {
       state.playoutRate.set(1);
       state.playoutState.set('stable');
       return;
     }
     // Too deep → play faster to drain; too shallow → slow down to refill.
-    state.playoutRate.set(deviation > 0 ? 1 + controlConfig.rateNudge : 1 - controlConfig.rateNudge);
+    // Held until the deviation is back inside `reclaimBand`, which is what
+    // makes the target the equilibrium rather than the band edge.
+    state.playoutRate.set(correcting > 0 ? 1 + controlConfig.rateNudge : 1 - controlConfig.rateNudge);
     state.playoutState.set('nudging');
   };
 
@@ -300,6 +391,7 @@ function setupSyncLatency({
       controlling: {
         entry: () => {
           state.catchUpSkips.set(0);
+          correcting = 0;
           const timer = setInterval(evaluate, controlConfig.intervalMs);
           return () => {
             clearInterval(timer);
