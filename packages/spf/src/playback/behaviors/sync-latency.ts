@@ -133,7 +133,9 @@ export interface LatencyControlConfig {
    * back onto the delivery edge. 0.05 → 50ms/s: below the ~1-frame-per-
    * 20-frames threshold where a speed change reads as one, so the clock
    * can walk off an entire mis-placed join anchor unnoticed. Must stay
-   * below 1 or the correction could outrun playback and stall the clock.
+   * well below the playout rate or the correction outruns playback and
+   * stalls the clock; the renderer clamps what it is handed into
+   * `[0, 0.9]` rather than trusting this.
    */
   clockSlewRate: number;
   /**

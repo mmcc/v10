@@ -576,6 +576,51 @@ describe('createVideoRendererActor', () => {
     }
   });
 
+  // The monotonically-forward guarantee is a property of the slew *rate*,
+  // and the rate arrives from a shared latency config several layers up. A
+  // rate at or above 1 stalls the clock or walks it backwards, a negative
+  // one drives it away from the edge and re-anchors it there on every read,
+  // and `NaN` poisons the anchor for the life of the track.
+  it('clamps a slew rate that would break forward progress', async () => {
+    const frames = await encodeTestFrames(30);
+    const canvas = document.createElement('canvas');
+
+    /** Run a stalled-publisher slew and return the clock at each step. */
+    const runStalledEdge = async (clockSlewRate: number): Promise<number[]> => {
+      let now = 0;
+      const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+      // The edge stops moving while playout continues, so the error goes
+      // negative and the slew pulls the clock back for as long as it runs.
+      const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => 0, clockSlewRate });
+      try {
+        renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+        await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
+        const readings: number[] = [];
+        for (let i = 0; i < 10; i++) {
+          now += 100;
+          readings.push(renderer.getClockTimeUs()!);
+        }
+        return readings;
+      } finally {
+        nowSpy.mockRestore();
+        renderer.destroy();
+      }
+    };
+
+    for (const rate of [2, 1, Number.NaN, -0.5, Number.POSITIVE_INFINITY]) {
+      const readings = await runStalledEdge(rate);
+      let previous = 0;
+      for (const clock of readings) {
+        expect(Number.isFinite(clock)).toBe(true);
+        expect(clock).toBeGreaterThan(previous);
+        previous = clock;
+      }
+      // A negative rate inverts the correction: without the clamp the clock
+      // is driven *further* from a stalled edge than real time allows.
+      expect(readings[readings.length - 1]).toBeLessThanOrEqual(1_000_000);
+    }
+  });
+
   it('self-clock applies rate changes forward-only', async () => {
     const frames = await encodeTestFrames(30);
     const canvas = document.createElement('canvas');

@@ -55,8 +55,9 @@ export interface VideoRendererConfig {
   /**
    * Fraction of real time the self-clock may spend correcting itself onto
    * `getTargetClockUs()`. Default 0.05 → at most 50ms of correction per
-   * second. Must stay below 1: the bound is what keeps the clock
-   * monotonically forward while it is being pulled backwards.
+   * second. Staying well below the playout rate is what keeps the clock
+   * monotonically forward while it is being pulled backwards, so a supplied
+   * value is clamped into `[0, 0.9]` and a non-finite one takes the default.
    */
   clockSlewRate?: number;
   /** Edge-tracking error tolerated before the self-clock slews. Default 50_000µs. */
@@ -119,10 +120,34 @@ const DEFAULT_TICK_INTERVAL_MS = 8;
 const DISCONTINUITY_THRESHOLD_US = 1_000_000;
 const DEFAULT_CLOCK_SLEW_RATE = 0.05;
 const DEFAULT_CLOCK_SLEW_TOLERANCE_US = 50_000;
+/**
+ * Upper bound on `clockSlewRate`. The slew subtracts up to `slewRate` of
+ * real time from a clock advancing at `getPlaybackRate()` of it, so the
+ * clock only stays monotonically forward while the rate is below the
+ * slowest playout rate it will ever be read at. 0.9 leaves headroom under
+ * the latency controller's `1 - rateNudge` (0.95 by default) — the one
+ * property the bounded slew exists to guarantee.
+ */
+const MAX_CLOCK_SLEW_RATE = 0.9;
+
+/**
+ * Clamped rather than validated, and a broken value takes the default
+ * rather than 0: this actor is handed a slew rate from a latency config
+ * several layers up, and the failures are the class nothing reports. At or
+ * above 1 the correction outruns playback and the clock stalls or walks
+ * backwards; negative inverts the correction's sign, so the clock is driven
+ * *away* from the edge and re-anchored there on every read, diverging
+ * without bound; `NaN` poisons the anchor permanently. A slower correction
+ * is a worse clock, but a stalled, diverging or frozen one is not a clock.
+ */
+function resolveClockSlewRate(rate: number | undefined): number {
+  if (rate === undefined || !Number.isFinite(rate)) return DEFAULT_CLOCK_SLEW_RATE;
+  return Math.min(Math.max(rate, 0), MAX_CLOCK_SLEW_RATE);
+}
 
 export function createVideoRendererActor(options: CreateVideoRendererOptions): VideoRendererActor {
   const decodeAhead = options.decodeAhead ?? DEFAULT_DECODE_AHEAD;
-  const slewRate = options.clockSlewRate ?? DEFAULT_CLOCK_SLEW_RATE;
+  const slewRate = resolveClockSlewRate(options.clockSlewRate);
   const slewToleranceUs = options.clockSlewToleranceUs ?? DEFAULT_CLOCK_SLEW_TOLERANCE_US;
   const context2d = options.canvas.getContext('2d') as
     | CanvasRenderingContext2D
