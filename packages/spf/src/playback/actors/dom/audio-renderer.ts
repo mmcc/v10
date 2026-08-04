@@ -284,6 +284,17 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       // see an empty schedule (`tick` only drops while `segments.length === 0`);
       // `finally` closes the AudioData, and one dropped buffer is cheaper than a
       // timeline anchored at the wrong place.
+      //
+      // **Kept as a guard against a decoder, not as a live path.** The dequeue
+      // path's own check fires first on every jump that reaches this one: it is
+      // armed exactly when `previous` exists (only `closeDecoder` clears
+      // `lastEnqueuedUs`, and it clears `segments` in the same breath), it
+      // compares the same threshold, and `AudioDecoder.close()` discards every
+      // in-flight decode — measured, not assumed — so no pre-jump output can
+      // arrive after it either. What is left for this branch is a decoder whose
+      // *outputs* jump where its inputs did not, the mirror image of the
+      // timestamp rebasing the dequeue check exists for. Anything relying on it
+      // firing has no coverage; treat it as unexercised.
       const previous = segments[segments.length - 1];
       if (previous && data.timestamp - segmentEndMediaUs(previous) > DISCONTINUITY_THRESHOLD_US) {
         stopAll();
