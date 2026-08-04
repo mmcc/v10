@@ -272,9 +272,23 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       // skipped ahead (latency catch-up): scheduling it as silence would
       // keep the latency it was meant to shed — and re-trigger the
       // catch-up loop forever. Drop the stale schedule and anchor fresh.
+      //
+      // "Fresh" has to mean *through the join anchor*, the same way the dequeue
+      // path above re-arms it. Clearing the schedule alone left `needsJoinAnchor`
+      // false — and nothing on this path ever set it — so the next buffer took the
+      // no-previous-segment branch below and started at
+      // `currentTime + scheduleMargin`, keeping whatever latency the skip was meant
+      // to shed, with no pending re-anchor left to correct it.
+      //
+      // Returning rather than scheduling this buffer is what lets the re-anchor
+      // see an empty schedule (`tick` only drops while `segments.length === 0`);
+      // `finally` closes the AudioData, and one dropped buffer is cheaper than a
+      // timeline anchored at the wrong place.
       const previous = segments[segments.length - 1];
       if (previous && data.timestamp - segmentEndMediaUs(previous) > DISCONTINUITY_THRESHOLD_US) {
         stopAll();
+        needsJoinAnchor = true;
+        return;
       }
 
       const last = segments[segments.length - 1];
