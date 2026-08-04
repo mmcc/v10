@@ -59,9 +59,12 @@ export const deviceControl = {
   ),
   /**
    * Group of split controls — segments sit flush inside a control, so the group
-   * needs more room than the shared 1px between its members.
+   * needs more room than the shared 1px between its members. Important because
+   * this composes onto `buttonGroup`: Tailwind settles a same-property conflict
+   * by stylesheet order, where `gap-px` lands last, not by class order (the
+   * stylesheet twin gets the same override for free from the cascade).
    */
-  group: 'gap-2',
+  group: 'gap-2!',
   /**
    * Caret segment — narrower and dimmer than the toggle, but never below the
    * 24px minimum target size. Pairs with `button.base` + `button.subtle`, but
