@@ -123,18 +123,49 @@ export function bufferDepthSeconds(newestTimestampUs: number, playoutTimestampUs
 }
 
 /**
+ * Whether a stated target latency can be used as a setpoint at all.
+ *
+ * Not defensive tidiness — an unusable number does not degrade this
+ * pipeline, it stops it, and both failures are silent:
+ *
+ * - **`NaN`** makes every comparison in the latency controller false, so
+ *   the controller parks the rate at `1 − rateNudge` forever, and it
+ *   propagates through `joinAnchorUs` into the video self-clock's slew,
+ *   which writes the corrected value back as its own anchor. One `NaN`
+ *   read leaves the clock permanently `NaN`, no frame is ever due again,
+ *   and nothing but a track switch clears it.
+ * - **Zero or negative** places the join anchor at or *ahead* of the
+ *   delivery edge, where the audio renderer discards its whole buffer
+ *   unheard on every tick and the video renderer drop-lates everything it
+ *   holds.
+ *
+ * So an unusable value is treated as *no statement*, and resolution falls
+ * through to the next layer that made one — the same rule
+ * `<simple-moq-video>` applies to its `target-latency` attribute, applied
+ * where every source of a target passes rather than only that one.
+ */
+function isUsableTargetSeconds(seconds: number | undefined): seconds is number {
+  return seconds !== undefined && Number.isFinite(seconds) && seconds > 0;
+}
+
+/**
  * Target latency in seconds, resolved across the layers allowed to state
  * one: consumer input wins, then the track catalog's `targetLatency`
  * (milliseconds, msf-01 §5.2.8), then the controller default. Shared by
  * the latency controller and the renderers so both aim at one number.
+ *
+ * A layer that states something unusable (see `isUsableTargetSeconds`) is
+ * skipped rather than honored — including the catalog, which is a remote
+ * publisher's number and the one layer nothing else validates.
  */
 export function resolveTargetLatencySeconds(
   consumerTargetSeconds: number | undefined,
   catalogTargetMs: number | undefined,
   defaultTargetSeconds: number
 ): number {
-  if (consumerTargetSeconds !== undefined) return consumerTargetSeconds;
-  if (catalogTargetMs !== undefined) return catalogTargetMs / 1000;
+  if (isUsableTargetSeconds(consumerTargetSeconds)) return consumerTargetSeconds;
+  const catalogTargetSeconds = catalogTargetMs === undefined ? undefined : catalogTargetMs / 1000;
+  if (isUsableTargetSeconds(catalogTargetSeconds)) return catalogTargetSeconds;
   return defaultTargetSeconds;
 }
 
@@ -150,12 +181,19 @@ export function resolveTargetLatencySeconds(
  * A one-line rule with two readers (`syncLatency` and the renderers'
  * `makeEdgeTargetUs`), named so the precedence lives in one place rather
  * than as a `??` that can be spelled differently in each.
+ *
+ * Precedence goes by *usability*, not by presence: a consumer target of
+ * `NaN` or `-1` is not a low target, it is a target that was never stated
+ * (see `isUsableTargetSeconds`), so the adaptive proposal below it still
+ * gets its turn instead of being shadowed by a number nothing can hold.
  */
 export function preferredTargetLatencySeconds(
   consumerTargetSeconds: number | undefined,
   adaptiveTargetSeconds: number | undefined
 ): number | undefined {
-  return consumerTargetSeconds ?? adaptiveTargetSeconds;
+  if (isUsableTargetSeconds(consumerTargetSeconds)) return consumerTargetSeconds;
+  if (isUsableTargetSeconds(adaptiveTargetSeconds)) return adaptiveTargetSeconds;
+  return undefined;
 }
 
 /**

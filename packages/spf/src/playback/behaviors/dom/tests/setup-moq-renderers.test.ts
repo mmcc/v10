@@ -422,6 +422,34 @@ describe('setupVideoRenderer', () => {
     reactor.destroy();
   });
 
+  // The self-clock writes every slew correction back as its own anchor, so
+  // a single `NaN` target clock leaves the clock `NaN` for the life of the
+  // track and no frame is ever due again. A consumer target that cannot be
+  // held has to be treated as no target rather than forwarded.
+  it('keeps the target clock finite when the consumer target is unusable', async () => {
+    vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
+    const { state, context, reactor } = setupSetupVideoRenderer();
+
+    await vi.waitFor(() => expect(createVideoRendererActor).toHaveBeenCalledTimes(1));
+    const { getTargetClockUs } = vi.mocked(createVideoRendererActor).mock.calls[0]![0];
+
+    context.videoSubscriberActor.set(makeFakeSubscriber(4_000_000, 200));
+    state.targetLatency.set(Number.NaN);
+    // The catalog's 200ms, not NaN: an unusable statement is no statement.
+    expect(getTargetClockUs!()).toBe(3_800_000);
+
+    // Negative would anchor *ahead* of the delivery edge, where the
+    // renderer drop-lates everything it holds.
+    state.targetLatency.set(-1);
+    expect(getTargetClockUs!()).toBe(3_800_000);
+
+    state.targetLatency.set(undefined);
+    state.adaptiveTargetLatency.set(Number.NaN);
+    expect(getTargetClockUs!()).toBe(3_800_000);
+
+    reactor.destroy();
+  });
+
   it('supplies no target clock with joinAtEdge off', async () => {
     vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
     const { context, reactor } = setupSetupVideoRenderer({ latency: { joinAtEdge: false } });
