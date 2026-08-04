@@ -30,7 +30,14 @@
    - `media-surface media-controls media-controls--root` on `media-controls`.
    - `media-controls__spacer` — flexible gap between button groups.
    - `media-button-group` — left (camera/mic/screen-share) and right
-     (publish + fullscreen) groups.
+     (publish + fullscreen) groups; the left group adds
+     `media-button-group--devices` to space the split controls apart.
+   - `media-device-control` — split control wrapping a capture toggle and the
+     caret that opens its device picker, plus that toggle's tooltip and the
+     picker menu. The caret must stay the menu's previous sibling so the
+     availability rule in capture.css can hide it.
+   - `media-button media-button--subtle media-device-control__caret` on the
+     caret button, containing `media-icon` (the `chevron` asset).
    - `media-button media-button--subtle media-button--icon media-button--camera`
      on `media-camera-button[data-muted]`, containing
      `media-icon media-icon--camera` and `media-icon media-icon--camera-off`.

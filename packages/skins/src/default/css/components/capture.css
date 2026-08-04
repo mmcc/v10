@@ -75,12 +75,88 @@
   }
 }
 
-/* Device-picker chevron triggers — hide the trigger (and thereby its menu)
-   when the adjacent menu's radio group reports no device choice to make,
-   mirroring how availability hides buttons elsewhere (see button.css). */
-.media-default-skin button:has(+ media-menu media-camera-radio-group[data-availability="unavailable"]),
-.media-default-skin button:has(+ media-menu media-mic-radio-group[data-availability="unavailable"]) {
-  display: none;
+/* --- Device split control (capture toggle + its device picker) --- */
+
+/* Pairs a capture toggle with the caret that opens its device picker, so the
+   picker reads as an affordance on the toggle it belongs to instead of a peer
+   control in the bar. The wrapper carries the hover/focus pill spanning both
+   segments; each segment keeps its own subtle background, which stacks on top
+   so the hovered hit target stays legible. */
+.media-default-skin .media-device-control {
+  display: flex;
+  align-items: center;
+  border-radius: calc(Infinity * 1px);
+  transition: background-color 150ms ease-out;
+
+  &:hover,
+  &:focus-within {
+    background-color: oklch(from currentColor l c h / 0.1);
+  }
+}
+
+/* Segments sit flush inside a control, so the group holding them needs more
+   room than the shared 1px — proximity is what shows the pairing. */
+.media-default-skin .media-button-group--devices {
+  gap: calc(var(--spacing) * 2);
+}
+
+/* Caret segment — narrower and dimmer than the toggle so it reads as part of
+   the toggle rather than a control of its own, but never below the 24px
+   minimum target size. Pairs with `.media-button` and `.media-button--subtle`
+   (not `--icon`, which forces a square). */
+.media-default-skin .media-device-control__caret {
+  position: relative;
+  display: grid;
+  width: calc(var(--spacing) * 6);
+  padding: 0;
+
+  & .media-icon {
+    width: calc(var(--spacing) * 3.5);
+    height: calc(var(--spacing) * 3.5);
+    opacity: 0.65;
+    filter: drop-shadow(0 1px 0 var(--media-current-shadow-color));
+    /* The chevron asset points right; aim it at the menu, which opens above. */
+    rotate: -90deg;
+    transition:
+      rotate 150ms ease-out,
+      opacity 150ms ease-out;
+  }
+
+  &:hover .media-icon,
+  &:focus-visible .media-icon,
+  &[aria-expanded="true"] .media-icon {
+    opacity: 1;
+  }
+
+  /* Point back at the toggle while the picker is open. */
+  &[aria-expanded="true"] .media-icon {
+    rotate: 90deg;
+  }
+
+  /* Hairline seam marking the split. */
+  &::before {
+    position: absolute;
+    inset-block: 30%;
+    inset-inline-start: 0;
+    width: 1px;
+    content: "";
+    background-color: oklch(from currentColor l c h / 0.25);
+  }
+
+  /* Hide the caret (and thereby its menu) when the adjacent menu's radio group
+     reports no device choice to make, mirroring how availability hides buttons
+     elsewhere (see button.css). With the caret gone the wrapper pill hugs the
+     lone toggle, so the control looks untouched. */
+  &:has(+ media-menu media-camera-radio-group[data-availability="unavailable"]),
+  &:has(+ media-menu media-mic-radio-group[data-availability="unavailable"]) {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    & .media-icon {
+      transition-duration: 0ms;
+    }
+  }
 }
 
 /* Screen share toggle — active affordance while sharing (mirrors the

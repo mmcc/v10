@@ -49,58 +49,66 @@ function getTemplateHTML() {
 
       <media-controls class="media-surface media-controls media-controls--root">
         <media-tooltip-group>
-          <div class="media-button-group">
-            <media-camera-button commandfor="camera-tooltip" class="media-button media-button--subtle media-button--icon media-button--camera">
-              ${renderIcon('camera', { class: 'media-icon media-icon--camera' })}
-              ${renderIcon('camera-off', { class: 'media-icon media-icon--camera-off' })}
-            </media-camera-button>
-            <media-tooltip id="camera-tooltip" side="top" class="media-surface media-tooltip">
-              <media-tooltip-label></media-tooltip-label>
-              <media-tooltip-shortcut class="media-tooltip__kbd"></media-tooltip-shortcut>
-            </media-tooltip>
+          <div class="media-button-group media-button-group--devices">
+            <!-- Camera toggle fused with its source picker: the caret plainly
+                 belongs to the camera instead of floating between toggles. The
+                 caret must stay the menu's previous sibling — capture.css hides
+                 it from there when there is no device choice to make. -->
+            <div class="media-device-control">
+              <media-camera-button commandfor="camera-tooltip" class="media-button media-button--subtle media-button--icon media-button--camera">
+                ${renderIcon('camera', { class: 'media-icon media-icon--camera' })}
+                ${renderIcon('camera-off', { class: 'media-icon media-icon--camera-off' })}
+              </media-camera-button>
+              <media-tooltip id="camera-tooltip" side="top" class="media-surface media-tooltip">
+                <media-tooltip-label></media-tooltip-label>
+                <media-tooltip-shortcut class="media-tooltip__kbd"></media-tooltip-shortcut>
+              </media-tooltip>
 
-            <button commandfor="camera-menu" aria-labelledby="camera-menu-label" class="media-button media-button--subtle media-button--icon">
-              ${renderIcon('chevron', { class: 'media-icon' })}
-              ${renderText(cameraText, { id: 'camera-menu-label', class: 'media-sr-only' })}
-            </button>
-            <media-menu id="camera-menu" side="top" align="center" class="media-surface media-popover media-menu">
-              <media-camera-radio-group class="media-menu__group">
-                <template>
-                  <media-menu-radio-item class="media-menu__item">
-                    <span data-part="label"></span>
-                    <media-menu-item-indicator force-mount class="media-menu__indicator">
-                      ${renderIcon('check', { class: 'media-icon' })}
-                    </media-menu-item-indicator>
-                  </media-menu-radio-item>
-                </template>
-              </media-camera-radio-group>
-            </media-menu>
+              <button commandfor="camera-menu" aria-labelledby="camera-menu-label" class="media-button media-button--subtle media-device-control__caret">
+                ${renderIcon('chevron', { class: 'media-icon' })}
+                ${renderText(cameraText, { id: 'camera-menu-label', class: 'media-sr-only' })}
+              </button>
+              <media-menu id="camera-menu" side="top" align="center" class="media-surface media-popover media-menu">
+                <media-camera-radio-group class="media-menu__group">
+                  <template>
+                    <media-menu-radio-item class="media-menu__item">
+                      <span data-part="label"></span>
+                      <media-menu-item-indicator force-mount class="media-menu__indicator">
+                        ${renderIcon('check', { class: 'media-icon' })}
+                      </media-menu-item-indicator>
+                    </media-menu-radio-item>
+                  </template>
+                </media-camera-radio-group>
+              </media-menu>
+            </div>
 
-            <media-mic-button commandfor="mic-tooltip" class="media-button media-button--subtle media-button--icon media-button--mic">
-              ${renderIcon('mic', { class: 'media-icon media-icon--mic' })}
-              ${renderIcon('mic-off', { class: 'media-icon media-icon--mic-off' })}
-            </media-mic-button>
-            <media-tooltip id="mic-tooltip" side="top" class="media-surface media-tooltip">
-              <media-tooltip-label></media-tooltip-label>
-              <media-tooltip-shortcut class="media-tooltip__kbd"></media-tooltip-shortcut>
-            </media-tooltip>
+            <div class="media-device-control">
+              <media-mic-button commandfor="mic-tooltip" class="media-button media-button--subtle media-button--icon media-button--mic">
+                ${renderIcon('mic', { class: 'media-icon media-icon--mic' })}
+                ${renderIcon('mic-off', { class: 'media-icon media-icon--mic-off' })}
+              </media-mic-button>
+              <media-tooltip id="mic-tooltip" side="top" class="media-surface media-tooltip">
+                <media-tooltip-label></media-tooltip-label>
+                <media-tooltip-shortcut class="media-tooltip__kbd"></media-tooltip-shortcut>
+              </media-tooltip>
 
-            <button commandfor="mic-menu" aria-labelledby="mic-menu-label" class="media-button media-button--subtle media-button--icon">
-              ${renderIcon('chevron', { class: 'media-icon' })}
-              ${renderText(microphoneText, { id: 'mic-menu-label', class: 'media-sr-only' })}
-            </button>
-            <media-menu id="mic-menu" side="top" align="center" class="media-surface media-popover media-menu">
-              <media-mic-radio-group class="media-menu__group">
-                <template>
-                  <media-menu-radio-item class="media-menu__item">
-                    <span data-part="label"></span>
-                    <media-menu-item-indicator force-mount class="media-menu__indicator">
-                      ${renderIcon('check', { class: 'media-icon' })}
-                    </media-menu-item-indicator>
-                  </media-menu-radio-item>
-                </template>
-              </media-mic-radio-group>
-            </media-menu>
+              <button commandfor="mic-menu" aria-labelledby="mic-menu-label" class="media-button media-button--subtle media-device-control__caret">
+                ${renderIcon('chevron', { class: 'media-icon' })}
+                ${renderText(microphoneText, { id: 'mic-menu-label', class: 'media-sr-only' })}
+              </button>
+              <media-menu id="mic-menu" side="top" align="center" class="media-surface media-popover media-menu">
+                <media-mic-radio-group class="media-menu__group">
+                  <template>
+                    <media-menu-radio-item class="media-menu__item">
+                      <span data-part="label"></span>
+                      <media-menu-item-indicator force-mount class="media-menu__indicator">
+                        ${renderIcon('check', { class: 'media-icon' })}
+                      </media-menu-item-indicator>
+                    </media-menu-radio-item>
+                  </template>
+                </media-mic-radio-group>
+              </media-menu>
+            </div>
 
             <media-screen-share-button commandfor="screen-share-tooltip" class="media-button media-button--subtle media-button--icon media-button--screen-share">
               ${renderIcon('screen-share', { class: 'media-icon media-icon--screen-share' })}
