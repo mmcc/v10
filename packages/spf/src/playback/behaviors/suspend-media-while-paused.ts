@@ -107,19 +107,18 @@ export const suspendMediaWhilePaused = defineBehavior({
           // for exactly one continuous pause. Entry bodies are untracked,
           // so the target-latency read is pinned at pause time.
           entry: () => {
-            // Both halves of a rebase conflict, kept: `isUsableHold` is the
-            // validity guard from upstream's review pass, and
-            // `preferredTargetLatencySeconds` is the adaptive-aware resolution
-            // this branch adds. They compose — the guard is about whether a
-            // number is usable, the resolver about which number to use — and
-            // taking either alone loses something real. `??` alone would accept
-            // a configured `NaN` or a negative hold; the bare `state.targetLatency`
-            // would ignore an adaptive setpoint whenever no fixed one is set,
-            // which is precisely the mode this branch exists to add.
+            // Two independent questions, in order: `isUsableHold` decides
+            // whether a stated number can be a delay at all (a `NaN` or
+            // negative one would coerce to "fire now" and make every pause
+            // an immediate suspend), and `preferredTargetLatencySeconds`
+            // decides *which* target stands in for one when nothing states
+            // a hold — the adaptive proposal counts wherever no fixed
+            // target is set. Each layer that fails either question falls
+            // through to the next rather than being honored.
             const configuredHold = config?.pauseHoldSeconds;
             const preferredTarget = preferredTargetLatencySeconds(
               state.targetLatency.get(),
-              state.adaptiveTargetLatency.get(),
+              state.adaptiveTargetLatency.get()
             );
             const holdSeconds = isUsableHold(configuredHold)
               ? configuredHold
