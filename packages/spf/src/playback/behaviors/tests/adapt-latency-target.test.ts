@@ -252,6 +252,33 @@ describe('adaptLatencyTarget', () => {
     reactor.destroy();
   });
 
+  // `dropsPerEvent` is a threshold on the running total, not on one
+  // evaluation's delta. Taking each window's quotient alone made a steady
+  // trickle below the budget invisible forever — two frames a second of
+  // visibly broken video that the controller reads as a clean path.
+  it('accumulates late-frame drops that arrive below the budget per window', async () => {
+    const { subscriber, setArrivalJitter } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    setArrivalJitter(40);
+    const reactor = adaptLatencyTarget.setup(deps);
+
+    await vi.advanceTimersByTimeAsync(WARM_MS);
+    const settled = deps.state.adaptiveTargetLatency.get()!;
+
+    // Four drops per evaluation against a budget of ten: no single window
+    // reaches an event, and three windows carry past it.
+    let dropped = 0;
+    for (let window = 0; window < 3; window++) {
+      dropped += 4;
+      deps.state.framesDropped.set(dropped);
+      await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+    }
+    expect(dropped).toBeGreaterThanOrEqual(DEFAULT_ADAPTIVE_LATENCY_CONFIG.dropsPerEvent);
+    expect(deps.state.adaptiveTargetLatency.get()).toBeGreaterThan(settled);
+
+    reactor.destroy();
+  });
+
   // The counters are cumulative and the latency controller has usually
   // been running a while before adaptation is switched on.
   it('baselines the failure counters at activation instead of replaying them', async () => {

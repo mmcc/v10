@@ -429,6 +429,18 @@ function setupAdaptLatencyTarget({
   let seenSkips = 0;
   let seenUnderruns = 0;
   let seenDrops = 0;
+  /**
+   * Late-frame drops counted but not yet worth a failure event.
+   *
+   * `dropsPerEvent` is a threshold on the *total*, not on one evaluation's
+   * delta. Taking the quotient of each window's delta and discarding the
+   * remainder makes any drop rate below `dropsPerEvent` per window invisible
+   * forever: at the defaults, four drops every two seconds is two frames a
+   * second of visibly broken video that the controller reads as a clean
+   * path. Carried across evaluations, the accounting becomes the cumulative
+   * quotient the threshold was meant to express.
+   */
+  let dropCarry = 0;
 
   const reset = (): void => {
     widenBias = 0;
@@ -441,6 +453,7 @@ function setupAdaptLatencyTarget({
     seenSkips = 0;
     seenUnderruns = 0;
     seenDrops = 0;
+    dropCarry = 0;
     state.adaptiveTargetLatency.set(undefined);
   };
 
@@ -475,15 +488,23 @@ function setupAdaptLatencyTarget({
     const skips = peek(state.catchUpSkips);
     const underruns = peek(state.audioUnderruns);
     const drops = peek(state.framesDropped);
+    // A counter that went away or restarted lower is a fresh owner
+    // (`counterDelta` re-baselines rather than counting the
+    // discontinuity), and a sub-threshold carry from the previous owner is
+    // not evidence about this one.
+    if (drops === undefined || drops < seenDrops) dropCarry = 0;
     // An underrun or a skip is one event each — both are audible or
     // visible discontinuities. Late-frame drops only count in bulk: a
     // handful per window is a busy decoder rather than a starved path,
     // and treating each one as evidence would keep the target permanently
     // widened on a loaded machine for a reason the network never caused.
-    const events =
-      counterDelta(seenSkips, skips) +
-      counterDelta(seenUnderruns, underruns) +
-      Math.floor(counterDelta(seenDrops, drops) / adaptive.dropsPerEvent);
+    // "In bulk" is a threshold on the running total though, so the
+    // remainder below it is carried rather than discarded — see
+    // `dropCarry`.
+    dropCarry += counterDelta(seenDrops, drops);
+    const dropEvents = Math.floor(dropCarry / adaptive.dropsPerEvent);
+    dropCarry -= dropEvents * adaptive.dropsPerEvent;
+    const events = counterDelta(seenSkips, skips) + counterDelta(seenUnderruns, underruns) + dropEvents;
     seenSkips = skips ?? 0;
     seenUnderruns = underruns ?? 0;
     seenDrops = drops ?? 0;
