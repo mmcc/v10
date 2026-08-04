@@ -1,8 +1,9 @@
 /**
  * **Latency controller: hold playout at the target latency.** Watches the
- * distance from the active subscriber's delivery edge to the position
- * actually being played out (`state.currentTime`) against the target
- * latency and steers playout:
+ * distance from the delivery edge of the track that owns the playout clock
+ * — audio when it exists, video otherwise — to the position actually being
+ * played out (`state.currentTime`) against the target latency and steers
+ * playout:
  *
  * - **stable** — latency within band: `playoutRate` 1.
  * - **rate nudge** — latency drifted above/below the band: small rate
@@ -212,15 +213,34 @@ function setupSyncLatency({
   const evaluate = (): void => {
     const audio = peek(context.audioSubscriberActor);
     const video = peek(context.videoSubscriberActor);
-    // **The setpoint comes from whichever subscriber the measurement will.**
-    // `targetLatency` is per-track (msf-01 §5.2.8) and nothing requires two
-    // tracks of one broadcast to declare the same one, so resolving the
-    // target audio-first while measuring depth video-first lets the
-    // controller hold a setpoint against a measurement taken somewhere else
-    // — and the video renderer's own clock, which resolves the target from
-    // the video subscriber, would be slewing toward a third number. The
-    // three readers only agree if this one follows the measurement.
-    const subscriber = hasEdge(video) ? video : hasEdge(audio) ? audio : (video ?? audio);
+    // **One track supplies both the depth and the setpoint, and it is the
+    // track that owns the playout clock.** `bufferDepthSeconds` is `newest
+    // buffered − playout`; the subtraction only means "latency" when both
+    // ends describe the same track. `state.currentTime` is the audio
+    // renderer's clock whenever audio is scheduled and the video renderer's
+    // last presented frame otherwise (`trackPlayoutTime`), so measuring
+    // audio-first follows that clock instead of racing it, and video is the
+    // fallback for a video-only broadcast where its presented frame is both
+    // the clock and the only edge there is.
+    //
+    // Two tracks of one broadcast need not have coincident delivery edges.
+    // A track re-encoded anywhere upstream trails a passed-through one by
+    // that pipeline's group of pictures — measured at roughly one GOP, near
+    // a second — and charging that delay to the clock owner's depth makes
+    // the controller act on latency it cannot drain: it reads a number well
+    // under the truth, nudges toward it, and skips groups when the real
+    // distance crosses `catchUpThreshold`, pinning the display while
+    // reporting a healthy-looking latency.
+    //
+    // Selecting once is also what keeps the setpoint honest. `targetLatency`
+    // is per-track (msf-01 §5.2.8) and nothing requires two tracks to
+    // declare the same one, so resolving the target from one track while
+    // measuring depth on the other holds a setpoint against a measurement
+    // taken somewhere else — and the video renderer's own clock, which
+    // resolves the target from the video subscriber, would be slewing toward
+    // a third number. The three readers only agree if this one picks a
+    // single track for both.
+    const subscriber = hasEdge(audio) ? audio : hasEdge(video) ? video : (audio ?? video);
     // Published before the guards below: the resolved setpoint is a fact
     // about the configuration, readable from the moment the controller is
     // active, and the adaptive controller's own hysteresis reads it back.
@@ -234,26 +254,19 @@ function setupSyncLatency({
     if (currentTime === undefined) return;
     const playoutTimestampUs = currentTime * 1_000_000;
 
-    // **Video first, and the order is the measurement.** `bufferDepthSeconds` is
-    // `newest buffered − playout`, which stands in for latency only while `newest`
-    // tracks the live edge. Video arrives frame by frame, so it does. Audio arrives
-    // a *group* at a time and is consumed as fast as it lands, so its newest sits
-    // at the playout position and the depth reads ~0 however much real latency
-    // there is. Group size only sets the amplitude of the resulting sawtooth, not
-    // whether it happens.
+    // Measured on the subscriber selected above, so the depth and the
+    // setpoint cannot come from different tracks.
     //
-    // Measured against a moq-relay 0.14.6 stack with a browser origin: with the
-    // target held at 1.5s, audio-first made `measuredLatency` sawtooth between ~0
-    // and roughly one group of media in step with each group landing and draining,
-    // so the controller saw a permanently starved buffer and pinned `playoutRate`
-    // at 0.95 — playing the whole session 5% slow, with audio as the master clock
-    // and video slewing to follow it. That is the same failure the V18 note
-    // describes in mirror image (1.05, 5% fast). Video-only playback was
-    // unaffected, which is the tell.
-    //
-    // Audio remains the fallback for an audio-only broadcast, where its buffer is
-    // the only signal there is. That preference is applied once, above, so the
-    // setpoint above and the measurement here cannot come from different tracks.
+    // The order this replaced measured video first, on the premise that
+    // audio arrives a *group* at a time and is consumed as fast as it lands,
+    // leaving its newest sample at the playout position so the depth reads
+    // ~0 however much real latency there is. That collapse needs a group
+    // long relative to the target, and it was observed against second-long
+    // audio groups; at the fraction-of-a-second groups publishers now emit,
+    // the clock owner's depth holds steady and well clear of the playout
+    // position. A genuinely drained audio buffer still reads as starved, but
+    // that is a starved clock — slowing playout to refill is the right
+    // response to it, not a reason to measure a different track.
     const depth = subscriberLatencySeconds(subscriber, playoutTimestampUs);
     if (depth === undefined) return;
 

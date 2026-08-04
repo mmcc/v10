@@ -79,32 +79,56 @@ describe('syncLatency', () => {
     vi.useFakeTimers();
   });
 
-  // Measured against a live 0.14.6 stack: `measuredLatency` sawtoothed between ~0
-  // and about one audio group of media while the target held at 1.5, pinning
-  // `playoutRate` at 0.95 for the whole session. The cause is which track the depth
-  // is read from: `bufferDepthSeconds(newest, playout)` is a fair proxy for latency
-  // only when `newest` tracks the live edge, and audio delivered a group at a time
-  // does not — it is consumed as fast as it lands, so newest sits at playout and
-  // the depth reads ~0. Video arrives frame by frame, so its newest does track the
-  // edge.
-  it('measures depth from video when both tracks are present', async () => {
+  // The transform shape: something upstream re-encodes video and passes audio
+  // through, so video's delivery edge trails audio's by that pipeline's group of
+  // pictures — near a second — while both tracks are live. Audio drives
+  // `currentTime`, so video's trailing edge must not set the reading: subtracting
+  // an audio playout position from a video edge understates latency by the whole
+  // GOP and steers the rate at a gap that is not there.
+  it('measures depth from audio when the video edge trails it', async () => {
+    const audio = fakeSubscriber();
+    const video = fakeSubscriber();
+    const deps = makeDeps(audio.subscriber);
+    deps.context.videoSubscriberActor.set(video.subscriber);
+    deps.state.targetLatency.set(1.3);
+
+    // Audio is an honest 1.3s behind live; video's edge is one GOP back of it.
+    audio.setBufferDepth(1.3);
+    video.setBufferDepth(0.3);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(500);
+
+    // The audio clock's own reality — not video's 0.3, which reads a second
+    // short of target and would nudge the rate down to chase it.
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1.3, 3);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // The cost of following the clock owner rather than the deepest track, kept
+  // deliberately: audio's newest sitting at the playout position means the clock
+  // is about to underrun, whatever video has banked, and slowing playout to
+  // refill is the right response to that. This case is not evidence for measuring
+  // video — video's edge says nothing about the clock audio is driving.
+  it('reads a drained clock-owner buffer as starved even when video is deep', async () => {
     const audio = fakeSubscriber();
     const video = fakeSubscriber();
     const deps = makeDeps(audio.subscriber);
     deps.context.videoSubscriberActor.set(video.subscriber);
     deps.state.targetLatency.set(1.5);
 
-    // Video holds a real 1.5s behind the edge; audio's buffer has just drained
-    // after its group was consumed, so its depth reads zero.
     video.setBufferDepth(1.5);
     audio.setBufferDepth(0);
 
     const reactor = syncLatency.setup(deps);
     await vi.advanceTimersByTimeAsync(500);
 
-    expect(deps.state.measuredLatency.get()).toBeCloseTo(1.5, 3);
-    // At target, so no nudge: the 0.95 pin was the symptom.
-    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(0, 3);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(0.95);
+    expect(deps.state.playoutState.get()).toBe('nudging');
 
     reactor.destroy();
   });
@@ -124,23 +148,24 @@ describe('syncLatency', () => {
     const deps = makeDeps(audio.subscriber);
     deps.context.videoSubscriberActor.set(video.subscriber);
 
-    video.setBufferDepth(1);
-    audio.setBufferDepth(0);
+    audio.setBufferDepth(3);
+    video.setBufferDepth(1); // video's edge trails, and declares its own target
 
     const reactor = syncLatency.setup(deps);
     await vi.advanceTimersByTimeAsync(600);
 
-    // Depth comes from video, so the setpoint does too — and a video buffer
-    // sitting exactly on video's own target is stable rather than 2s short
-    // of audio's.
-    expect(deps.state.effectiveTargetLatency.get()).toBe(1);
-    expect(deps.state.measuredLatency.get()).toBeCloseTo(1, 3);
+    // Depth comes from audio, so the setpoint does too — and an audio buffer
+    // sitting exactly on audio's own target is stable rather than 2s deep
+    // against video's.
+    expect(deps.state.effectiveTargetLatency.get()).toBe(3);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(3, 3);
     expect(deps.state.playoutState.get()).toBe('stable');
 
     reactor.destroy();
   });
 
-  // Audio-only: its buffer is the only signal there is, so it supplies both.
+  // Audio-only: audio is the clock and its buffer the only signal, so it
+  // supplies both.
   it('resolves the audio catalog target for an audio-only broadcast', async () => {
     const audio = fakeSubscriber(3_000);
     const deps = makeDeps(audio.subscriber);
@@ -151,6 +176,26 @@ describe('syncLatency', () => {
     await vi.advanceTimersByTimeAsync(600);
 
     expect(deps.state.effectiveTargetLatency.get()).toBe(3);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // Video-only: no audio renderer, so `trackPlayoutTime` clocks off the video
+  // renderer's presented frame and video's buffer is the only signal — it
+  // supplies both, which is why video is the fallback rather than the default.
+  it('resolves the video catalog target for a video-only broadcast', async () => {
+    const video = fakeSubscriber(1_000);
+    const deps = makeDeps(undefined);
+    deps.context.videoSubscriberActor.set(video.subscriber);
+
+    video.setBufferDepth(1);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(deps.state.effectiveTargetLatency.get()).toBe(1);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1, 3);
     expect(deps.state.playoutState.get()).toBe('stable');
 
     reactor.destroy();
