@@ -10,10 +10,12 @@
  *   adjustment (`playoutRate` 1±`rateNudge`) that the renderers apply to
  *   their clocks; playback speeds up/slows down imperceptibly until
  *   playout re-centers on the target.
- * - **catch-up** — latency blew past `catchUpThreshold` (e.g. after a
- *   network stall): skip the subscribers straight to their latest
- *   keyframe-led group and reset the rate. A visible jump beats a
- *   permanently-latent stream.
+ * - **catch-up** — latency blew past `catchUpThreshold` on two consecutive
+ *   evaluations (e.g. after a network stall): skip the subscribers straight
+ *   to their latest keyframe-led group and reset the rate. A visible jump
+ *   beats a permanently-latent stream — but only against a reading that
+ *   outlives one evaluation, because a fresh pane's first reading is taken
+ *   against a playout position the renderers have not finished placing.
  *
  * **The deadband engages the nudge; only the target releases it.** The
  * band is asymmetric in *time*, not in size: a correction starts when the
@@ -260,6 +262,14 @@ function setupSyncLatency({
    */
   let correcting: Correction = 0;
 
+  /**
+   * Whether the previous evaluation also read past `catchUpThreshold` — the
+   * corroboration a group skip needs, since a skip is a visible jump and a
+   * join transient reads exactly like a stall for one evaluation. Same
+   * per-activation lifetime as `correcting`.
+   */
+  let catchUpArmed = false;
+
   const derivedStateSignal = computed<FsmState>(() =>
     context.videoSubscriberActor.get() || context.audioSubscriberActor.get() ? 'controlling' : 'inactive'
   );
@@ -347,18 +357,47 @@ function setupSyncLatency({
 
     state.measuredLatency.set(depth);
 
-    if (depth > target + controlConfig.catchUpThreshold) {
+    // **A group skip takes two evaluations to justify.** The first reading
+    // of a fresh pane is measured against a playout position neither
+    // renderer has finished placing: both anchor at `edge − target`, but a
+    // relay answers a subscription with a group replay that arrives as a
+    // burst, so the edge each one reads is still moving when it anchors, and
+    // the video renderer publishes `currentTime` from the oldest replayed
+    // frame until the audio schedule takes the clock over. Measured across
+    // 12 fresh pane starts on a two-pane stage: the opening reading exceeded
+    // the threshold on five of them by 3-9s while the audio clock was in
+    // fact 0.33-0.41s behind its own edge — `newest audio − oldest presented
+    // video`, a subtraction across two timebases *and* across the backlog,
+    // to three decimal places. Each one skipped a healthy pane, and that
+    // skip is the visible jump.
+    //
+    // One evaluation of corroboration separates the two cases exactly,
+    // because they differ in duration rather than in magnitude: the join
+    // transient is gone by the next evaluation (the renderers' own
+    // placement, drop-late and slew have closed it), while a genuinely
+    // mis-placed audio schedule or a stalled path still reads over the
+    // threshold — audio cannot be fast-forwarded, so nothing else can have
+    // repaired it. The cost is that a real stall is skipped one
+    // `intervalMs` later, on a stream already `catchUpThreshold` behind.
+    //
+    // The armed evaluation is not idle: it falls through to the nudge below,
+    // which is what a depth that far over target asks for anyway, so the
+    // corroborating half-second is spent draining rather than waiting.
+    const overThreshold = depth > target + controlConfig.catchUpThreshold;
+    if (overThreshold && catchUpArmed) {
       audio?.skipToLatestGroup();
       video?.skipToLatestGroup();
       state.catchUpSkips.set((peek(state.catchUpSkips) ?? 0) + 1);
       // The skip re-places the whole timeline, so whatever was being
       // corrected toward no longer describes anything: park the rate and
       // let the next evaluation decide against the post-skip depth.
+      catchUpArmed = false;
       correcting = 0;
       state.playoutRate.set(1);
       state.playoutState.set('catching-up');
       return;
     }
+    catchUpArmed = overThreshold;
 
     const deviation = depth - target;
     // Release before engage, so an overshoot that lands past the deadband on
@@ -392,6 +431,7 @@ function setupSyncLatency({
         entry: () => {
           state.catchUpSkips.set(0);
           correcting = 0;
+          catchUpArmed = false;
           const timer = setInterval(evaluate, controlConfig.intervalMs);
           return () => {
             clearInterval(timer);

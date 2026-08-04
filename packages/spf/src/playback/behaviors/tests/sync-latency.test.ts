@@ -363,7 +363,7 @@ describe('syncLatency', () => {
     expect(deps.state.playoutState.get()).toBe('nudging');
 
     setBufferDepth(10);
-    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(1_100);
     expect(deps.state.playoutState.get()).toBe('catching-up');
 
     // Post-skip depth is inside the deadband: the pre-skip drain must not
@@ -419,7 +419,56 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
-  it('skips to the latest group when the buffer blows past the catch-up threshold', async () => {
+  it('skips to the latest group when the buffer stays past the catch-up threshold', async () => {
+    const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    // One evaluation arms; the second corroborates and skips.
+    setBufferDepth(5);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(skipToLatestGroup).not.toHaveBeenCalled();
+    expect(deps.state.playoutState.get()).toBe('nudging');
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(skipToLatestGroup).toHaveBeenCalled();
+    expect(deps.state.playoutState.get()).toBe('catching-up');
+    expect(deps.state.playoutRate.get()).toBe(1);
+
+    reactor.destroy();
+  });
+
+  // What the corroboration is for. A fresh pane's first reading is taken
+  // against a playout position neither renderer has finished placing — the
+  // measured case was `newest audio − oldest presented video`, 8-9s, on a pane
+  // whose audio clock was 0.4s behind its own edge. Skipping on it is a visible
+  // jump on a healthy stream, and by the next evaluation the reading is gone.
+  it('does not skip on a single over-threshold reading', async () => {
+    const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    deps.state.targetLatency.set(0.3);
+    const reactor = syncLatency.setup(deps);
+
+    setBufferDepth(8.5);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(skipToLatestGroup).not.toHaveBeenCalled();
+    expect(deps.state.catchUpSkips.get()).toBe(0);
+    // Not idle either: a depth that far over target is drained meanwhile.
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    // The transient closes as the renderers finish placing themselves.
+    setBufferDepth(0.4);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(skipToLatestGroup).not.toHaveBeenCalled();
+    expect(deps.state.catchUpSkips.get()).toBe(0);
+
+    reactor.destroy();
+  });
+
+  // Two excursions separated by a healthy evaluation are two transients, not
+  // one stall: the arming must not carry across the reading that cleared it.
+  it('re-arms from scratch after a reading back inside the threshold', async () => {
     const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
     const deps = makeDeps(subscriber);
     deps.state.targetLatency.set(0.5);
@@ -427,10 +476,12 @@ describe('syncLatency', () => {
 
     setBufferDepth(5);
     await vi.advanceTimersByTimeAsync(600);
+    setBufferDepth(0.5);
+    await vi.advanceTimersByTimeAsync(500);
+    setBufferDepth(5);
+    await vi.advanceTimersByTimeAsync(500);
 
-    expect(skipToLatestGroup).toHaveBeenCalled();
-    expect(deps.state.playoutState.get()).toBe('catching-up');
-    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(skipToLatestGroup).not.toHaveBeenCalled();
 
     reactor.destroy();
   });
@@ -527,10 +578,11 @@ describe('syncLatency', () => {
     expect(deps.state.playoutState.get()).toBe('stable');
 
     // Playout falls behind an advancing edge: latency grows even though
-    // nothing about the buffer's own span changed.
+    // nothing about the buffer's own span changed. Two evaluations, because
+    // the skip needs the reading corroborated.
     setBufferDepth(14);
     deps.state.currentTime.set(9.6);
-    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(1_100);
     expect(deps.state.measuredLatency.get()).toBeCloseTo(4.4);
     expect(deps.state.playoutState.get()).toBe('catching-up');
 
@@ -612,15 +664,18 @@ describe('syncLatency', () => {
 
     expect(deps.state.catchUpSkips.get()).toBe(0);
 
+    // Arm, then skip. A depth this far over target that the skip cannot shift
+    // (the fake buffer does not move) re-arms and skips again, every other
+    // evaluation.
     setBufferDepth(10);
-    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(1_100);
     expect(deps.state.catchUpSkips.get()).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(deps.state.catchUpSkips.get()).toBe(2);
 
     setBufferDepth(0.5);
-    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(1_100);
     expect(deps.state.catchUpSkips.get()).toBe(2);
 
     reactor.destroy();
