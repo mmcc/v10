@@ -142,6 +142,25 @@ function makeEdgeTargetUs(
  * frame until the newly-installed master clock caught up to it. Clamping
  * forward is the same "never move the clock backwards" rule the video
  * renderer applies to its own anchor.
+ *
+ * **An absent edge takes the video clock too.** `makeEdgeTargetUs` yields
+ * `undefined` while the subscriber's snapshot has no `newestTimestampUs`, and the
+ * renderer consumes this anchor in exactly one place: as the threshold below which
+ * it discards buffered audio unheard. An absent threshold is therefore not a
+ * neutral default but *no trim at all* — the schedule starts at the oldest frame
+ * the renderer is holding.
+ *
+ * Those two are wired separately. The anchor peeks the subscriber signal when the
+ * renderer asks, while the frame source is pushed in by the `setTrack` effect
+ * below and trimmed on the renderer's own tick. So the renderer can be asked for a
+ * threshold while the subscriber it reads reports nothing and the buffer it would
+ * trim already holds frames — audio behind the running video clock, played instead
+ * of dropped. Deferring to the video clock keeps this function's invariant applying
+ * in the one case that could not clamp: audio with no edge of its own.
+ *
+ * With no video clock — an audio-only broadcast — the anchor stays absent and the
+ * oldest-buffered default stands, which is right: nothing else is steering, and
+ * there is no second timeline to agree with.
  */
 function makeAudioJoinAnchor(
   subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
@@ -154,8 +173,8 @@ function makeAudioJoinAnchor(
   if (!edgeTargetUs) return undefined;
   return () => {
     const anchorUs = edgeTargetUs();
-    if (anchorUs === undefined) return undefined;
     const videoClockUs = peek(videoRendererSignal)?.getClockTimeUs();
+    if (anchorUs === undefined) return videoClockUs;
     return videoClockUs !== undefined && videoClockUs > anchorUs ? videoClockUs : anchorUs;
   };
 }

@@ -149,6 +149,39 @@ describe('setupAudioRenderer', () => {
     reactor.destroy();
   });
 
+  // The gap this exists for: the anchor is the renderer's drop threshold, so
+  // returning `undefined` while the subscriber has published no edge means no trim
+  // at all — audio behind the running video clock gets played rather than dropped.
+  it('falls back to the running video clock when audio has buffered nothing', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const { state, context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    const { getJoinAnchorUs } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
+
+    state.targetLatency.set(1.5);
+    // Video is running 1.5s behind its own live edge; audio has nothing yet.
+    context.videoRendererActor.set({
+      snapshot: signal({ context: {} }),
+      getClockTimeUs: () => 8_500_000,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+    context.audioSubscriberActor.set(makeFakeSubscriber(undefined));
+
+    // The video clock rather than no threshold at all — audio inherits the target
+    // the video leg already resolved (`newest − target`).
+    expect(getJoinAnchorUs!()).toBe(8_500_000);
+
+    // Once audio has its own frames, its edge takes over again.
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000));
+    expect(getJoinAnchorUs!()).toBe(8_500_000); // still clamped forward: 8.5s > 10s − 1.5s
+    context.audioSubscriberActor.set(makeFakeSubscriber(12_000_000));
+    expect(getJoinAnchorUs!()).toBe(10_500_000);
+
+    reactor.destroy();
+  });
+
   it('places the anchor from audio alone while the video clock is silent', async () => {
     vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
     const { context, reactor } = setupSetupAudioRenderer();
