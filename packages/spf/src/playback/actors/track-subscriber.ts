@@ -286,6 +286,38 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     });
   };
 
+  /**
+   * Drop the arrival measurements' baseline, so the next admitted frame
+   * establishes a new one instead of being timed against the last frame
+   * before an outage.
+   *
+   * `elapsedMs` is the interval since the previous arrival, and both
+   * measurements read it as *delivery* time. Across an auth-expiry
+   * resubscribe it is nothing of the kind — it is the round trip through
+   * `refreshAuth` plus a fresh SUBSCRIBE — and each measurement is wrong in
+   * the direction that hides the problem:
+   *
+   * - The envelope relaxes its bounds by `1 − e^(−Δt/τ)`. Against a gap of
+   *   several τ that factor is ~1, so both bounds collapse onto the single
+   *   reconnected sample and the published spread drops to ~0 — the
+   *   adaptive controller reads a perfectly jitter-free path in the moment
+   *   just after the path failed, and proposes its lowest target there.
+   * - The throughput totals fold the whole outage into `totalDurationMs`
+   *   against one object's bytes, so the bandwidth estimator's next sample
+   *   is one arbitrarily low outlier.
+   *
+   * Clearing the envelope rather than only its baseline also re-arms the
+   * warm-up gate, which is what makes the reconnected subscription describe
+   * itself: `adaptLatencyTarget` holds its last proposal while
+   * `sampleCount` is short, exactly as it does for a subscriber handoff.
+   */
+  const resetArrivalBaseline = (): void => {
+    lastArrivalMs = undefined;
+    offsetMinMs = undefined;
+    offsetMaxMs = 0;
+    offsetSamples = 0;
+  };
+
   const subscribe = (parameters: MessageParameters): void => {
     subscription = session.subscribe(
       { trackNamespace: track.moq.namespace, trackName: track.moq.name, parameters },
@@ -303,6 +335,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
               .refreshAuth()
               .then((refreshed) => {
                 if (destroyed) return;
+                resetArrivalBaseline();
                 subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
               })
               .catch((refreshError) => inner.send({ type: 'error', error: refreshError }));

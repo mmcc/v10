@@ -299,6 +299,61 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  // The outage between the two subscriptions is not delivery time, and both
+  // arrival measurements read the interval since the previous arrival as
+  // exactly that — each wrong in the direction that hides the failure.
+  it('re-baselines the arrival measurements across an auth-expiry resubscribe', async () => {
+    const now = vi.spyOn(performance, 'now');
+    const { session, subscriptions } = createFakeSession();
+    const refreshAuth = vi.fn(async () => ({ authorizationTokens: [new Uint8Array([1])] }));
+    now.mockReturnValue(0);
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth });
+
+    // 30fps arrivals, each delivered 100ms after its own timestamp, with
+    // one 40ms late — a small but real spread the controller can read.
+    const deliver = (index: number, lateMs = 0) => {
+      now.mockReturnValue(100 + index * (1000 / 30) + lateMs);
+      subscriptions[0]!.handlers.onObject?.(locObject(1, index, Math.round((index * 1_000_000) / 30)));
+    };
+    deliver(0);
+    for (let i = 1; i < 60; i++) deliver(i, i % 10 === 0 ? 40 : 0);
+    const beforeSpread =
+      subscriber.snapshot.get().context.arrivalJitter!.maxOffsetMs -
+      subscriber.snapshot.get().context.arrivalJitter!.minOffsetMs;
+    expect(beforeSpread).toBeGreaterThan(5);
+    const beforeArrivals = subscriber.snapshot.get().context.arrivals!;
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 1,
+      reason: 'expired',
+    });
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
+
+    // The refresh round trip took 20s — several times the envelope's 4s
+    // time constant, and far longer than any arrival interval.
+    now.mockReturnValue(22_000);
+    subscriptions[1]!.handlers.onObject?.(locObject(2, 0, 21_900_000));
+
+    const jitter = subscriber.snapshot.get().context.arrivalJitter!;
+    // Counted against the outage, the relaxation factor is ~1 and both
+    // bounds collapse onto this one sample: a spread of 0 published in the
+    // moment just after the path failed, which is where the adaptive
+    // controller would propose its lowest target. Re-baselined instead, so
+    // the warm-up gate holds until the new subscription has described
+    // itself — the same treatment a subscriber handoff gets.
+    expect(jitter.sampleCount).toBe(1);
+    // The outage must not land in the throughput totals either: folded into
+    // `totalDurationMs` against one object's bytes it is a single
+    // arbitrarily low outlier for the bandwidth estimator.
+    const arrivals = subscriber.snapshot.get().context.arrivals!;
+    expect(arrivals.totalDurationMs).toBe(beforeArrivals.totalDurationMs);
+    expect(arrivals.totalBytes).toBe(beforeArrivals.totalBytes);
+
+    subscriber.destroy();
+    now.mockRestore();
+  });
+
   it('errors when auth refresh gives up, without a stale-token retry', async () => {
     const { session, subscriptions } = createFakeSession();
     const refreshAuth = vi.fn(async (): Promise<never> => {
