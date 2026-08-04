@@ -302,6 +302,36 @@ export function resolveAdaptiveLatencyConfig(config?: AdaptLatencyTargetConfig):
     ...supplied,
   };
 
+  // Sign and finiteness first: the budget checks below are *upper* bounds,
+  // and every broken value passes them comfortably. The approach step is
+  // `Math.sign(error) × rate × elapsed`, so a negative rate walks the
+  // published setpoint *away* from the proposal it was computed to reach,
+  // and `NaN` publishes `NaN` — which every renderer clock then reads as
+  // its slew target. Both look exactly like a very cautious controller.
+  for (const name of ['maxWidenRatePerSecond', 'maxNarrowRatePerSecond'] as const) {
+    const rate = supplied[name];
+    if (rate !== undefined && (!Number.isFinite(rate) || rate < 0)) {
+      throw new RangeError(
+        `adaptiveLatency.${name} (${rate}) must be a finite, non-negative number of seconds of target per second ` +
+          'of real time. The approach step is signed by the error, not by the rate, so a negative one moves the ' +
+          'setpoint opposite to the proposal and a non-finite one publishes NaN as the setpoint.'
+      );
+    }
+  }
+  // Zero would make `Math.floor(delta / dropsPerEvent)` Infinity on the
+  // first dropped frame, slamming `widenBias` to its ceiling and holding
+  // the target there; a negative divisor inverts the feedback, so drops
+  // subtract events instead of adding them.
+  if (
+    supplied.dropsPerEvent !== undefined &&
+    (!Number.isFinite(supplied.dropsPerEvent) || supplied.dropsPerEvent <= 0)
+  ) {
+    throw new RangeError(
+      `adaptiveLatency.dropsPerEvent (${supplied.dropsPerEvent}) must be a finite positive count: it divides the ` +
+        'late-frame drop delta into failure events, so zero makes one dropped frame an unbounded number of them ' +
+        'and a negative value inverts the feedback.'
+    );
+  }
   if (supplied.maxWidenRatePerSecond !== undefined && supplied.maxWidenRatePerSecond >= budget) {
     throw new RangeError(
       `adaptiveLatency.maxWidenRatePerSecond (${supplied.maxWidenRatePerSecond}) must stay below ${budget}: half ` +

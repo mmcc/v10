@@ -402,6 +402,36 @@ describe('resolveAdaptiveLatencyConfig', () => {
     ).not.toThrow();
   });
 
+  // The budget checks are upper bounds, so a broken rate passes them: the
+  // step is signed by the error rather than by the rate, and a negative one
+  // walks the setpoint away from the proposal it was computed to reach.
+  it('throws on a rate that is not a finite non-negative magnitude', () => {
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { maxWidenRatePerSecond: -0.01 } })).toThrow(
+      RangeError
+    );
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { maxNarrowRatePerSecond: -0.01 } })).toThrow(
+      RangeError
+    );
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { maxWidenRatePerSecond: Number.NaN } })).toThrow(
+      RangeError
+    );
+    expect(() =>
+      resolveAdaptiveLatencyConfig({ adaptiveLatency: { maxNarrowRatePerSecond: Number.NEGATIVE_INFINITY } })
+    ).toThrow(RangeError);
+    // Zero is a legitimate "hold this direction still".
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { maxWidenRatePerSecond: 0 } })).not.toThrow();
+  });
+
+  // `Math.floor(delta / dropsPerEvent)`: zero makes one dropped frame an
+  // unbounded number of failure events and pins widenBias at its ceiling,
+  // and a negative divisor makes drops subtract events.
+  it('throws on a drop budget that cannot divide into events', () => {
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 0 } })).toThrow(RangeError);
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: -10 } })).toThrow(RangeError);
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: Number.NaN } })).toThrow(RangeError);
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 1 } })).not.toThrow();
+  });
+
   it('throws on an inverted target range', () => {
     expect(() =>
       resolveAdaptiveLatencyConfig({ adaptiveLatency: { minTargetLatency: 2, maxTargetLatency: 1 } })
