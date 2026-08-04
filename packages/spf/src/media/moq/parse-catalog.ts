@@ -385,7 +385,12 @@ function applyDelta(
           // the strict one, a publisher following the spec's own example
           // takes down the catalog subscription.
           const targetName = isString(entry.parentName) ? entry.parentName : entry.name;
-          if (!isString(targetName)) throw new Error('MSF update operation is missing parentName');
+          // Names both, because both are accepted: an error that says
+          // `parentName` sends a publisher following §5.6.4's example
+          // looking for a field this reader does not require.
+          if (!isString(targetName)) {
+            throw new Error('MSF update operation is missing parentName (or name) to identify its target');
+          }
           const scope = isString(entry.parentName) ? entry.parentNamespace : entry.namespace;
           const targetNamespace = isString(scope) ? parseNamespaceString(scope) : options.catalogNamespace;
           const index = tracks.findIndex(

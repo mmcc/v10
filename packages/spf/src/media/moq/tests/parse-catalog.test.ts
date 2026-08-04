@@ -380,6 +380,19 @@ describe('applyMoqCatalogUpdate', () => {
     });
   });
 
+  // §5.1.6 requires `parentName` and the §5.6.4 example uses `name`; this
+  // reader accepts either, so the error has to name both — otherwise a
+  // publisher following the spec's own example is sent looking for a field
+  // that was never required.
+  it('names both accepted identifiers when an update states neither', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [{ op: 'update', tracks: [{ bitrate: 1 }] }],
+    });
+    expect(() => applyMoqCatalogUpdate(initial, delta, options)).toThrow(/parentName \(or name\)/);
+  });
+
   it('rejects an update targeting a track that does not exist', () => {
     const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
     const delta = JSON.stringify({
