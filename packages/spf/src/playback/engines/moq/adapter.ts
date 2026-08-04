@@ -67,10 +67,16 @@ export interface MoqMediaProps {
   /**
    * Let the engine choose the target latency from observed delivery
    * instead of holding a fixed one. An explicit `targetLatency` still
-   * wins — this only fills in where the consumer stated nothing. Leaving
-   * it alone defers to `engineConfig.adaptiveLatency.enabled` (off).
+   * wins — this only fills in where the consumer stated nothing.
+   *
+   * Tri-state, the same shape `targetLatency` has: `undefined` is not
+   * "off", it is *unstated*, and it defers to
+   * `engineConfig.adaptiveLatency.enabled` (itself off by default).
+   * Reading it back reports the override rather than the effective state,
+   * so a host that enabled adaptation through config sees `undefined`
+   * here and a proposal in `adaptiveTargetLatency`.
    */
-  adaptiveLatency: boolean;
+  adaptiveLatency: boolean | undefined;
   /**
    * Begin playback as soon as a source is set, without waiting for
    * `play()`. Autoplay policy still gates the audio clock: outside a user
@@ -85,7 +91,7 @@ export const moqMediaDefaultProps: MoqMediaProps = {
   src: '',
   preload: '',
   targetLatency: undefined,
-  adaptiveLatency: false,
+  adaptiveLatency: undefined,
   autoplay: false,
 };
 
@@ -220,11 +226,15 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       this.#signals.state.targetLatency.set(value);
     }
 
-    get adaptiveLatency(): boolean {
-      return this.#signals.state.adaptiveLatencyEnabled.get() ?? false;
+    get adaptiveLatency(): boolean | undefined {
+      // The slot itself, not `?? false`: collapsing unstated to false made
+      // this getter report adaptation off while it was running from
+      // `engineConfig.adaptiveLatency.enabled`, and left no way to hand the
+      // decision back to config once the property had been written.
+      return this.#signals.state.adaptiveLatencyEnabled.get();
     }
 
-    set adaptiveLatency(value: boolean) {
+    set adaptiveLatency(value: boolean | undefined) {
       this.#signals.state.adaptiveLatencyEnabled.set(value);
     }
 
