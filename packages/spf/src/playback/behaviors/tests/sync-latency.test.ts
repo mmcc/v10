@@ -113,6 +113,49 @@ describe('syncLatency', () => {
     vi.useRealTimers();
   });
 
+  // `targetLatency` is per-track and nothing requires two tracks of one
+  // broadcast to declare the same one. Measuring video-first while resolving
+  // the target audio-first held a setpoint against a measurement taken
+  // somewhere else — and the video renderer's clock, which resolves the
+  // target from the video subscriber, would slew toward a third number.
+  it('resolves the catalog target from the track the depth is measured on', async () => {
+    const audio = fakeSubscriber(3_000); // audio declares a 3s target
+    const video = fakeSubscriber(1_000); // video declares 1s
+    const deps = makeDeps(audio.subscriber);
+    deps.context.videoSubscriberActor.set(video.subscriber);
+
+    video.setBufferDepth(1);
+    audio.setBufferDepth(0);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(600);
+
+    // Depth comes from video, so the setpoint does too — and a video buffer
+    // sitting exactly on video's own target is stable rather than 2s short
+    // of audio's.
+    expect(deps.state.effectiveTargetLatency.get()).toBe(1);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1, 3);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // Audio-only: its buffer is the only signal there is, so it supplies both.
+  it('resolves the audio catalog target for an audio-only broadcast', async () => {
+    const audio = fakeSubscriber(3_000);
+    const deps = makeDeps(audio.subscriber);
+
+    audio.setBufferDepth(3);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(deps.state.effectiveTargetLatency.get()).toBe(3);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
   it('holds rate 1 while depth is inside the deadband', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);

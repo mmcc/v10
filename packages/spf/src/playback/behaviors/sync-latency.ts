@@ -29,8 +29,9 @@
  * this behavior stays DOM-free by acting on subscribers only.
  *
  * The target comes from `state.targetLatency` (seconds; consumer input),
- * falling back to the selected track's catalog `targetLatency`
- * (milliseconds, msf-01 §5.2.8), then `config.defaultTargetLatency`.
+ * falling back to the catalog `targetLatency` (milliseconds, msf-01 §5.2.8)
+ * **of the same track the depth is measured on**, then
+ * `config.defaultTargetLatency`.
  * `state.adaptiveTargetLatency` — written by `adaptLatencyTarget` when
  * adaptation is enabled — slots in *behind* the consumer input and ahead
  * of the catalog (`preferredTargetLatencySeconds`), so an explicit
@@ -204,12 +205,22 @@ function setupSyncLatency({
       controlConfig.defaultTargetLatency
     );
 
+  /** Whether this subscriber has a delivery edge to measure against yet. */
+  const hasEdge = (subscriber: TrackSubscriberActor | undefined): boolean =>
+    subscriber?.snapshot.get().context.newestTimestampUs !== undefined;
+
   const evaluate = (): void => {
-    // The audio buffer is the master-clock side; prefer it as the
-    // controlled quantity and fall back to video for video-only playback.
     const audio = peek(context.audioSubscriberActor);
     const video = peek(context.videoSubscriberActor);
-    const subscriber = audio ?? video;
+    // **The setpoint comes from whichever subscriber the measurement will.**
+    // `targetLatency` is per-track (msf-01 §5.2.8) and nothing requires two
+    // tracks of one broadcast to declare the same one, so resolving the
+    // target audio-first while measuring depth video-first lets the
+    // controller hold a setpoint against a measurement taken somewhere else
+    // — and the video renderer's own clock, which resolves the target from
+    // the video subscriber, would be slewing toward a third number. The
+    // three readers only agree if this one follows the measurement.
+    const subscriber = hasEdge(video) ? video : hasEdge(audio) ? audio : (video ?? audio);
     // Published before the guards below: the resolved setpoint is a fact
     // about the configuration, readable from the moment the controller is
     // active, and the adaptive controller's own hysteresis reads it back.
@@ -241,9 +252,9 @@ function setupSyncLatency({
     // unaffected, which is the tell.
     //
     // Audio remains the fallback for an audio-only broadcast, where its buffer is
-    // the only signal there is.
-    const depth =
-      subscriberLatencySeconds(video, playoutTimestampUs) ?? subscriberLatencySeconds(audio, playoutTimestampUs);
+    // the only signal there is. That preference is applied once, above, so the
+    // setpoint above and the measurement here cannot come from different tracks.
+    const depth = subscriberLatencySeconds(subscriber, playoutTimestampUs);
     if (depth === undefined) return;
 
     state.measuredLatency.set(depth);
