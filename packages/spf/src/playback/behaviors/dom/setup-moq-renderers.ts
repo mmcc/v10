@@ -57,7 +57,7 @@ import {
 } from '../../actors/dom/audio-renderer';
 import { createVideoRendererActor, type VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
-import { type LatencyControlConfig, resolveLatencyControlConfig } from '../sync-latency';
+import { type LatencyControlConfig, type PlayoutClockOwner, resolveLatencyControlConfig } from '../sync-latency';
 
 // =============================================================================
 // Shared state/context shapes
@@ -82,6 +82,13 @@ export interface MoqRendererState {
    */
   paused?: boolean;
   currentTime?: number;
+  /**
+   * Which renderer `currentTime` was last sampled from. Owned by
+   * `trackPlayoutTime` and read by `syncLatency`, which can only call
+   * `newest buffered − currentTime` a latency if it measures the edge of the
+   * track that position came from.
+   */
+  playoutClockOwner?: PlayoutClockOwner;
 }
 
 export interface MoqRendererContext {
@@ -360,7 +367,10 @@ function trackPlayoutTimeSetup({
   state,
   context,
 }: {
-  state: { currentTime: Signal<number | undefined> };
+  state: {
+    currentTime: Signal<number | undefined>;
+    playoutClockOwner: Signal<PlayoutClockOwner | undefined>;
+  };
   context: {
     audioRendererActor: ReadonlySignal<AudioRendererActor | undefined>;
     videoRendererActor: ReadonlySignal<VideoRendererActor | undefined>;
@@ -369,6 +379,13 @@ function trackPlayoutTimeSetup({
   const timer = setInterval(() => {
     const clockUs = peek(context.audioRendererActor)?.getClockTimeUs();
     if (clockUs !== undefined) {
+      // Owner before position, so no reader can see a position attributed to
+      // the wrong clock. Both are written from this one sample: which clock
+      // produced the number is as much a part of it as the number, and it is
+      // knowable *only* here — `getClockTimeUs()` is undefined until the
+      // audio renderer has actually scheduled, which no amount of looking at
+      // subscribers or AudioContexts reveals.
+      state.playoutClockOwner.set('audio');
       state.currentTime.set(clockUs / 1_000_000);
       return;
     }
@@ -380,7 +397,10 @@ function trackPlayoutTimeSetup({
     // fallback video-only playback renders fine but never leaves
     // HAVE_METADATA and the shell buffers forever.
     const presentedUs = peek(context.videoRendererActor)?.snapshot.get().context.lastPresentedTimestampUs;
-    if (presentedUs !== undefined) state.currentTime.set(presentedUs / 1_000_000);
+    if (presentedUs !== undefined) {
+      state.playoutClockOwner.set('video');
+      state.currentTime.set(presentedUs / 1_000_000);
+    }
   }, CLOCK_PUBLISH_INTERVAL_MS);
   return () => clearInterval(timer);
 }
@@ -388,7 +408,19 @@ function trackPlayoutTimeSetup({
 /**
  * **Publish the playout position as `state.currentTime`** (media seconds),
  * sampled from the audio master clock when audio is scheduled and from the
- * video renderer's last presented frame otherwise.
+ * video renderer's last presented frame otherwise — **and publish which of
+ * the two it was** as `state.playoutClockOwner`.
+ *
+ * The owner is not bookkeeping. `syncLatency` measures `newest buffered −
+ * currentTime`, which is only a latency if the edge and the position come
+ * from the same track, and nothing outside this interval can tell which
+ * track the position came from: the audio renderer's `getClockTimeUs()` is
+ * undefined until it has actually scheduled a buffer, so an audio
+ * subscriber, an AudioContext, even a filling audio jitter buffer can all be
+ * present while the position on offer is still video's last presented frame.
+ * A controller inferring the owner from those instead measures across two
+ * timebases for the whole of that window. Owner and position are therefore
+ * written together, owner first, from one sample.
  *
  * Ungated on purpose. Its two consumers — the media-element facade's
  * readiness derivation and `syncLatency`'s setpoint — both need a value in
@@ -400,7 +432,7 @@ function trackPlayoutTimeSetup({
  * const cleanup = trackPlayoutTime.setup({ state, context });
  */
 export const trackPlayoutTime = defineBehavior({
-  stateKeys: ['currentTime'],
+  stateKeys: ['currentTime', 'playoutClockOwner'],
   contextKeys: ['audioRendererActor', 'videoRendererActor'],
   setup: trackPlayoutTimeSetup,
 });

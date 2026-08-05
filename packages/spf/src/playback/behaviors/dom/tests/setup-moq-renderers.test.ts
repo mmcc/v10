@@ -5,6 +5,7 @@ import { createAudioRendererActor } from '../../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../../actors/dom/video-renderer';
 import { createVideoRendererActor } from '../../../actors/dom/video-renderer';
 import type { TrackSubscriberActor } from '../../../actors/track-subscriber';
+import type { PlayoutClockOwner } from '../../sync-latency';
 import {
   type MoqRendererConfig,
   setupAudioRenderer,
@@ -245,7 +246,10 @@ describe('setupAudioRenderer', () => {
 
 describe('trackPlayoutTime', () => {
   function setupTrackPlayoutTime() {
-    const state = { currentTime: signal<number | undefined>(undefined) };
+    const state = {
+      currentTime: signal<number | undefined>(undefined),
+      playoutClockOwner: signal<PlayoutClockOwner | undefined>(undefined),
+    };
     const context = {
       audioRendererActor: signal<AudioRendererActor | undefined>(undefined),
       videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
@@ -292,6 +296,42 @@ describe('trackPlayoutTime', () => {
     } as unknown as VideoRendererActor);
 
     await vi.waitFor(() => expect(state.currentTime.get()).toBe(4));
+
+    cleanup();
+  });
+
+  // The whole point of publishing the owner: an audio renderer can exist,
+  // with a subscriber and a filling buffer, and still not be the clock —
+  // `getClockTimeUs()` is undefined until it has scheduled something. Only
+  // this interval can see that, so it says so rather than leaving
+  // `syncLatency` to guess from the subscribers and measure across two
+  // timebases for the whole of the join window.
+  it('names the clock the position came from, and follows the handover', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+    expect(state.playoutClockOwner.get()).toBeUndefined();
+
+    let audioClockUs: number | undefined;
+    context.audioRendererActor.set({
+      snapshot: signal({ context: {} }),
+      setTrack: vi.fn(),
+      getClockTimeUs: () => audioClockUs,
+      destroy: vi.fn(),
+    } as unknown as AudioRendererActor);
+    context.videoRendererActor.set({
+      snapshot: signal({ context: { lastPresentedTimestampUs: 2_000_000 } }),
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    // Audio renderer present, audio not scheduled: video is the clock.
+    await vi.waitFor(() => expect(state.currentTime.get()).toBe(2));
+    expect(state.playoutClockOwner.get()).toBe('video');
+
+    // The schedule starts, and the owner moves with the position.
+    audioClockUs = 9_000_000;
+    await vi.waitFor(() => expect(state.playoutClockOwner.get()).toBe('audio'));
+    expect(state.currentTime.get()).toBe(9);
 
     cleanup();
   });

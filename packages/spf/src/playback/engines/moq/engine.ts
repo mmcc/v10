@@ -24,7 +24,12 @@ import { resolveCatalog } from '../../behaviors/resolve-catalog';
 import { setupMoqSession } from '../../behaviors/setup-moq-session';
 import { subscribeSelectedAudioTrack, subscribeSelectedVideoTrack } from '../../behaviors/subscribe-selected-tracks';
 import { suspendMediaWhilePaused } from '../../behaviors/suspend-media-while-paused';
-import { type LatencyControlConfig, type PlayoutState, syncLatency } from '../../behaviors/sync-latency';
+import {
+  type LatencyControlConfig,
+  type PlayoutClockOwner,
+  type PlayoutState,
+  syncLatency,
+} from '../../behaviors/sync-latency';
 import { DEFAULT_MOQ_BANDWIDTH_CONFIG, trackMoqBandwidth } from '../../behaviors/track-moq-bandwidth';
 import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behaviors/track-switching';
 
@@ -107,6 +112,13 @@ export interface MoqEngineState {
   playoutState?: PlayoutState;
   /** Playout position in media seconds (audio master clock, else video). */
   currentTime?: number;
+  /**
+   * Which renderer `currentTime` came from, published alongside it by
+   * `trackPlayoutTime`. The latency controller measures the delivery edge of
+   * *that* track, since a depth taken against another one's clock is a
+   * subtraction across two timebases.
+   */
+  playoutClockOwner?: PlayoutClockOwner;
 }
 
 /**

@@ -1,9 +1,10 @@
 /**
  * **Latency controller: hold playout at the target latency.** Watches the
  * distance from the delivery edge of the track that owns the playout clock
- * — audio when it exists, video otherwise — to the position actually being
- * played out (`state.currentTime`) against the target latency and steers
- * playout:
+ * — `state.playoutClockOwner`: the audio renderer once it is scheduling,
+ * the video renderer before that and for a video-only broadcast — to the
+ * position actually being played out (`state.currentTime`) against the
+ * target latency and steers playout:
  *
  * - **stable** — latency within band: `playoutRate` 1.
  * - **rate nudge** — latency drifted above/below the band: small rate
@@ -106,6 +107,19 @@ import type { TrackSubscriberActor } from '../actors/track-subscriber';
 
 export type PlayoutState = 'stable' | 'nudging' | 'catching-up';
 
+/**
+ * Which renderer's clock `state.currentTime` is currently coming from.
+ *
+ * Published by `trackPlayoutTime` (the behavior that samples the clocks)
+ * and read here, because "how far is the delivery edge from the position
+ * being played out" is only a latency at all when the edge and the position
+ * describe the same track — and *which* track the position describes is a
+ * fact only the renderers know. Declared beside `PlayoutState` rather than
+ * in `setup-moq-renderers` so this DOM-free behavior can read it without
+ * importing from a DOM one.
+ */
+export type PlayoutClockOwner = 'audio' | 'video';
+
 export interface SyncLatencyState {
   /** Consumer-set target latency in seconds. */
   targetLatency?: number;
@@ -138,6 +152,11 @@ export interface SyncLatencyState {
   playoutState?: PlayoutState;
   /** Playout position in media seconds, published by `trackPlayoutTime`. */
   currentTime?: number;
+  /**
+   * Which renderer `currentTime` was last sampled from, published by
+   * `trackPlayoutTime`. `undefined` before either clock runs.
+   */
+  playoutClockOwner?: PlayoutClockOwner;
 }
 
 export interface SyncLatencyContext {
@@ -282,6 +301,7 @@ function setupSyncLatency({
     playoutRate: Signal<SyncLatencyState['playoutRate']>;
     playoutState: Signal<SyncLatencyState['playoutState']>;
     currentTime: ReadonlySignal<SyncLatencyState['currentTime']>;
+    playoutClockOwner: ReadonlySignal<SyncLatencyState['playoutClockOwner']>;
   };
   context: {
     videoSubscriberActor: ReadonlySignal<TrackSubscriberActor | undefined>;
@@ -341,12 +361,30 @@ function setupSyncLatency({
     // **One track supplies both the depth and the setpoint, and it is the
     // track that owns the playout clock.** `bufferDepthSeconds` is `newest
     // buffered − playout`; the subtraction only means "latency" when both
-    // ends describe the same track. `state.currentTime` is the audio
-    // renderer's clock whenever audio is scheduled and the video renderer's
-    // last presented frame otherwise (`trackPlayoutTime`), so measuring
-    // audio-first follows that clock instead of racing it, and video is the
-    // fallback for a video-only broadcast where its presented frame is both
-    // the clock and the only edge there is.
+    // ends describe the same track, so the track is chosen by *who owns the
+    // clock `currentTime` came from* — `state.playoutClockOwner`, published
+    // by `trackPlayoutTime` from the same sample. Anything inferred locally
+    // is a guess at another behavior's state: the audio subscriber existing,
+    // or even having a delivery edge, does not mean the audio renderer has
+    // scheduled anything, and until it has, `currentTime` is still the video
+    // renderer's last presented frame.
+    //
+    // That window is not hypothetical and it is not brief. Measured across
+    // 12 fresh pane starts, an audio-first selection opened with readings of
+    // 1.5-9.0s that equal `newest audio − oldest presented video` to three
+    // decimals — a subtraction across two timebases and across the join
+    // backlog — while the audio clock, once it existed, was 0.33-0.41s
+    // behind its own edge. A corroboration gate now stops those readings
+    // from *skipping* groups, but a skip was only the loudest consequence:
+    // the same reading still steers the rate nudge and still publishes as
+    // `measuredLatency`, so the join window was steering on a number with
+    // no physical meaning. Following the owner makes it mean something.
+    //
+    // With no owner yet — neither clock has produced a position — nothing is
+    // measured anyway (`currentTime` is `undefined` and the controller idles
+    // below), and the preference falls back to whichever track has an edge
+    // so the setpoint published above is still resolved against a real
+    // track.
     //
     // Two tracks of one broadcast need not have coincident delivery edges.
     // A track re-encoded anywhere upstream trails a passed-through one by
@@ -365,7 +403,9 @@ function setupSyncLatency({
     // resolves the target from the video subscriber, would be slewing toward
     // a third number. The three readers only agree if this one picks a
     // single track for both.
-    const subscriber = hasEdge(audio) ? audio : hasEdge(video) ? video : (audio ?? video);
+    const owner = peek(state.playoutClockOwner);
+    const clockOwnerSubscriber = owner === 'audio' ? audio : owner === 'video' ? video : undefined;
+    const subscriber = clockOwnerSubscriber ?? (hasEdge(audio) ? audio : hasEdge(video) ? video : (audio ?? video));
     // Published before the guards below: the resolved setpoint is a fact
     // about the configuration, readable from the moment the controller is
     // active, and the adaptive controller's own hysteresis reads it back.
@@ -497,6 +537,7 @@ export const syncLatency = defineBehavior({
     'playoutRate',
     'playoutState',
     'currentTime',
+    'playoutClockOwner',
   ],
   contextKeys: ['videoSubscriberActor', 'audioSubscriberActor'],
   setup: setupSyncLatency,

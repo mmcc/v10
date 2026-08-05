@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { signal } from '../../../core/signals/primitives';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
 import type { TrackSubscriberActor, TrackSubscriberContext } from '../../actors/track-subscriber';
-import type { PlayoutState } from '../sync-latency';
+import type { PlayoutClockOwner, PlayoutState } from '../sync-latency';
 import { DEFAULT_LATENCY_CONTROL_CONFIG, resolveLatencyControlConfig, syncLatency } from '../sync-latency';
 
 function fakeSubscriber(targetLatencyMs?: number) {
@@ -53,7 +53,7 @@ function fakeSubscriber(targetLatencyMs?: number) {
   return { subscriber, setBufferDepth, skipToLatestGroup };
 }
 
-function makeDeps(subscriber: TrackSubscriberActor | undefined) {
+function makeDeps(subscriber: TrackSubscriberActor | undefined, clockOwner: PlayoutClockOwner | undefined = 'audio') {
   return {
     state: {
       targetLatency: signal<number | undefined>(undefined),
@@ -66,6 +66,7 @@ function makeDeps(subscriber: TrackSubscriberActor | undefined) {
       // Playout parked at 0, so `setBufferDepth(n)` reads as n seconds of
       // edge-to-playout latency.
       currentTime: signal<number | undefined>(0),
+      playoutClockOwner: signal<PlayoutClockOwner | undefined>(clockOwner),
     },
     context: {
       videoSubscriberActor: signal<TrackSubscriberActor | undefined>(undefined),
@@ -104,6 +105,80 @@ describe('syncLatency', () => {
     expect(deps.state.measuredLatency.get()).toBeCloseTo(1.3, 3);
     expect(deps.state.playoutRate.get()).toBe(1);
     expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // The startup window, and the reason the owner is published rather than
+  // inferred: an audio subscriber can be present with a filling jitter buffer
+  // while the audio renderer has scheduled nothing, and until it does,
+  // `currentTime` is the video renderer's last presented frame. Measuring
+  // audio's edge against it charges video's position to audio's track — the
+  // fault that produced opening readings of 1.5-9.0s across 12 fresh starts,
+  // every one equal to `newest audio − oldest presented video` to three
+  // decimals, while the audio clock was 0.33-0.41s behind its own edge.
+  it('measures the video edge while the video renderer still owns the clock', async () => {
+    const audio = fakeSubscriber();
+    const video = fakeSubscriber();
+    const deps = makeDeps(audio.subscriber, 'video');
+    deps.context.videoSubscriberActor.set(video.subscriber);
+    deps.state.targetLatency.set(1.4);
+
+    // Audio's subscription has answered and its buffer runs a GOP ahead of
+    // video's, but nothing is scheduled yet: video's presented frame is the
+    // clock, so video's edge is the only end of the subtraction that belongs
+    // to it.
+    audio.setBufferDepth(1.9);
+    video.setBufferDepth(1.4);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1.4, 3);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  // And the handover: the moment the audio schedule takes the clock over, the
+  // measurement moves with it rather than staying on the track that was
+  // driving playout a tick ago.
+  it('follows the clock over to audio when the audio schedule takes it', async () => {
+    const audio = fakeSubscriber();
+    const video = fakeSubscriber();
+    const deps = makeDeps(audio.subscriber, 'video');
+    deps.context.videoSubscriberActor.set(video.subscriber);
+    deps.state.targetLatency.set(1.4);
+
+    audio.setBufferDepth(1.9);
+    video.setBufferDepth(1.4);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1.4, 3);
+
+    deps.state.playoutClockOwner.set('audio');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(1.9, 3);
+
+    reactor.destroy();
+  });
+
+  // Neither clock has produced a position yet, so nothing is measured at all —
+  // but the setpoint is still published, and it has to be resolved against a
+  // real track to be worth publishing.
+  it('resolves a setpoint with no clock owner yet', async () => {
+    const audio = fakeSubscriber(2_000);
+    const deps = makeDeps(audio.subscriber, undefined);
+    deps.state.currentTime = signal<number | undefined>(undefined);
+    audio.setBufferDepth(2);
+
+    const reactor = syncLatency.setup(deps);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deps.state.effectiveTargetLatency.get()).toBe(2);
+    expect(deps.state.measuredLatency.get()).toBeUndefined();
 
     reactor.destroy();
   });
