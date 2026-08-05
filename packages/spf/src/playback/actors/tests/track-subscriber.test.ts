@@ -164,6 +164,47 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  // The arrival-offset envelope is the jitter primitive the adaptive
+  // latency controller reads. The offsets themselves mix two unrelated
+  // clock epochs, so only their *spread* means anything — and the bounds
+  // have to forget, or one lucky early frame pins the estimate forever.
+  it('publishes a decaying arrival-offset envelope', () => {
+    const now = vi.spyOn(performance, 'now');
+    const { session, subscriptions } = createFakeSession();
+    now.mockReturnValue(0);
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+    const jitter = () => subscriber.snapshot.get().context.arrivalJitter!;
+
+    // Media time in microseconds, arrival in wall milliseconds, 30fps.
+    // Every frame is delivered 100ms "after" its own timestamp except
+    // frame 1, which is 40ms later still.
+    const deliver = (index: number, lateMs = 0) => {
+      now.mockReturnValue(100 + index * (1000 / 30) + lateMs);
+      handlers.onObject?.(locObject(1, index, Math.round((index * 1_000_000) / 30)));
+    };
+
+    deliver(0);
+    expect(jitter()).toEqual({ minOffsetMs: 100, maxOffsetMs: 100, sampleCount: 1, epoch: 0 });
+
+    deliver(1, 40);
+    expect(jitter().sampleCount).toBe(2);
+    // Not exactly 40: the bounds have already relaxed over the 73ms
+    // between the two arrivals, which is the mechanism working.
+    expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeGreaterThan(38);
+    expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeLessThanOrEqual(40);
+
+    // A long run of well-behaved arrivals pulls the stale high bound back
+    // down rather than holding the spread open indefinitely — an
+    // unbounded max (or min) is what makes this class of estimate drift
+    // permanently pessimistic.
+    for (let i = 2; i < 300; i++) deliver(i);
+    expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeLessThan(5);
+
+    subscriber.destroy();
+    now.mockRestore();
+  });
+
   it('discards late objects at or behind the drain watermark', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });
@@ -258,6 +299,66 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  // The outage between the two subscriptions is not delivery time, and both
+  // arrival measurements read the interval since the previous arrival as
+  // exactly that — each wrong in the direction that hides the failure.
+  it('re-baselines the arrival measurements across an auth-expiry resubscribe', async () => {
+    const now = vi.spyOn(performance, 'now');
+    const { session, subscriptions } = createFakeSession();
+    const refreshAuth = vi.fn(async () => ({ authorizationTokens: [new Uint8Array([1])] }));
+    now.mockReturnValue(0);
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth });
+
+    // 30fps arrivals, each delivered 100ms after its own timestamp, with
+    // one 40ms late — a small but real spread the controller can read.
+    const deliver = (index: number, lateMs = 0) => {
+      now.mockReturnValue(100 + index * (1000 / 30) + lateMs);
+      subscriptions[0]!.handlers.onObject?.(locObject(1, index, Math.round((index * 1_000_000) / 30)));
+    };
+    deliver(0);
+    for (let i = 1; i < 60; i++) deliver(i, i % 10 === 0 ? 40 : 0);
+    const beforeSpread =
+      subscriber.snapshot.get().context.arrivalJitter!.maxOffsetMs -
+      subscriber.snapshot.get().context.arrivalJitter!.minOffsetMs;
+    expect(beforeSpread).toBeGreaterThan(5);
+    const beforeArrivals = subscriber.snapshot.get().context.arrivals!;
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 1,
+      reason: 'expired',
+    });
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
+
+    // The refresh round trip took 20s — several times the envelope's 4s
+    // time constant, and far longer than any arrival interval.
+    now.mockReturnValue(22_000);
+    subscriptions[1]!.handlers.onObject?.(locObject(2, 0, 21_900_000));
+
+    const jitter = subscriber.snapshot.get().context.arrivalJitter!;
+    // Counted against the outage, the relaxation factor is ~1 and both
+    // bounds collapse onto this one sample: a spread of 0 published in the
+    // moment just after the path failed, which is where the adaptive
+    // controller would propose its lowest target. Re-baselined instead, so
+    // the warm-up gate holds until the new subscription has described
+    // itself — the same treatment a subscriber handoff gets.
+    expect(jitter.sampleCount).toBe(1);
+    // And the restart is stated rather than left to be inferred from the
+    // count: a reader sampling on its own timer cannot see a count fall if
+    // enough frames arrive before its next read, so the envelope carries the
+    // epoch it belongs to.
+    expect(jitter.epoch).toBe(1);
+    // The outage must not land in the throughput totals either: folded into
+    // `totalDurationMs` against one object's bytes it is a single
+    // arbitrarily low outlier for the bandwidth estimator.
+    const arrivals = subscriber.snapshot.get().context.arrivals!;
+    expect(arrivals.totalDurationMs).toBe(beforeArrivals.totalDurationMs);
+    expect(arrivals.totalBytes).toBe(beforeArrivals.totalBytes);
+
+    subscriber.destroy();
+    now.mockRestore();
+  });
+
   it('errors when auth refresh gives up, without a stale-token retry', async () => {
     const { session, subscriptions } = createFakeSession();
     const refreshAuth = vi.fn(async (): Promise<never> => {
@@ -274,6 +375,38 @@ describe('createTrackSubscriberActor', () => {
     await vi.waitFor(() => expect(subscriber.snapshot.get().context.status).toBe('error'));
     expect(refreshAuth).toHaveBeenCalledOnce();
     expect(subscriptions).toHaveLength(1);
+
+    subscriber.destroy();
+  });
+
+  it('prefers the SUBSCRIBE_OK track timescale over the catalog, because it describes these bytes', () => {
+    // The catalog says milliseconds; the peer serving this subscription declares
+    // 90kHz. A relay converts timestamps into the timescale it declares, so the
+    // transport's number is the one the objects are actually in — reading the
+    // catalog here would be wrong by 90x.
+    const { session, subscriptions } = createFakeSession();
+    const track: MoqTrack = { ...TRACK, moq: { ...TRACK.moq, timescale: 1_000 } };
+    const subscriber = createTrackSubscriberActor({ session, track });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 0, parameters: {}, trackProperties: [{ type: 0x08, value: 90_000 }] });
+    handlers.onObject?.(locObject(41, 0, 90_000));
+
+    expect(subscriber.peek()).toMatchObject({ timestampUs: 1_000_000 });
+
+    subscriber.destroy();
+  });
+
+  it('falls back to the catalog timescale when the peer declares none', () => {
+    const { session, subscriptions } = createFakeSession();
+    const track: MoqTrack = { ...TRACK, moq: { ...TRACK.moq, timescale: 1_000 } };
+    const subscriber = createTrackSubscriberActor({ session, track });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 0, parameters: {}, trackProperties: [] });
+    handlers.onObject?.(locObject(41, 0, 1_000));
+
+    expect(subscriber.peek()).toMatchObject({ timestampUs: 1_000_000 });
 
     subscriber.destroy();
   });

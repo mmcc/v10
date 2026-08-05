@@ -121,3 +121,94 @@ export function estimateLatencySeconds(frameTimestampUs: number, nowEpochMs: num
 export function bufferDepthSeconds(newestTimestampUs: number, playoutTimestampUs: number): number {
   return Math.max(0, (newestTimestampUs - playoutTimestampUs) / MICROSECONDS_PER_SECOND);
 }
+
+/**
+ * Whether a stated target latency can be used as a setpoint at all.
+ *
+ * Not defensive tidiness — an unusable number does not degrade this
+ * pipeline, it stops it, and both failures are silent:
+ *
+ * - **`NaN`** makes every comparison in the latency controller false, so
+ *   the controller parks the rate at `1 − rateNudge` forever, and it
+ *   propagates through `joinAnchorUs` into the video self-clock's slew,
+ *   which writes the corrected value back as its own anchor. One `NaN`
+ *   read leaves the clock permanently `NaN`, no frame is ever due again,
+ *   and nothing but a track switch clears it.
+ * - **Zero or negative** places the join anchor at or *ahead* of the
+ *   delivery edge, where the audio renderer discards its whole buffer
+ *   unheard on every tick and the video renderer drop-lates everything it
+ *   holds.
+ *
+ * So an unusable value is treated as *no statement*, and resolution falls
+ * through to the next layer that made one — the same rule
+ * `<simple-moq-video>` applies to its `target-latency` attribute, applied
+ * where every source of a target passes rather than only that one.
+ */
+export function isUsableTargetSeconds(seconds: number | undefined): seconds is number {
+  return seconds !== undefined && Number.isFinite(seconds) && seconds > 0;
+}
+
+/**
+ * Target latency in seconds, resolved across the layers allowed to state
+ * one: consumer input wins, then the track catalog's `targetLatency`
+ * (milliseconds, msf-01 §5.2.8), then the controller default. Shared by
+ * the latency controller and the renderers so both aim at one number.
+ *
+ * A layer that states something unusable (see `isUsableTargetSeconds`) is
+ * skipped rather than honored — including the catalog, which is a remote
+ * publisher's number and the one layer nothing else validates.
+ *
+ * `defaultTargetSeconds` is the one layer this function cannot skip: it is
+ * the bottom of the chain, so there is nothing below it to fall through
+ * to. It is guaranteed usable by `resolveLatencyControlConfig`, which is
+ * where every caller's `LatencyControlConfig` comes from — pass a raw
+ * `config.latency` here and the guarantee is gone.
+ */
+export function resolveTargetLatencySeconds(
+  consumerTargetSeconds: number | undefined,
+  catalogTargetMs: number | undefined,
+  defaultTargetSeconds: number
+): number {
+  if (isUsableTargetSeconds(consumerTargetSeconds)) return consumerTargetSeconds;
+  const catalogTargetSeconds = catalogTargetMs === undefined ? undefined : catalogTargetMs / 1000;
+  if (isUsableTargetSeconds(catalogTargetSeconds)) return catalogTargetSeconds;
+  return defaultTargetSeconds;
+}
+
+/**
+ * The value to feed `resolveTargetLatencySeconds` as its consumer target
+ * when adaptive latency is in play: **an explicit consumer target always
+ * wins over the adaptive controller's proposal.** Setting `targetLatency`
+ * therefore pins the setpoint whether or not adaptation is running, and
+ * `undefined` from both leaves the catalog → default chain below it
+ * untouched — which is exactly what a warming-up (or disabled) adaptive
+ * controller publishes.
+ *
+ * A one-line rule with two readers (`syncLatency` and the renderers'
+ * `makeEdgeTargetUs`), named so the precedence lives in one place rather
+ * than as a `??` that can be spelled differently in each.
+ *
+ * Precedence goes by *usability*, not by presence: a consumer target of
+ * `NaN` or `-1` is not a low target, it is a target that was never stated
+ * (see `isUsableTargetSeconds`), so the adaptive proposal below it still
+ * gets its turn instead of being shadowed by a number nothing can hold.
+ */
+export function preferredTargetLatencySeconds(
+  consumerTargetSeconds: number | undefined,
+  adaptiveTargetSeconds: number | undefined
+): number | undefined {
+  if (isUsableTargetSeconds(consumerTargetSeconds)) return consumerTargetSeconds;
+  if (isUsableTargetSeconds(adaptiveTargetSeconds)) return adaptiveTargetSeconds;
+  return undefined;
+}
+
+/**
+ * Media timestamp playout should join a jitter buffer at:
+ * `targetLatencySeconds` behind the newest buffered frame. A relay replays
+ * several recent groups to every joining subscriber, so anchoring at the
+ * oldest buffered frame instead parks playout that whole replay behind the
+ * live edge.
+ */
+export function joinAnchorUs(newestTimestampUs: number, targetLatencySeconds: number): number {
+  return newestTimestampUs - targetLatencySeconds * MICROSECONDS_PER_SECOND;
+}

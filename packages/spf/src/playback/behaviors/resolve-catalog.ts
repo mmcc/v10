@@ -137,6 +137,12 @@ function setupResolveCatalog({
           let subscription: Subscription | undefined;
           let fetchHandle: FetchHandle | undefined;
           let settleTimer: ReturnType<typeof setTimeout> | undefined;
+          // Monotonic attempt token: cancelling a subscription/fetch does
+          // not stop callbacks already in flight (a cancelled fetch stream
+          // can still surface onEnd/onReset), so the auth-expiry retry
+          // guards every handler against its superseded attempt — a stale
+          // settle or object must not touch the fresh attempt's state.
+          let attempt = 0;
 
           const apply = (text: string, objectId: number): void => {
             // A delta with no prior catalog can't be interpreted (§5.1.6);
@@ -164,10 +170,22 @@ function setupResolveCatalog({
           const start = (parameters: MessageParameters): void => {
             // Fresh attempt: the new joining fetch replays the current
             // group again, so live deltas must buffer until it settles.
+            const thisAttempt = ++attempt;
+            const isCurrent = (): boolean => attempt === thisAttempt;
             fetchSettled = false;
             bufferedLive.length = 0;
             clearTimeout(settleTimer);
-            settleTimer = fetchTimeoutMs > 0 ? setTimeout(settleFetch, fetchTimeoutMs) : undefined;
+            settleTimer =
+              fetchTimeoutMs > 0
+                ? setTimeout(() => {
+                    // Deadline passed: fall back to live-only and stop the
+                    // replay — a straggling fetch entry would overwrite the
+                    // live catalog with stale state (or apply the next
+                    // delta against the wrong base).
+                    settleFetch();
+                    fetchHandle?.cancel();
+                  }, fetchTimeoutMs)
+                : undefined;
 
             subscription = session.subscribe(
               {
@@ -177,6 +195,7 @@ function setupResolveCatalog({
               },
               {
                 onObject: (object) => {
+                  if (!isCurrent()) return;
                   if (object.status !== 'normal' || object.payload.length === 0) return;
                   const text = utf8Decode(object.payload);
                   if (!fetchSettled) {
@@ -226,15 +245,25 @@ function setupResolveCatalog({
               },
               {
                 onEntry: (entry) => {
+                  // Once settled (deadline passed or replay ended) the live
+                  // subscription owns the catalog — late replay entries are
+                  // stale and must not overwrite it.
+                  if (!isCurrent() || fetchSettled) return;
                   if (entry.kind !== 'object' || entry.payload.length === 0) return;
                   apply(utf8Decode(entry.payload), entry.objectId);
                 },
-                onEnd: settleFetch,
+                onEnd: () => {
+                  if (isCurrent()) settleFetch();
+                },
                 // No history to replay (e.g. nothing published yet) or replay
                 // truncated — fall back to live-only: the next independent
                 // object resolves.
-                onError: settleFetch,
-                onReset: settleFetch,
+                onError: () => {
+                  if (isCurrent()) settleFetch();
+                },
+                onReset: () => {
+                  if (isCurrent()) settleFetch();
+                },
               }
             );
           };

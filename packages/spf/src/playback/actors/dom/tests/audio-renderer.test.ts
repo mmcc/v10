@@ -102,6 +102,38 @@ describe('createAudioRendererActor', () => {
     renderer.destroy();
   });
 
+  // The clock deliberately hides an underrun — it clamps to the segment
+  // end and resumes seamlessly, which is right for presentation and
+  // useless as a signal. This counter is the only direct evidence that a
+  // target latency is below what the path sustains.
+  it('counts the rising edge of a schedule that ran dry', async () => {
+    const frames = await encodeTestFrames(3);
+    const audioContext = createFakeAudioContext();
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05, tickIntervalMs: 1 });
+
+    // Nothing scheduled is not an underrun: at join there is no schedule
+    // to starve.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(renderer.snapshot.get().context.underruns).toBe(0);
+
+    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+    expect(renderer.snapshot.get().context.underruns).toBe(0);
+
+    // The source is exhausted; walk the hardware clock past everything
+    // scheduled and the schedule is dry.
+    audioContext.currentTime = 60;
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.underruns).toBe(1), { timeout: 5000 });
+
+    // Still dry several ticks later — one starvation, one increment.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(renderer.snapshot.get().context.underruns).toBe(1);
+
+    renderer.destroy();
+  });
+
   it('clearing the track resets to idle and drops the anchor', async () => {
     const frames = await encodeTestFrames(2);
     const audioContext = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
@@ -279,6 +311,108 @@ describe('createAudioRendererActor', () => {
     // clock (+margin) and the media clock lands past the jump immediately.
     audioContext.currentTime = 0.06;
     expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(JUMP_US);
+
+    renderer.destroy();
+  });
+
+  it('anchors at the live edge, discarding the replayed backlog unheard', async () => {
+    // The relay replayed 1s of audio before the first tick runs.
+    const frames = await encodeTestFrames(50);
+    const NEWEST_US = 49 * FRAME_DURATION_US;
+    const TARGET_S = 0.2;
+    const ANCHOR_US = NEWEST_US - TARGET_S * 1_000_000;
+    const audioContext = createFakeAudioContext();
+    const queue = [...frames];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    const renderer = createAudioRendererActor({
+      audioContext,
+      scheduleMargin: 0.05,
+      getJoinAnchorUs: () => ANCHOR_US,
+    });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+
+    // The 39 pre-anchor frames left the buffer without being decoded: none
+    // remain, and nothing like that many were scheduled.
+    expect(queue.every((frame) => frame.timestampUs >= ANCHOR_US)).toBe(true);
+    expect(renderer.snapshot.get().context.framesScheduled).toBeLessThan(15);
+    expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThan(ANCHOR_US);
+
+    // The clock reads the anchor, not 0 — and the backlog did not become
+    // ~800ms of scheduled silence in front of it, which would put the
+    // clock back at the start of the timeline this far into playback.
+    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(ANCHOR_US);
+    audioContext.currentTime = 0.06;
+    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(ANCHOR_US);
+
+    renderer.destroy();
+  });
+
+  it('leaves a buffer shallower than the target alone', async () => {
+    const frames = await encodeTestFrames(5);
+    const audioContext = createFakeAudioContext();
+    const queue = [...frames];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    // A live join with no replay: the edge is inside the target, so the
+    // anchor sits behind the buffer head and must not move playout.
+    const renderer = createAudioRendererActor({
+      audioContext,
+      scheduleMargin: 0.05,
+      getJoinAnchorUs: () => -400_000,
+    });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+
+    expect(renderer.getClockTimeUs()).toBe(0);
+
+    renderer.destroy();
+  });
+
+  it('re-anchors at the live edge after a catch-up skip, not at the group start', async () => {
+    const frames = await encodeTestFrames(30);
+    const audioContext = createFakeAudioContext();
+    // Two 300ms stretches either side of a catch-up skip: the controller
+    // drops the buffer to the newest keyframe-led group, so the surviving
+    // group still starts ~5s of media time behind its own newest frame.
+    const SKIP_US = 5_000_000;
+    const queue = frames.slice(0, 15);
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    let anchorUs: number | undefined;
+    const renderer = createAudioRendererActor({
+      audioContext,
+      scheduleMargin: 0.05,
+      getJoinAnchorUs: () => anchorUs,
+    });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+    expect(renderer.getClockTimeUs()).toBe(0);
+
+    // The skip lands: the surviving group runs SKIP_US … SKIP_US + 300ms.
+    const survivingGroup = frames
+      .slice(15)
+      .map((frame, i) => ({ ...frame, timestampUs: SKIP_US + i * FRAME_DURATION_US }));
+    const newestUs = survivingGroup[survivingGroup.length - 1]!.timestampUs;
+    anchorUs = newestUs - 100_000;
+    queue.length = 0;
+    queue.push(...survivingGroup);
+    // Play out what was scheduled before the skip, so the schedule horizon
+    // reopens and the renderer pulls the jumped-to timeline.
+    audioContext.currentTime = 0.25;
+
+    // Playout resumes within the target of the edge, rather than at the
+    // group start SKIP_US — which is what the plain discontinuity
+    // re-anchor would have done.
+    await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(anchorUs!), { timeout: 5000 });
+    expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(newestUs + FRAME_DURATION_US);
 
     renderer.destroy();
   });
