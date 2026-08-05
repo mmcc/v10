@@ -330,6 +330,23 @@ function setupSyncLatency({
    */
   let catchUpArmed = false;
 
+  /**
+   * The subscriber the two memories above describe.
+   *
+   * **Neither survives a change of controlled track.** A make-before-break
+   * handoff swaps the actor without the controller passing through
+   * `inactive`, so `entry` — where they are cleared — never runs; the same
+   * goes for the clock changing hands mid-join, which moves the measurement
+   * to the other track. An arm raised on the track that left is
+   * corroboration from a different stream, and it makes the replacement's
+   * *first* reading skip — precisely the join-transient jump the two-reading
+   * gate exists to prevent, on the reading most likely to be a transient. An
+   * inherited direction is the same mistake at lower volume: the replacement
+   * is held at a nudged rate for a deviation inside its own deadband, which
+   * is the band that means do nothing.
+   */
+  let controlledSubscriber: TrackSubscriberActor | undefined;
+
   const derivedStateSignal = computed<FsmState>(() =>
     context.videoSubscriberActor.get() || context.audioSubscriberActor.get() ? 'controlling' : 'inactive'
   );
@@ -406,6 +423,15 @@ function setupSyncLatency({
     const owner = peek(state.playoutClockOwner);
     const clockOwnerSubscriber = owner === 'audio' ? audio : owner === 'video' ? video : undefined;
     const subscriber = clockOwnerSubscriber ?? (hasEdge(audio) ? audio : hasEdge(video) ? video : (audio ?? video));
+    // Per-subscriber memory, and this is the only place the subscriber can
+    // change (see `controlledSubscriber`). Nothing else has to be undone: the
+    // rate is re-decided from this evaluation's own deviation below, and the
+    // first `undefined` on the way in is not a handoff either way.
+    if (subscriber !== controlledSubscriber) {
+      controlledSubscriber = subscriber;
+      correcting = 0;
+      catchUpArmed = false;
+    }
     // Published before the guards below: the resolved setpoint is a fact
     // about the configuration, readable from the moment the controller is
     // active, and the adaptive controller's own hysteresis reads it back.
@@ -512,6 +538,7 @@ function setupSyncLatency({
           state.catchUpSkips.set(0);
           correcting = 0;
           catchUpArmed = false;
+          controlledSubscriber = undefined;
           const timer = setInterval(evaluate, controlConfig.intervalMs);
           return () => {
             clearInterval(timer);

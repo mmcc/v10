@@ -767,6 +767,67 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
+  // A make-before-break handoff swaps the actor without the controller ever
+  // passing through `inactive`, so `entry` — where these memories are cleared —
+  // does not run. An arm raised on the track that just left is corroboration
+  // from a different stream, and it makes the replacement's very first reading
+  // skip: exactly the join-transient jump the two-reading gate exists to
+  // prevent, on the one reading most likely to be a transient.
+  it('does not let a replacement subscriber inherit the catch-up arm', async () => {
+    const first = fakeSubscriber();
+    const deps = makeDeps(first.subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    first.setBufferDepth(5);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(first.skipToLatestGroup).not.toHaveBeenCalled(); // armed, not skipped
+
+    // The replacement's first reading is a join transient of its own.
+    const second = fakeSubscriber();
+    second.setBufferDepth(6);
+    deps.context.audioSubscriberActor.set(second.subscriber);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(second.skipToLatestGroup).not.toHaveBeenCalled();
+    expect(deps.state.catchUpSkips.get()).toBe(0);
+
+    // Its own second reading is its own corroboration.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(second.skipToLatestGroup).toHaveBeenCalled();
+    expect(deps.state.catchUpSkips.get()).toBe(1);
+
+    reactor.destroy();
+  });
+
+  // The other half of the same memory: a correction is a statement about the
+  // track it was engaged on. Inherited, it holds the replacement at a nudged
+  // rate for a deviation inside its own deadband — the band that says do
+  // nothing.
+  it('does not let a replacement subscriber inherit a correction direction', async () => {
+    const first = fakeSubscriber();
+    const deps = makeDeps(first.subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    // 0.4s over target engages a drain on the first track.
+    first.setBufferDepth(0.9);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+    expect(deps.state.playoutState.get()).toBe('nudging');
+
+    // The replacement sits 0.1s over target: inside `deadband`, but outside
+    // the release band, so an inherited direction would hold the nudge.
+    const second = fakeSubscriber();
+    second.setBufferDepth(0.6);
+    deps.context.audioSubscriberActor.set(second.subscriber);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
   it('counts catch-up skips as the cost side of the target it is holding', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
