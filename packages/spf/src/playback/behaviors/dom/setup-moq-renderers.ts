@@ -398,6 +398,12 @@ function trackPlayoutTimeSetup({
     // the media-element facade derives readiness from, so without this
     // fallback video-only playback renders fine but never leaves
     // HAVE_METADATA and the shell buffers forever.
+    //
+    // It reports the *current* track only — the renderer clears it on
+    // `setTrack` — so it is a live position and not a high-water mark. It has
+    // to be: this is where the owner is named, and naming video on a frame
+    // from a track that has been replaced points `syncLatency` at a position
+    // that has stopped advancing.
     const presentedUs = peek(context.videoRendererActor)?.snapshot.get().context.lastPresentedTimestampUs;
     if (presentedUs !== undefined) {
       state.playoutClockOwner.set('video');
@@ -408,7 +414,12 @@ function trackPlayoutTimeSetup({
     // stop at once: an audio track switch runs `setTrack`, which closes the
     // decoder and empties the schedule, so `getClockTimeUs()` is undefined
     // again until the replacement is scheduled — and a video renderer
-    // replaced alongside it has presented nothing yet. Leaving the last name
+    // replaced alongside it has presented nothing yet. A video-only
+    // broadcast reaches the same state on its own, through the second
+    // branch above: the video renderer's `setTrack` clears
+    // `lastPresentedTimestampUs` with the decoded queue it described, so
+    // there is no position again until the replacement presents, and no
+    // audio clock to hand over to meanwhile. Leaving the last name
     // standing is worse than clearing it, because `syncLatency` measures the
     // delivery edge of whichever track the owner names: the refilling
     // replacement would be controlled against a position that has stopped,

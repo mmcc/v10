@@ -201,6 +201,56 @@ describe('createVideoRendererActor', () => {
     renderer.destroy();
   });
 
+  // `lastPresentedTimestampUs` is the video playout position the engine
+  // publishes as `currentTime` (and names as the clock owner) whenever no
+  // audio is scheduled, so it has to stop reporting when this renderer stops
+  // presenting. `setTrack` closes the decoder, drops the decoded queue and
+  // re-arms the keyframe gate — the clock goes undefined with them — but the
+  // last presented frame belonged to the *departed* track, and a rejoin can
+  // take a whole group to present again.
+  it('clears the presented position when the track changes', async () => {
+    const frames = await encodeTestFrames(5);
+    const canvas = document.createElement('canvas');
+    let clockUs = 0;
+    const renderer = createVideoRendererActor({
+      canvas,
+      tickIntervalMs: 5,
+      getClockTimeUs: () => clockUs,
+    });
+    const presented = () => renderer.snapshot.get().context.lastPresentedTimestampUs;
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+      clockUs = FRAME_DURATION_US + 1;
+      await vi.waitFor(() => expect(presented()).toBe(FRAME_DURATION_US), { timeout: 5000 });
+      const decodedBefore = renderer.snapshot.get().context.framesDecoded;
+
+      // The replacement is subscribed but has nothing decodable yet — a
+      // live-edge rejoin waits for the next group's keyframe.
+      const queue: JitterFrame[] = [];
+      renderer.setTrack(
+        { peek: () => queue[0], dequeue: () => queue.shift() },
+        { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT }
+      );
+
+      expect(presented()).toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(presented()).toBeUndefined();
+
+      // The quality counters are cumulative session cost rather than a
+      // property of the current track, so they are deliberately kept.
+      expect(renderer.snapshot.get().context.framesDecoded).toBeGreaterThanOrEqual(decodedBefore);
+
+      // A position appears again when the replacement presents — its own.
+      const REPLACEMENT_BASE_US = 10_000_000;
+      for (const frame of frames) queue.push({ ...frame, timestampUs: REPLACEMENT_BASE_US + frame.timestampUs });
+      clockUs = REPLACEMENT_BASE_US;
+      await vi.waitFor(() => expect(presented()).toBe(REPLACEMENT_BASE_US), { timeout: 5000 });
+    } finally {
+      renderer.destroy();
+    }
+  });
+
   it('errors when a source is set without a decoder config', async () => {
     const canvas = document.createElement('canvas');
     const renderer = createVideoRendererActor({ canvas, tickIntervalMs: 5 });

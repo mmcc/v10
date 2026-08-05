@@ -375,6 +375,46 @@ describe('trackPlayoutTime', () => {
     cleanup();
   });
 
+  // The video flavor of the same state, and the one a video-only broadcast
+  // reaches on every track change: `setTrack` clears the video renderer's
+  // `lastPresentedTimestampUs` (it named a frame from the departed track), so
+  // the fallback below produces nothing until the replacement presents. With
+  // no audio clock to hand over to there is no owner at all — which is what
+  // stands `syncLatency` down, instead of it measuring the refilling
+  // replacement's edge against the position the departed track stopped at.
+  it('drops the video owner when the video renderer stops presenting', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+
+    let presentedUs: number | undefined = 5_000_000;
+    context.videoRendererActor.set({
+      get snapshot() {
+        return signal({ context: { lastPresentedTimestampUs: presentedUs } });
+      },
+      getClockTimeUs: () => undefined,
+      setTrack: vi.fn(),
+      destroy: vi.fn(),
+    } as unknown as VideoRendererActor);
+
+    await vi.waitFor(() => expect(state.playoutClockOwner.get()).toBe('video'));
+    expect(state.currentTime.get()).toBe(5);
+
+    // The controlled track is replaced: decoder closed, decoded queue
+    // dropped, keyframe gate re-armed, and no position published until the
+    // replacement's first frame is presented.
+    presentedUs = undefined;
+    await vi.waitFor(() => expect(state.playoutClockOwner.get()).toBeUndefined());
+    // The position is left where it was, for the facade and the promotion gate.
+    expect(state.currentTime.get()).toBe(5);
+
+    // The replacement presents: the owner comes back on its position, not the
+    // departed track's.
+    presentedUs = 6_000_000;
+    await vi.waitFor(() => expect(state.playoutClockOwner.get()).toBe('video'));
+    expect(state.currentTime.get()).toBe(6);
+
+    cleanup();
+  });
+
   // The reason this is its own behavior: gated on the AudioContext, the
   // clock would go silent in exactly the video-only case it exists for.
   it('runs with no AudioContext and no audio renderer', async () => {

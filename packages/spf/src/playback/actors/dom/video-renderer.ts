@@ -43,6 +43,12 @@ export interface VideoRendererContext {
   framesDecoded: number;
   /** Frames discarded for arriving behind the clock (drop-late). */
   framesDropped: number;
+  /**
+   * Timestamp of the last frame presented **from the current track**, and
+   * `undefined` before this renderer has presented one. Cleared by `setTrack`
+   * — see the reducer — because it is read as a playout position and not as a
+   * historical high-water mark.
+   */
   lastPresentedTimestampUs?: number;
   error?: unknown;
 }
@@ -84,6 +90,8 @@ export interface CreateVideoRendererOptions extends VideoRendererConfig {
 
 type RendererMessage =
   | { type: 'status'; status: VideoRendererStatus; error?: unknown }
+  /** `status`, plus the end of the presented position — only `setTrack` sends it. */
+  | { type: 'track'; status: VideoRendererStatus; error?: unknown }
   | { type: 'decoded' }
   | { type: 'presented'; timestampUs: number; dropped: number };
 
@@ -92,6 +100,10 @@ export interface VideoRendererActor extends Pick<TransitionActor<VideoRendererCo
    * Point the renderer at a (new) frame source. Decode restarts at the
    * next keyframe with the given decoder config. `null` source stops
    * rendering (status `'idle'`).
+   *
+   * `lastPresentedTimestampUs` clears with it: it is the published playout
+   * position, and the frame it named belonged to the departed track. The
+   * cumulative counters do not.
    */
   setTrack(source: VideoFrameSource | null, config: VideoDecoderConfig | null): void;
   /**
@@ -160,6 +172,40 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
       switch (message.type) {
         case 'status':
           return { ...context, status: message.status, error: message.error };
+        case 'track':
+          // **A track change ends the presented position.** Everything else
+          // `setTrack` resets is internal — the decoder, the decoded queue,
+          // the keyframe gate, the self-clock anchor — and this is the one
+          // piece of the same state that is published, so leaving it standing
+          // publishes the departed track's last frame as this renderer's
+          // position for as long as the replacement takes to present one.
+          //
+          // That is not a short window on the path that matters. With no audio
+          // scheduled, `trackPlayoutTime` publishes this field as the engine's
+          // `currentTime` and names video as the playout clock owner, and
+          // `syncLatency` measures the controlled track's delivery edge
+          // against that position: a rejoin (a pause outliving its hold
+          // window, an autoplay unlock) re-subscribes at the next group start,
+          // so nothing presents until a whole group has arrived, while the
+          // frozen position charges every millisecond of the suspension to the
+          // track that is filling. The reading crosses `catchUpThreshold` and
+          // skips the group the replacement has only just buffered.
+          //
+          // Cleared rather than epoched because absence is already the
+          // vocabulary the readers speak: `getClockTimeUs()` goes undefined
+          // across the same reset (the self-clock anchor is dropped with the
+          // decoded queue), and `trackPlayoutTime` reads an absent position as
+          // "no owner", which is what stands the controller down. The
+          // *engine's* `currentTime` still holds its last value — that is
+          // decided there, where the media-element facade and the handoff
+          // promotion gate also read it.
+          //
+          // `framesDecoded` and `framesDropped` are deliberately kept. They
+          // are cumulative quality cost for the session, which is how
+          // `trackPlayoutHealth` publishes them and how `adaptLatencyTarget`
+          // reads them; a per-track reset would make dropped frames go
+          // backwards and read as an improvement.
+          return { ...context, status: message.status, error: message.error, lastPresentedTimestampUs: undefined };
         case 'decoded':
           return { ...context, framesDecoded: context.framesDecoded + 1 };
         case 'presented':
@@ -462,15 +508,17 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
       lastSlewWallMs = null;
       appliedDescription = null;
       closeDecoder();
+      // `'track'` rather than `'status'`: it also ends the published playout
+      // position, which belonged to the track being replaced.
       if (missingConfig) {
         inner.send({
-          type: 'status',
+          type: 'track',
           status: 'error',
           error: new Error('video renderer track has no decoder config'),
         });
         return;
       }
-      inner.send({ type: 'status', status: source ? 'waiting-keyframe' : 'idle' });
+      inner.send({ type: 'track', status: source ? 'waiting-keyframe' : 'idle' });
     },
 
     destroy(): void {
