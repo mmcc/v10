@@ -158,4 +158,41 @@ describe('pumpMediaFrames', () => {
       expect(state.publishError.get()).toMatchObject({ code: 'encode', cause: failure });
     });
   }, 15_000);
+
+  it('does not report a replaced stream’s late reader failure against the new stream', async () => {
+    const { state, context } = setupBehavior();
+    const { actor } = makeRecordingAudioActor();
+    context.audioEncoderActor.set(actor);
+
+    // First processor: a read we can reject on demand. Later processors
+    // (the replacement stream's) read forever without failing.
+    let rejectRead: ((error: Error) => void) | undefined;
+    const globals = globalThis as Record<string, unknown>;
+    const original = globals.MediaStreamTrackProcessor;
+    globals.MediaStreamTrackProcessor = class {
+      readable = new ReadableStream<AudioData>({
+        pull() {
+          return new Promise<void>((_, reject) => {
+            rejectRead ??= reject;
+          });
+        },
+      });
+    };
+    disposals.push(() => {
+      globals.MediaStreamTrackProcessor = original;
+    });
+
+    context.captureStream.set(await makeAudioStream());
+    await vi.waitFor(() => {
+      expect(rejectRead).toBeDefined();
+    });
+
+    // The dying track's rejection and the capture slot moving on land in
+    // the same beat — whichever microtask wins, the old pump's failure
+    // must not pin an error on the healthy replacement.
+    rejectRead!(new Error('old track died late'));
+    context.captureStream.set(await makeAudioStream());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(state.publishError.get()).toBeUndefined();
+  }, 15_000);
 });

@@ -146,7 +146,12 @@ function pumpMediaFramesSetup({
 
           // A track the platform refuses to process (ended, transferred)
           // surfaces as an encode error rather than tearing the effect down.
+          // Stream-identity guarded: a replaced stream's pending read can
+          // reject in the gap between the capture slot moving on and this
+          // effect's cleanup running, and reporting that would pin a stale
+          // error on the healthy replacement.
           const reportError = (error: unknown) => {
+            if (peek(context.captureStream) !== stream) return;
             state.publishError.set({
               code: 'encode',
               message: error instanceof Error ? error.message : 'Failed to read frames from a capture track.',

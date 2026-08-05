@@ -50,7 +50,10 @@ export interface TrackPublisherCounters {
    * Stream Count field reports (§10.11). A group dropped while still
    * queued behind backpressure never opened a stream and is not counted;
    * reporting it would leave the peer waiting for a stream that never
-   * existed.
+   * existed. The boundary is the commit to writing the subgroup header:
+   * an open that resolves into an already-aborted group is reset before
+   * any bytes, so the peer cannot attribute that stream to this track and
+   * it is deliberately excluded too.
    */
   openedGroups: number;
   /** Groups written to completion (FIN). */

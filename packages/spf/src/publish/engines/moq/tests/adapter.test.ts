@@ -434,6 +434,40 @@ describe('MoqPublishMediaMixin', () => {
     expect(media.publishState).toBe('live');
   });
 
+  it('does not dispatch publishstatechange for errors while idle', async () => {
+    const media = makeMedia();
+    const events: string[] = [];
+    media.addEventListener('publishstatechange', () => events.push(media.publishState));
+
+    // Capture/probe failures land before any publish attempt: they reject
+    // publish() directly and must not surface on the publish event.
+    media.engine.state.publishError.set({ code: 'capture', message: 'permission denied' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(events).toEqual([]);
+  });
+
+  it('dispatches once when a failure moves the session and sets the error together', async () => {
+    const media = makeMedia();
+    media.engine.state.sessionStatus.set('live');
+    await vi.waitFor(() => {
+      expect(media.publishState).toBe('live');
+    });
+
+    const events: string[] = [];
+    media.addEventListener('publishstatechange', () => events.push(media.publishState));
+
+    // open-publish-session writes both signals in one flush on a transport
+    // failure — the status bridge carries the event; a second dispatch from
+    // the error bridge would double it.
+    media.engine.state.publishError.set({ code: 'transport', message: 'relay gone' });
+    media.engine.state.sessionStatus.set('error');
+    await vi.waitFor(() => {
+      expect(events).toEqual(['error']);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(events).toEqual(['error']);
+  });
+
   it('fires publishstatsupdate on every stats transition, including the reset to undefined', async () => {
     const media = makeMedia();
     const seen: (number | null)[] = [];

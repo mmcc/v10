@@ -206,6 +206,11 @@ function setupTrackPublishersSetup({
                 // reports the opened-stream count (draft-19 §10.11 counts
                 // data streams OPENED, including reset ones — not just the
                 // FINed groups), then destroy() force-ends whatever is left.
+                // The synchronous peek is race-free: an open still in
+                // flight can only resume on a later microtask, and by then
+                // destroy() has run, so that stream is aborted before its
+                // header — unattributable to the track and correctly
+                // outside the count it just reported.
                 publisher.send({ type: 'end' });
                 const streamCount = peek(publisher.snapshot).context.openedGroups;
                 handle.done(PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount, '');
