@@ -30,7 +30,7 @@ Camera + screen simultaneously is table stakes for any product with a "share you
 
 Adopt the additive-source model. At the level needing agreement:
 
-- **Contract (the public-API crux)**: `MediaCaptureSourceCapability` evolves from one exclusive `captureSource` slot to additive sources — camera and screen each independently acquirable and releasable, microphone owned separately. The exact shape (a `screenShareActive` boolean beside the existing `captureSource`, versus a source set) belongs to the follow-up design record, but the *semantics* decided here are: starting a share no longer releases the camera, and stopping one source never re-prompts another. Packages are pre-1.0; a deliberate breaking change to the capability is acceptable, with the v1 swap behavior recoverable by releasing the camera before acquiring the screen.
+- **Contract (the public-API crux)**: `MediaCaptureSourceCapability` evolves from one exclusive `captureSource` slot to additive sources — camera and screen each independently acquirable and releasable, microphone owned separately. The exact shape (a `screenShareActive` boolean beside the existing `captureSource`, versus a source set) belongs to the follow-up design record, but the *semantics* decided here are: starting a share no longer releases the camera, and stopping one source never re-prompts another. The affected packages are still in the v10 beta line (`10.0.0-beta.x`), where a deliberate breaking change to a capability contract is acceptable before stable; the v1 swap behavior stays recoverable by releasing the camera before acquiring the screen.
 - **Capture**: per-source acquisition pipelines replace the single-stream behavior. The microphone merge disappears; a mic device change re-acquires only the mic pipeline, which fixes the open defect by construction rather than by patching the fused path.
 - **Encode/publish**: `activeEncodings` video becomes a list; the catalog names the tracks `video` (camera) and `screen`, both in one `renderGroup` with the audio track — *not* `altGroup`, which marks alternates of the same content (that seam stays reserved for simulcast). Screen encoding gets its own tuning (content hint, lower framerate, keyframe cadence).
 - **Stats**: per-track legs instead of one video leg, building on the just-landed NaN-as-unknown semantics so absent tracks read as unknown, not zero.
@@ -42,7 +42,7 @@ Non-goals: simulcast (same array seam, separate proposal); composition/layout to
 ### Open questions
 
 - **Preview UX**: one preview element cannot show two sources. Picture-in-picture preview, source-switchable preview, or two preview slots?
-- **System audio**: `getDisplayMedia` can return tab/system audio. Separate `screen-audio` track, mix into the mic track, or drop (v1 drops it in favor of the mic)?
+- **System audio**: `getDisplayMedia` can return tab/system audio. In v1 a share that comes back with audio *keeps* it and the microphone is never acquired; the mic is merged only when the share is audio-less (`acquire-capture-source.ts`). With the mic as its own always-on track, does system audio become a separate `screen-audio` track, get mixed, or get dropped?
 - **Subscriber labeling**: how does a subscriber distinguish the screen track semantically — track-name convention (`screen`), an MSF `role` value, or a documented extension field? Affects default track-picker behavior when a catalog carries two non-alternate video tracks.
 - **Encoder budget**: two simultaneous encodes on constrained hardware — degrade the screen track first, or expose the policy?
 
