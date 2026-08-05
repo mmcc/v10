@@ -87,6 +87,20 @@ describe('publishStatsFeature', () => {
       expect(store.state.connectionQuality).toBe('poor');
     });
 
+    it('derives `unknown` for audio-only sessions instead of penalizing missing video', () => {
+      const media = createStatsMedia();
+
+      const store = createStore<PlayerTarget>()(publishStatsFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      // No video encoder: the stats sampler reports the video legs as NaN.
+      // Before it reported 0, and 0 encodedFps read as a stalled encoder —
+      // every healthy audio-only session was branded 'fair'.
+      media.publishStats = createStats({ encodedFps: Number.NaN, videoBitrate: Number.NaN });
+      media.dispatchEvent(new Event('publishstatsupdate'));
+      expect(store.state.connectionQuality).toBe('unknown');
+    });
+
     it('resets to defaults when stats reset to null (session teardown)', () => {
       const media = createStatsMedia();
 

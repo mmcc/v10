@@ -79,7 +79,7 @@ function locFrame(timestampUs: number, bytes: number[], config?: Uint8Array) {
       byteLength: data.length,
       copyTo: (destination: Uint8Array) => destination.set(data),
     },
-    config ? { config } : {}
+    config ? { videoConfig: config } : {}
   );
 }
 
@@ -329,7 +329,56 @@ describe('createTrackPublisherActor', () => {
     await vi.waitFor(() => {
       expect(counters(publisher)).toMatchObject({ publishedGroups: 1, droppedGroups: 2, queuedGroups: 0 });
     });
+    // Streams actually opened: group 0 (later reset) and group 2. Group 1
+    // was dropped while queued — it never opened a stream, and counting it
+    // would inflate PUBLISH_DONE's Stream Count with a stream the peer can
+    // never receive.
+    expect(counters(publisher).openedGroups).toBe(2);
     publisher.destroy();
+  });
+
+  it('aborts a stream whose open was still in flight when destroy() ran', async () => {
+    const streams: FakeUniStream[] = [];
+    let resolveOpen: ((stream: WritableStream<Uint8Array>) => void) | undefined;
+    const openUniStream = (): Promise<WritableStream<Uint8Array>> =>
+      new Promise((resolve) => {
+        resolveOpen = resolve;
+      });
+    const publisher = createTrackPublisherActor({ openUniStream, trackAlias: 7 });
+
+    const key = locFrame(0, [1, 2], new Uint8Array([7]));
+    publisher.send({ type: 'frame', payload: key.payload, properties: key.properties, keyframe: true, timestampUs: 0 });
+    await vi.waitFor(() => {
+      expect(resolveOpen).toBeDefined();
+    });
+
+    // destroy() cannot FIN this group — its writer does not exist yet. When
+    // the transport finally hands the stream over, it must be aborted, not
+    // written to: a write here would publish after teardown and leak the
+    // stream (never FINned, never reset).
+    publisher.destroy();
+    const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+    streams.push(record);
+    resolveOpen!(
+      new WritableStream<Uint8Array>({
+        write(chunk) {
+          record.chunks.push(chunk);
+        },
+        close() {
+          record.closed = true;
+        },
+        abort(reason) {
+          record.aborted = true;
+          record.abortReason = reason;
+        },
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(streams[0]!.aborted).toBe(true);
+    });
+    expect(streams[0]!.chunks).toHaveLength(0);
+    expect(streams[0]!.closed).toBe(false);
   });
 
   it('reports stream failures through onError and counts the group as dropped', async () => {
@@ -373,10 +422,13 @@ describe('createTrackPublisherActor', () => {
     };
     sendKey(0);
     sendKey(1_000_000);
-    // Group 1 is still open (no boundary/FIN yet): the opened count leads
-    // the published (FINed) count — draft-19's PUBLISH_DONE Stream Count
-    // wants streams opened, not streams completed.
-    expect(counters(publisher).openedGroups).toBe(2);
+    // Group 1 is still open (no boundary/FIN yet): the opened count —
+    // which lands as each group's wire stream actually opens — leads the
+    // published (FINed) count; draft-19's PUBLISH_DONE Stream Count wants
+    // streams opened, not streams completed.
+    await vi.waitFor(() => {
+      expect(counters(publisher).openedGroups).toBe(2);
+    });
     await vi.waitFor(() => {
       expect(counters(publisher).publishedGroups).toBe(1);
     });
@@ -407,7 +459,11 @@ describe('createTrackPublisherActor', () => {
     sendKey(1_000_000); // group 1 — open task queued behind group 0
     sendKey(2_000_000); // group 2 — the current cell, stream not yet opened
     expect(counters(publisher).queuedGroups).toBe(3);
-    expect(counters(publisher).openedGroups).toBe(3);
+    // Only group 0 ever opened a wire stream — groups 1 and 2 are queued
+    // behind its gated write, and the opened count must not lead reality.
+    await vi.waitFor(() => {
+      expect(counters(publisher).openedGroups).toBe(1);
+    });
 
     publisher.destroy();
     // Settle the in-flight (gated) sink write so the stream can finish

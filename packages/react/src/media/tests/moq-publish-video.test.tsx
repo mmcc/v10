@@ -18,6 +18,21 @@ describe('MoqPublishVideo', () => {
     expect(video.hasAttribute('autoplay')).toBe(true);
   });
 
+  it('keeps the preview muted even when a caller passes muted={false}', () => {
+    // A caller prop must not win over the enforced preview attributes: an
+    // unmuted local monitor feeds an attached microphone back through the
+    // speakers.
+    const { container, rerender } = render(<MoqPublishVideo muted={false} autoPlay={false} />);
+
+    const video = container.querySelector('video') as HTMLVideoElement;
+    expect(video.muted).toBe(true);
+    expect(video.hasAttribute('autoplay')).toBe(true);
+
+    // Re-renders must not re-apply the caller's value either.
+    rerender(<MoqPublishVideo muted={false} autoPlay={false} data-marker="second" />);
+    expect(video.muted).toBe(true);
+  });
+
   it('forwards publisher props to the media host instead of the video element', () => {
     const publishEndpoint = vi.spyOn(MoqPublishMedia.prototype, 'publishEndpoint', 'set');
 

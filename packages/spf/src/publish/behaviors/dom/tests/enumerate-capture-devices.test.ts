@@ -60,6 +60,34 @@ describe('enumerateCaptureDevices', () => {
     });
   });
 
+  it('discards an older enumeration that resolves after a newer one', async () => {
+    const resolvers: ((devices: MediaDeviceInfo[]) => void)[] = [];
+    vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve))
+    );
+    const { state } = setupEnumerate();
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(1);
+    });
+
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(2);
+    });
+
+    // The newer refresh commits...
+    resolvers[1]!([fakeDevice('cam-new', 'videoinput', 'New camera')]);
+    await vi.waitFor(() => {
+      expect(state.captureDevices.get()).toEqual([{ deviceId: 'cam-new', kind: 'videoinput', label: 'New camera' }]);
+    });
+
+    // ...and the slower setup-time snapshot resolving afterwards must not
+    // roll the picker back to the pre-devicechange device list.
+    resolvers[0]!([fakeDevice('cam-old', 'videoinput', 'Old camera')]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.captureDevices.get()).toEqual([{ deviceId: 'cam-new', kind: 'videoinput', label: 'New camera' }]);
+  });
+
   it('re-enumerates when captureStatus becomes active (labels appear post-grant)', async () => {
     const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
     const { state } = setupEnumerate();

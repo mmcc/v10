@@ -32,11 +32,11 @@ import type { PublishSessionActor } from '../session/publish-session';
 
 /** Aggregated pipeline health counters, sampled at a low frequency. */
 export interface PublishStatsFacts {
-  /** Encoded video frames per second over the last sample window. */
+  /** Encoded video frames per second; `NaN` while no video encoder exists. */
   encodedFps: number;
-  /** Encoded video bits per second over the last sample window. */
+  /** Encoded video bits per second; `NaN` while no video encoder exists. */
   videoBitrate: number;
-  /** Encoded audio bits per second over the last sample window. */
+  /** Encoded audio bits per second; `NaN` while no audio encoder exists. */
   audioBitrate: number;
   /** Frames the encoders dropped (queue overflow), cumulative. */
   droppedFrames: number;
@@ -103,7 +103,11 @@ function perSecond(
   field: 'encodedFrames' | 'encodedBytes',
   dtSec: number
 ): number {
-  if (now === undefined || last === undefined || dtSec <= 0) return 0;
+  // A missing encoder is "unknown" (NaN per the stats contract), not a
+  // zero rate: quality derivation reads 0 as a stalled encoder, which
+  // branded every audio-only session 'fair'.
+  if (now === undefined || last === undefined) return Number.NaN;
+  if (dtSec <= 0) return 0;
   return (now[field] - last[field]) / dtSec;
 }
 

@@ -1,5 +1,5 @@
 /**
- * LOC (Low Overhead Media Container, draft-ietf-moq-loc-02) frame
+ * LOC (Low Overhead Media Container, draft-ietf-moq-loc-04) frame
  * extraction.
  *
  * With LOC packaging each MOQT object carries exactly one encoded frame:
@@ -20,17 +20,41 @@ export interface PropertyPair {
 }
 
 /**
- * LOC property IDs from the MOQ Properties registry (loc-02 §2.3).
- * Even IDs carry varint values, odd IDs carry length-prefixed bytes.
- * Note: loc-02's pre-IANA Video Frame Marking (4) and Audio Level (6)
- * assignments collide with Timestamp (0x06); until the registry settles
- * (a Phase 0 interop pin), only Timestamp/Timescale/Video Config are
- * interpreted.
+ * LOC property IDs from the MOQ Properties registry (loc-04 §6.1), which
+ * settled the pre-IANA collisions of loc-02/03: 0x08 TIMESCALE (Track,
+ * Object), 0x09 VIDEO_FRAME_MARKING (Object), 0x0C AUDIO_LEVEL (Object),
+ * 0x0D VIDEO_CONFIG (Track, Object), 0x0F AUDIO_CONFIG (Track, Object),
+ * 0x10 TIMESTAMP (Object). Even IDs carry varint values, odd IDs carry
+ * length-prefixed bytes.
+ *
+ * Only the IDs SPF touches are named. AUDIO_CONFIG (0x0F) is emit-only:
+ * `loc-packaging.ts` labels audio extradata with it for loc-04 consumers,
+ * but this decode path never reads it — an audio decoder's `description`
+ * comes from the catalog's initDataList, and `LocFrame` carries no
+ * audio-config field to put it in.
+ *
+ * TIMESTAMP moved from 0x06 to 0x10 in loc-04. 0x06 stays accepted on
+ * decode — deployed draft-03 publishers still emit it, and SPF only ever
+ * reads LOC. 0x0A, draft-03's other Timestamp candidate, is NOT accepted:
+ * loc-04 gives it to Secure Objects private properties (§3.1.3), so
+ * reading it as a timestamp would misparse encrypted metadata.
+ *
+ * **The 0x06 branch is two lines and it is not dead weight — name what still
+ * needs it before removing it.** One live publisher does: a moq-dev relay before
+ * 0.14.6 re-emits Object Property timestamps as 0x06 (upstream moved the encoder
+ * to 0x10 in `08224275`, released in 0.14.6, and kept 0x06 accepted on decode
+ * indefinitely — so the two implementations are symmetric here rather than one
+ * compensating for the other). SPF's own publisher (`loc-packaging.ts`) emitted
+ * 0x06 as its primary until it moved to 0x10 with this table. When pre-0.14.6
+ * relays have aged out of the fleet, this constant and its branch go together.
  */
 export const LOC_PROPERTY = {
-  TIMESTAMP: 0x06,
+  TIMESTAMP: 0x10,
+  /** draft-03 Timestamp, decode-only. Loses to 0x10 when both are present. */
+  TIMESTAMP_DRAFT03: 0x06,
   TIMESCALE: 0x08,
-  VIDEO_CONFIG: 13,
+  VIDEO_CONFIG: 0x0d,
+  AUDIO_CONFIG: 0x0f,
 } as const;
 
 export const MICROSECONDS_PER_SECOND = 1_000_000;
@@ -46,12 +70,42 @@ export interface LocProperties {
 
 export function parseLocProperties(properties: readonly PropertyPair[]): LocProperties {
   const parsed: LocProperties = {};
+  let legacyTimestamp: number | undefined;
   for (const { type, value } of properties) {
     if (type === LOC_PROPERTY.TIMESTAMP && typeof value === 'number') parsed.timestamp = value;
+    else if (type === LOC_PROPERTY.TIMESTAMP_DRAFT03 && typeof value === 'number') legacyTimestamp = value;
     else if (type === LOC_PROPERTY.TIMESCALE && typeof value === 'number') parsed.timescale = value;
     else if (type === LOC_PROPERTY.VIDEO_CONFIG && typeof value !== 'number') parsed.videoConfig = value;
   }
+  // Applied after the loop, not in it: 0x10 wins over 0x06 in whichever
+  // order a mixed-draft publisher emits them.
+  if (parsed.timestamp === undefined && legacyTimestamp !== undefined) parsed.timestamp = legacyTimestamp;
   return parsed;
+}
+
+/**
+ * The TIMESCALE (0x08) declared at *track* scope, from a SUBSCRIBE_OK's Track
+ * Properties.
+ *
+ * Track Properties and Object Properties share one registry, so this is the same
+ * code point `parseLocProperties` reads per object — the scope is the difference.
+ * Reading it is not optional bookkeeping: a publisher states the units once per
+ * track, and moq-dev relays from 0.14.6 (upstream `08224275`) stopped repeating
+ * TIMESCALE on every object because restating a per-track constant costs bytes per
+ * frame. So for those relays this is the *only* declaration on the wire, and a
+ * reader without it silently falls back to microseconds — correct only while every
+ * track happens to be microsecond-scaled, and wrong by a factor of 1000 on the
+ * first track that is not.
+ *
+ * Returns `undefined` when no usable declaration is present, which includes a
+ * zero: a timescale of zero would make every conversion a division by zero, and
+ * treating it as absent lets the documented fallback chain handle it.
+ */
+export function parseTrackTimescale(properties: readonly PropertyPair[]): number | undefined {
+  for (const { type, value } of properties) {
+    if (type === LOC_PROPERTY.TIMESCALE && typeof value === 'number' && value > 0) return value;
+  }
+  return undefined;
 }
 
 /** One decodable frame extracted from a LOC-packaged MOQT object. */
@@ -81,7 +135,7 @@ export interface ToLocFrameOptions {
 
 /**
  * Convert a LOC timestamp to WebCodecs microseconds. Without any
- * timescale the value is already microseconds (loc-02 §2.3.1.1).
+ * timescale the value is already microseconds (loc-04 §2.3.1.1).
  */
 export function locTimestampToMicroseconds(timestamp: number, timescale?: number): number {
   if (timescale === undefined || timescale === MICROSECONDS_PER_SECOND) return timestamp;

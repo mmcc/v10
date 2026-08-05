@@ -47,7 +47,22 @@ const Button = forwardRef<HTMLButtonElement, ComponentProps<'button'>>(function 
   );
 });
 
-/** Chevron trigger + device picker menu shared by the camera and mic pickers. */
+/** Caret segment of a device split control — subtle, but without the square `--icon` sizing. */
+const CaretButton = forwardRef<HTMLButtonElement, ComponentProps<'button'>>(function CaretButton(
+  { className, ...props },
+  ref
+) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={cn('media-button media-button--subtle media-device-control__caret', className)}
+      {...props}
+    />
+  );
+});
+
+/** Caret trigger + device picker menu shared by the camera and mic controls. */
 function DeviceMenu({
   label,
   options,
@@ -63,7 +78,7 @@ function DeviceMenu({
 }): ReactNode {
   return (
     <Menu.Root side="top" align="center">
-      <Menu.Trigger aria-label={label} disabled={disabled} render={<Button />}>
+      <Menu.Trigger aria-label={label} disabled={disabled} render={<CaretButton />}>
         <ChevronIcon className="media-icon" />
       </Menu.Trigger>
       <Menu.Content className="media-surface media-popover media-menu">
@@ -87,37 +102,79 @@ function DeviceMenu({
   );
 }
 
-function CameraMenu(): ReactNode {
+/**
+ * Camera toggle fused with its source picker into one split control, so the
+ * caret plainly belongs to the camera rather than floating between toggles.
+ * The toggle keeps its own tooltip and hotkey hint.
+ */
+function CameraControl(): ReactNode {
   const t = useTranslator();
   const cameras = useCameraOptions();
-  // Hide the picker when there is no camera choice to make.
-  if (!cameras?.showMenu) return null;
 
   return (
-    <DeviceMenu
-      label={t(cameraText)}
-      options={cameras.options}
-      disabled={cameras.disabled}
-      value={cameras.value}
-      setValue={cameras.setValue}
-    />
+    <div className="media-device-control">
+      <Tooltip.Root side="top">
+        <Tooltip.Trigger
+          render={
+            <CameraButton className="media-button--camera" render={<Button />}>
+              <CameraIcon className="media-icon media-icon--camera" />
+              <CameraOffIcon className="media-icon media-icon--camera-off" />
+            </CameraButton>
+          }
+        />
+        <Tooltip.Popup className="media-surface media-tooltip">
+          <Tooltip.Label />
+          <Tooltip.Shortcut className="media-tooltip__kbd" />
+        </Tooltip.Popup>
+      </Tooltip.Root>
+
+      {/* Omit the caret when there is no camera choice to make. */}
+      {cameras?.showMenu ? (
+        <DeviceMenu
+          label={t(cameraText)}
+          options={cameras.options}
+          disabled={cameras.disabled}
+          value={cameras.value}
+          setValue={cameras.setValue}
+        />
+      ) : null}
+    </div>
   );
 }
 
-function MicrophoneMenu(): ReactNode {
+/** Microphone twin of {@link CameraControl}. */
+function MicControl(): ReactNode {
   const t = useTranslator();
   const microphones = useMicrophoneOptions();
-  // Hide the picker when there is no microphone choice to make.
-  if (!microphones?.showMenu) return null;
 
   return (
-    <DeviceMenu
-      label={t(microphoneText)}
-      options={microphones.options}
-      disabled={microphones.disabled}
-      value={microphones.value}
-      setValue={microphones.setValue}
-    />
+    <div className="media-device-control">
+      <Tooltip.Root side="top">
+        <Tooltip.Trigger
+          render={
+            <MicButton className="media-button--mic" render={<Button />}>
+              <MicIcon className="media-icon media-icon--mic" />
+              <MicOffIcon className="media-icon media-icon--mic-off" />
+            </MicButton>
+          }
+        />
+        <Tooltip.Popup className="media-surface media-tooltip">
+          <Tooltip.Label />
+          <Tooltip.Shortcut className="media-tooltip__kbd" />
+        </Tooltip.Popup>
+      </Tooltip.Root>
+
+      {/* Omit the caret when there is no microphone choice to make. */}
+      {microphones?.showMenu ? (
+        <DeviceMenu
+          label={t(microphoneText)}
+          options={microphones.options}
+          disabled={microphones.disabled}
+          value={microphones.value}
+          setValue={microphones.setValue}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -125,7 +182,7 @@ function MicrophoneMenu(): ReactNode {
  * Default publisher skin. Mirrors the HTML `<publisher-skin>` template: a
  * capture placeholder over the preview, a publish status row (badge, timer,
  * connection indicator), an error dialog, and an always-visible controls bar
- * with capture toggles, device pickers, and the publish button.
+ * with camera/mic split controls, screen share, and the publish button.
  */
 export function PublisherSkin(props: PublisherSkinProps): ReactNode {
   const { children, className, style, ...rest } = props;
@@ -170,40 +227,9 @@ export function PublisherSkin(props: PublisherSkinProps): ReactNode {
 
       <Controls.Root className="media-surface media-controls media-controls--root">
         <Tooltip.Provider>
-          <div className="media-button-group">
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger
-                render={
-                  <CameraButton className="media-button--camera" render={<Button />}>
-                    <CameraIcon className="media-icon media-icon--camera" />
-                    <CameraOffIcon className="media-icon media-icon--camera-off" />
-                  </CameraButton>
-                }
-              />
-              <Tooltip.Popup className="media-surface media-tooltip">
-                <Tooltip.Label />
-                <Tooltip.Shortcut className="media-tooltip__kbd" />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-
-            <CameraMenu />
-
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger
-                render={
-                  <MicButton className="media-button--mic" render={<Button />}>
-                    <MicIcon className="media-icon media-icon--mic" />
-                    <MicOffIcon className="media-icon media-icon--mic-off" />
-                  </MicButton>
-                }
-              />
-              <Tooltip.Popup className="media-surface media-tooltip">
-                <Tooltip.Label />
-                <Tooltip.Shortcut className="media-tooltip__kbd" />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-
-            <MicrophoneMenu />
+          <div className="media-button-group media-button-group--devices">
+            <CameraControl />
+            <MicControl />
 
             <Tooltip.Root side="top">
               <Tooltip.Trigger

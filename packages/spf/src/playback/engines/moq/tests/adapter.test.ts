@@ -167,6 +167,52 @@ describe('MoqMediaMixin', () => {
     media.destroy();
   });
 
+  it('ignores a NaN volume write so a non-finite gain never reaches the audio graph', () => {
+    const audioContext = createFakeAudioContext('running');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.volume = 0.5;
+    // Web Audio rejects a non-finite gain value with a TypeError — the
+    // facade drops the write and keeps the last valid volume.
+    media.volume = Number.NaN;
+    expect(media.volume).toBe(0.5);
+    expect(audioContext.gain.gain.value).toBe(0.5);
+
+    // The infinities clamp to the documented [0, 1] range on their own.
+    media.volume = Number.POSITIVE_INFINITY;
+    expect(media.volume).toBe(1);
+    media.volume = Number.NEGATIVE_INFINITY;
+    expect(media.volume).toBe(0);
+    expect(audioContext.gain.gain.value).toBe(0);
+
+    media.destroy();
+  });
+
+  // Tri-state, the same shape `targetLatency` has: the engine reads
+  // `undefined` as *unstated* and defers to `adaptiveLatency.enabled`, so a
+  // facade that collapsed it to `false` reported adaptation off while it was
+  // running and could never hand the decision back to config.
+  it('keeps the adaptive-latency request unstated until something states it', () => {
+    const media = new MoqMediaElement({
+      createAudioContext: () => createFakeAudioContext('running'),
+      engineConfig: { adaptiveLatency: { enabled: true } },
+    });
+
+    expect(media.adaptiveLatency).toBeUndefined();
+    expect(media.engine.state.adaptiveLatencyEnabled.get()).toBeUndefined();
+
+    media.adaptiveLatency = false;
+    expect(media.adaptiveLatency).toBe(false);
+    expect(media.engine.state.adaptiveLatencyEnabled.get()).toBe(false);
+
+    media.adaptiveLatency = undefined;
+    expect(media.adaptiveLatency).toBeUndefined();
+    expect(media.engine.state.adaptiveLatencyEnabled.get()).toBeUndefined();
+
+    media.destroy();
+  });
+
   it('starts playback from autoplay and defers audio while the context is suspended', async () => {
     const audioContext = createFakeAudioContext('suspended');
     // Chromium's pre-gesture shape: resume() parks until user activation.
@@ -192,7 +238,9 @@ describe('MoqMediaMixin', () => {
     expect(media.engine.state.loadActivated.get()).toBe(true);
     expect(media.engine.state.audioSuspended.get()).toBe(true);
 
-    // The queued resume settling at user activation is the unlock.
+    // The queued resume settling at user activation is the unlock. It is
+    // issued once the src-change suspend has been acknowledged.
+    await vi.waitFor(() => expect(audioContext.resume).toHaveBeenCalledTimes(1));
     activate();
     await vi.waitFor(() => expect(media.engine.state.audioSuspended.get()).toBeUndefined());
     expect(media.paused).toBe(false);
@@ -291,6 +339,81 @@ describe('MoqMediaMixin', () => {
     media.autoplay = true;
     expect(media.paused).toBe(false);
     expect(media.engine.state.loadActivated.get()).toBe(true);
+
+    media.destroy();
+  });
+
+  it('chains play() behind a pending src-change suspend instead of trusting the stale running state', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    await media.play();
+    expect(audioContext.state).toBe('running');
+    expect(audioContext.resume).toHaveBeenCalledTimes(1);
+
+    // Real contexts only flip `state` once the control thread acknowledges
+    // — model the src-change suspend as in flight with a stale 'running'.
+    let ackSuspend!: () => void;
+    audioContext.suspend.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          ackSuspend = () => {
+            audioContext.state = 'suspended';
+            resolve();
+          };
+        })
+    );
+    media.src = 'moqt://relay.test/other#msf:live--catalog';
+    expect(audioContext.state).toBe('running'); // suspend not yet acknowledged
+
+    const playing = media.play();
+    await Promise.resolve();
+    // The resume waits for the suspend ack rather than reading the stale
+    // state and skipping — a skipped resume would leave the context
+    // suspended while the facade reports playing.
+    expect(audioContext.resume).toHaveBeenCalledTimes(1);
+    ackSuspend();
+    await playing;
+    expect(audioContext.resume).toHaveBeenCalledTimes(2);
+    expect(audioContext.state).toBe('running');
+    expect(media.paused).toBe(false);
+
+    media.destroy();
+  });
+
+  it('defers audio and chains the autoplay resume behind a pending src-change suspend', async () => {
+    const audioContext = createFakeAudioContext('suspended');
+    const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+    media.attach(document.createElement('canvas'));
+
+    media.autoplay = true;
+    media.src = 'moqt://relay.test/live#msf:live--catalog';
+    await vi.waitFor(() => expect(media.engine.state.audioSuspended.get()).toBeUndefined());
+    expect(audioContext.state).toBe('running');
+
+    let ackSuspend!: () => void;
+    audioContext.suspend.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          ackSuspend = () => {
+            audioContext.state = 'suspended';
+            resolve();
+          };
+        })
+    );
+    media.src = 'moqt://relay.test/other#msf:live--catalog';
+
+    // Playback intent applies while the suspend is still in flight; the
+    // stale 'running' state must not skip the deferral + queued resume.
+    expect(media.paused).toBe(false);
+    expect(media.engine.state.audioSuspended.get()).toBe(true);
+    const resumeCalls = audioContext.resume.mock.calls.length;
+
+    ackSuspend();
+    await vi.waitFor(() => expect(media.engine.state.audioSuspended.get()).toBeUndefined());
+    expect(audioContext.resume.mock.calls.length).toBe(resumeCalls + 1);
+    expect(audioContext.state).toBe('running');
 
     media.destroy();
   });

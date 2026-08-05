@@ -3,8 +3,11 @@ import {
   bufferDepthSeconds,
   estimateLatencySeconds,
   isTimeAligned,
+  joinAnchorUs,
   nextSwitchGroup,
   parseMediaTimelineTemplate,
+  preferredTargetLatencySeconds,
+  resolveTargetLatencySeconds,
   templateGroupForMediaTime,
   templateMediaTimeForGroup,
 } from '../timeline';
@@ -93,5 +96,63 @@ describe('bufferDepthSeconds', () => {
   it('measures newest-minus-playout and clamps at zero', () => {
     expect(bufferDepthSeconds(2_000_000, 500_000)).toBeCloseTo(1.5);
     expect(bufferDepthSeconds(500_000, 2_000_000)).toBe(0);
+  });
+});
+
+describe('preferredTargetLatencySeconds', () => {
+  // The whole additive contract in one function: adaptation can only ever
+  // fill in where the consumer stated nothing, and with neither stated the
+  // catalog → default chain below it sees exactly what it always saw.
+  it('lets an explicit consumer target beat the adaptive proposal', () => {
+    expect(preferredTargetLatencySeconds(2, 0.3)).toBe(2);
+    expect(preferredTargetLatencySeconds(undefined, 0.3)).toBe(0.3);
+    expect(preferredTargetLatencySeconds(2, undefined)).toBe(2);
+    expect(preferredTargetLatencySeconds(undefined, undefined)).toBeUndefined();
+  });
+
+  // Precedence is by usability, not presence: a consumer target nothing can
+  // hold must not shadow a proposal that can be held.
+  it('does not let an unusable consumer target shadow the adaptive proposal', () => {
+    expect(preferredTargetLatencySeconds(Number.NaN, 0.3)).toBe(0.3);
+    expect(preferredTargetLatencySeconds(-1, 0.3)).toBe(0.3);
+    expect(preferredTargetLatencySeconds(0, 0.3)).toBe(0.3);
+    expect(preferredTargetLatencySeconds(Number.POSITIVE_INFINITY, 0.3)).toBe(0.3);
+    expect(preferredTargetLatencySeconds(Number.NaN, undefined)).toBeUndefined();
+    expect(preferredTargetLatencySeconds(Number.NaN, -1)).toBeUndefined();
+  });
+});
+
+describe('resolveTargetLatencySeconds', () => {
+  it('resolves consumer, then catalog milliseconds, then the default', () => {
+    expect(resolveTargetLatencySeconds(2, 300, 0.5)).toBe(2);
+    expect(resolveTargetLatencySeconds(undefined, 300, 0.5)).toBeCloseTo(0.3);
+    expect(resolveTargetLatencySeconds(undefined, undefined, 0.5)).toBe(0.5);
+  });
+
+  // A resolved `NaN` propagates through `joinAnchorUs` into the video
+  // self-clock's slew, which writes the corrected value back as its own
+  // anchor — one read leaves the clock permanently `NaN` and no frame is
+  // ever due again. A zero or negative target anchors playout at or past
+  // the delivery edge, where both renderers discard everything they hold.
+  it('skips a layer that states something no clock can hold', () => {
+    expect(resolveTargetLatencySeconds(Number.NaN, 300, 0.5)).toBeCloseTo(0.3);
+    expect(resolveTargetLatencySeconds(-1, 300, 0.5)).toBeCloseTo(0.3);
+    expect(resolveTargetLatencySeconds(0, 300, 0.5)).toBeCloseTo(0.3);
+    // The catalog is a remote publisher's number and the one layer nothing
+    // else validates, so it is skipped on the same rule.
+    expect(resolveTargetLatencySeconds(undefined, Number.NaN, 0.5)).toBe(0.5);
+    expect(resolveTargetLatencySeconds(undefined, -300, 0.5)).toBe(0.5);
+    expect(resolveTargetLatencySeconds(undefined, 0, 0.5)).toBe(0.5);
+    expect(resolveTargetLatencySeconds(Number.NaN, Number.NaN, 0.5)).toBe(0.5);
+  });
+
+  // The renderers' whole use of the resolved target: a finite anchor is
+  // what keeps the self-clock finite.
+  it('resolves to a target that keeps the join anchor finite', () => {
+    const newestUs = 10_000_000;
+    expect(joinAnchorUs(newestUs, resolveTargetLatencySeconds(Number.NaN, undefined, 0.5))).toBe(9_500_000);
+    expect(Number.isFinite(joinAnchorUs(newestUs, resolveTargetLatencySeconds(Number.NaN, Number.NaN, 0.5)))).toBe(
+      true
+    );
   });
 });

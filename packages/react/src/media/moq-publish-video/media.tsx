@@ -33,7 +33,10 @@ export const MoqPublishVideo = forwardRef<HTMLVideoElement, MoqPublishVideoProps
   const htmlProps = useSyncProps(media, props, moqPublishMediaDefaultProps);
 
   return (
-    <video muted playsInline autoPlay ref={composedRef} {...htmlProps}>
+    // Caller props first: the preview element must stay muted (an attached
+    // microphone track would otherwise feed back through the speakers) and
+    // autoplaying inline, so the enforced attributes win the spread.
+    <video {...htmlProps} muted playsInline autoPlay ref={composedRef}>
       {children}
     </video>
   );

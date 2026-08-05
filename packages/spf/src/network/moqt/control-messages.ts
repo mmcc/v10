@@ -901,7 +901,19 @@ function readRedirect(reader: ByteReader): Redirect {
 export function decodeControlMessage(frame: ControlMessageFrame): ControlMessage {
   const reader = new ByteReader(frame.body);
   const end = frame.body.length;
-  const message = decodeControlMessageBody(frame.type, reader, end);
+  let message: ControlMessage;
+  try {
+    message = decodeControlMessageBody(frame.type, reader, end);
+  } catch (error) {
+    // Field reads past the declared frame length surface as `RangeError`
+    // from `ByteReader`. Normalize them: the session's stream loops treat
+    // only `MoqtProtocolError` as fatal, and a truncated body must
+    // terminate the session (§10) rather than vanish as a read error.
+    if (error instanceof RangeError) {
+      throw new MoqtProtocolError(`control message 0x${frame.type.toString(16)} body is truncated`);
+    }
+    throw error;
+  }
   if (reader.offset !== end) {
     throw new MoqtProtocolError(`control message 0x${frame.type.toString(16)} body length mismatch`);
   }

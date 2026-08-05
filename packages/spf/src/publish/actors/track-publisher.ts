@@ -45,9 +45,15 @@ export type TrackPublisherState = TrackPublisherUserState | 'destroyed';
 /** Cumulative publish counters exposed on the actor snapshot. */
 export interface TrackPublisherCounters {
   /**
-   * Groups started. Each group opens one data stream, so this is the
-   * opened-stream count (including later-reset ones) that draft-19's
-   * PUBLISH_DONE Stream Count field reports (§10.11).
+   * Groups whose data stream was actually opened — the opened-stream
+   * count (including later-reset ones) that draft-19's PUBLISH_DONE
+   * Stream Count field reports (§10.11). A group dropped while still
+   * queued behind backpressure never opened a stream and is not counted;
+   * reporting it would leave the peer waiting for a stream that never
+   * existed. The boundary is the commit to writing the subgroup header:
+   * an open that resolves into an already-aborted group is reset before
+   * any bytes, so the peer cannot attribute that stream to this track and
+   * it is deliberately excluded too.
    */
   openedGroups: number;
   /** Groups written to completion (FIN). */
@@ -113,6 +119,7 @@ interface GroupCell {
 /** Snapshot-context updates driven by the async stream work. */
 type InternalMessage =
   | { type: 'object-written'; bytes: number; timestampUs: number }
+  | { type: 'group-opened' }
   | { type: 'group-finished' }
   | { type: 'groups-dropped'; count: number };
 
@@ -180,10 +187,19 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
         new Task(async (signal) => {
           if (signal.aborted || cell.aborted) return;
           const stream = await openUniStream();
-          if (cell.aborted) {
+          // `signal.aborted` again, not just the cell: destroy() leaves the
+          // graceful cell un-aborted so an existing writer can FIN, but when
+          // the open was still in flight there is no writer to FIN — the
+          // aborted runner signal is the only teardown fact, and proceeding
+          // would write into a destroyed actor and leak a never-FINned stream.
+          if (signal.aborted || cell.aborted) {
             stream.abort().catch(() => {});
             return;
           }
+          // Only now does a data stream exist for this track on the wire —
+          // counting at queue time inflated PUBLISH_DONE's Stream Count
+          // with groups that were dropped before they ever opened one.
+          inner?.send({ type: 'group-opened' });
           cell.writer = createSubgroupWriter(stream, {
             trackAlias,
             groupId: cell.groupId,
@@ -287,7 +303,6 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
 
             setContext({
               ...context,
-              openedGroups: nextGroupId,
               queuedGroups: openCells.length,
               droppedGroups: context.droppedGroups + droppedNow,
             });
@@ -307,6 +322,9 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
               bytesSent: context.bytesSent + msg.bytes,
               lastTimestampUs: msg.timestampUs,
             });
+          },
+          'group-opened': (_, { context, setContext }) => {
+            setContext({ ...context, openedGroups: context.openedGroups + 1 });
           },
           'group-finished': (_, { context, setContext }) => {
             setContext({
@@ -335,6 +353,9 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
               bytesSent: context.bytesSent + msg.bytes,
               lastTimestampUs: msg.timestampUs,
             });
+          },
+          'group-opened': (_, { context, setContext }) => {
+            setContext({ ...context, openedGroups: context.openedGroups + 1 });
           },
           'group-finished': (_, { context, setContext }) => {
             setContext({

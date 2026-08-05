@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signal } from '../../../../core/signals/primitives';
 import type { AudioEncoderActor } from '../../../actors/dom/audio-encoder';
 import type { EncoderActorCounters, EncoderActorUserState } from '../../../actors/dom/encoder-actor';
@@ -127,6 +127,72 @@ describe('pumpMediaFrames', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(receivedFrames()).toBeGreaterThan(baseline);
+    expect(state.publishError.get()).toBeUndefined();
+  }, 15_000);
+
+  it('reports a reader failure that lands while the pump is live', async () => {
+    const { state, context } = setupBehavior();
+    const { actor } = makeRecordingAudioActor();
+    context.audioEncoderActor.set(actor);
+
+    // A processor whose readable errors mid-pump — the platform killing
+    // the track (device unplugged, OS permission revoke) surfaces exactly
+    // here, not as a clean `done`.
+    const failure = new Error('track processor exploded');
+    const globals = globalThis as Record<string, unknown>;
+    const original = globals.MediaStreamTrackProcessor;
+    globals.MediaStreamTrackProcessor = class {
+      readable = new ReadableStream<AudioData>({
+        pull() {
+          return Promise.reject(failure);
+        },
+      });
+    };
+    disposals.push(() => {
+      globals.MediaStreamTrackProcessor = original;
+    });
+
+    context.captureStream.set(await makeAudioStream());
+
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toMatchObject({ code: 'encode', cause: failure });
+    });
+  }, 15_000);
+
+  it('does not report a replaced stream’s late reader failure against the new stream', async () => {
+    const { state, context } = setupBehavior();
+    const { actor } = makeRecordingAudioActor();
+    context.audioEncoderActor.set(actor);
+
+    // First processor: a read we can reject on demand. Later processors
+    // (the replacement stream's) read forever without failing.
+    let rejectRead: ((error: Error) => void) | undefined;
+    const globals = globalThis as Record<string, unknown>;
+    const original = globals.MediaStreamTrackProcessor;
+    globals.MediaStreamTrackProcessor = class {
+      readable = new ReadableStream<AudioData>({
+        pull() {
+          return new Promise<void>((_, reject) => {
+            rejectRead ??= reject;
+          });
+        },
+      });
+    };
+    disposals.push(() => {
+      globals.MediaStreamTrackProcessor = original;
+    });
+
+    context.captureStream.set(await makeAudioStream());
+    await vi.waitFor(() => {
+      expect(rejectRead).toBeDefined();
+    });
+
+    // The dying track's rejection and the capture slot moving on land in
+    // the same beat — whichever microtask wins, the old pump's failure
+    // must not pin an error on the healthy replacement.
+    rejectRead!(new Error('old track died late'));
+    context.captureStream.set(await makeAudioStream());
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(state.publishError.get()).toBeUndefined();
   }, 15_000);
 });

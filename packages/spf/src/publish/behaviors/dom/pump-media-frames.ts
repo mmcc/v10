@@ -68,6 +68,7 @@ function keyframeCadence(groupDurationUs: number): (timestampUs: number) => bool
 function pumpFrames<Config, Frame extends { close(): void; timestamp: number }>(
   reader: ReadableStreamDefaultReader<Frame>,
   actor: EncoderActor<Config, Frame>,
+  onError: (error: unknown) => void,
   forceKeyframe?: (timestampUs: number) => boolean
 ): () => void {
   let aborted = false;
@@ -84,8 +85,12 @@ function pumpFrames<Config, Frame extends { close(): void; timestamp: number }>(
         }
         actor.send({ type: 'encode', frame, keyFrame: forceKeyframe?.(frame.timestamp) === true });
       }
-    } catch {
-      // Our own cancel() or a track failure ended the loop; nothing to do.
+    } catch (error) {
+      // Our own cancel() rejects the pending read too, so only a failure
+      // that lands while the pump is still live is a real track failure.
+      // Swallowing those left the session marked live with a track that
+      // silently stopped producing frames.
+      if (!aborted) onError(error);
     }
   };
   void loop();
@@ -141,7 +146,12 @@ function pumpMediaFramesSetup({
 
           // A track the platform refuses to process (ended, transferred)
           // surfaces as an encode error rather than tearing the effect down.
+          // Stream-identity guarded: a replaced stream's pending read can
+          // reject in the gap between the capture slot moving on and this
+          // effect's cleanup running, and reporting that would pin a stale
+          // error on the healthy replacement.
           const reportError = (error: unknown) => {
+            if (peek(context.captureStream) !== stream) return;
             state.publishError.set({
               code: 'encode',
               message: error instanceof Error ? error.message : 'Failed to read frames from a capture track.',
@@ -153,7 +163,9 @@ function pumpMediaFramesSetup({
           if (videoActor && videoTrack) {
             try {
               const processor = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrack });
-              cleanups.push(pumpFrames(processor.readable.getReader(), videoActor, keyframeCadence(groupDurationUs)));
+              cleanups.push(
+                pumpFrames(processor.readable.getReader(), videoActor, reportError, keyframeCadence(groupDurationUs))
+              );
             } catch (error) {
               reportError(error);
             }
@@ -165,7 +177,7 @@ function pumpMediaFramesSetup({
               const processor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
               // No cadence: every audio frame is independently decodable
               // and starts its own MOQT group downstream.
-              cleanups.push(pumpFrames(processor.readable.getReader(), audioActor));
+              cleanups.push(pumpFrames(processor.readable.getReader(), audioActor, reportError));
             } catch (error) {
               reportError(error);
             }

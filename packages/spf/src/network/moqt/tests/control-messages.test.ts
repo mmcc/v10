@@ -209,6 +209,25 @@ describe('decodeControlMessage', () => {
       MoqtProtocolError
     );
   });
+
+  it('throws MoqtProtocolError (not RangeError) for a truncated body', () => {
+    // PUBLISH_NAMESPACE body cut short: request id, then no namespace —
+    // the RangeError from reading past the frame must be normalized so
+    // malformed frames terminate the session.
+    expect(() => decodeControlMessage({ type: MESSAGE_TYPE.PUBLISH_NAMESPACE, body: new Uint8Array([0x01]) })).toThrow(
+      MoqtProtocolError
+    );
+
+    // A namespace field whose declared length overruns the frame.
+    const body = new ByteWriter();
+    body.writeVarint(1); // request id
+    body.writeVarint(1); // field count
+    body.writeVarint(10); // field length, followed by only 2 bytes
+    body.writeBytes(utf8Encode('ab'));
+    expect(() => decodeControlMessage({ type: MESSAGE_TYPE.PUBLISH_NAMESPACE, body: body.toBytes() })).toThrow(
+      MoqtProtocolError
+    );
+  });
 });
 
 describe('encodeMessageParameters', () => {

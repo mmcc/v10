@@ -410,21 +410,26 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         return;
       }
 
+      let requestStream: RequestStream | undefined;
       const timeout = this.#config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
       if (timeout > 0 && !this.#destroyed) {
-        timer = setTimeout(
-          () =>
-            fail({
-              errorCode: REQUEST_ERROR_CODE.TIMEOUT,
-              retryInterval: 0,
-              reason: 'no response before the request timeout',
-            }),
-          timeout
-        );
+        timer = setTimeout(() => {
+          const failure = {
+            errorCode: REQUEST_ERROR_CODE.TIMEOUT,
+            retryInterval: 0,
+            reason: 'no response before the request timeout',
+          };
+          // The stream dies with the request (the subscribe driver's
+          // timeout contract): left open, a late REQUEST_OK would fire
+          // onMessage after the failure and report a second, contradictory
+          // result for a request already reported dead.
+          requestStream?.cancel(failure);
+          fail(failure);
+        }, timeout);
         this.#pendingTimers.add(timer);
       }
 
-      const requestStream = openRequestStream(stream, message, {
+      requestStream = openRequestStream(stream, message, {
         onMessage: (msg) => {
           if (msg.kind === 'request-ok' || msg.kind === 'request-error') settle();
           onMessage(msg);

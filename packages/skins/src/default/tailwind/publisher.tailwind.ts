@@ -3,7 +3,12 @@ import { iconState as baseIconState } from '../../shared/tailwind/icon-state';
 import { badge as baseBadge } from './components/badge';
 import { button as baseButton } from './components/button';
 import { buttonGroup as baseButtonGroup } from './components/button-group';
-import { captureIconState, enableDevicesButton, screenShareButton } from './components/capture';
+import {
+  deviceControl as baseDeviceControl,
+  captureIconState,
+  enableDevicesButton,
+  screenShareButton,
+} from './components/capture';
 import { controls as baseControls } from './components/controls';
 import { error as baseError } from './components/error';
 import { menu as baseMenu } from './components/menu';
@@ -102,6 +107,15 @@ export const controls = cn(
 export const buttonGroup = baseButtonGroup;
 
 export const spacer = 'grow';
+
+/* ==========================================================================
+   Device split controls (capture toggle + its device picker)
+   ========================================================================== */
+
+export const deviceControl = baseDeviceControl;
+
+/** Button group holding the split controls — wider gaps than the shared 1px. */
+export const deviceGroup = cn(baseButtonGroup, baseDeviceControl.group);
 
 /* ==========================================================================
    Buttons

@@ -89,13 +89,85 @@ describe('parseMoqCatalog', () => {
     expect(audio.moq).toMatchObject({ samplerate: 48_000, channelConfig: '2' });
   });
 
+  // §5.2.9. The publisher's own statement of the minimum buffer a
+  // receiver has to hold; the adaptive latency controller reads it as one
+  // additive term of its margin, and nothing else in the engine does.
+  it('carries the declared jitter through to the moq side-channel', () => {
+    const catalog = JSON.stringify({
+      version: '1',
+      tracks: [
+        {
+          name: 'video',
+          namespace: 'live',
+          packaging: 'loc',
+          isLive: true,
+          role: 'video',
+          codec: 'avc1.42001f',
+          width: 640,
+          height: 360,
+          framerate: 30,
+          jitter: 34,
+        },
+      ],
+    });
+    const presentation = parseMoqCatalog(catalog, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+    expect(video.moq.jitter).toBe(34);
+  });
+
+  it('leaves jitter absent when the catalog declares none', () => {
+    const presentation = parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+    expect(video.moq.jitter).toBeUndefined();
+  });
+
   it('sums dotted surround channel configurations', () => {
     expect(parseChannelConfig('2')).toBe(2);
     // `parseInt('5.1')` reads 5 and silently drops the LFE channel.
     expect(parseChannelConfig('5.1')).toBe(6);
     expect(parseChannelConfig('7.1.4')).toBe(12);
-    expect(parseChannelConfig(undefined)).toBe(2);
-    expect(parseChannelConfig('stereo')).toBe(2);
+  });
+
+  it('does not guess stereo for an absent or unrecognized channelConfig', () => {
+    expect(parseChannelConfig(undefined)).toBeUndefined();
+    // A codec-specific or otherwise unrecognized layout string — callers
+    // decide whether/how to substitute, this parser doesn't guess.
+    expect(parseChannelConfig('stereo')).toBeUndefined();
+  });
+
+  it('rejects a malformed or hostile channelConfig total instead of overflowing', () => {
+    // `Number('9'.repeat(400))` overflows `Number.MAX_VALUE` to `Infinity`;
+    // that must not sail through as a channel count.
+    expect(parseChannelConfig('9'.repeat(400))).toBeUndefined();
+    expect(parseChannelConfig('0')).toBeUndefined();
+    // Comfortably past any real-world layout — guards the sane upper bound.
+    expect(parseChannelConfig('1000')).toBeUndefined();
+  });
+
+  it('substitutes a conventional channel count in the projection while keeping the raw channelConfig', () => {
+    // `AudioTrack.channels` is a required number, so the projection still
+    // needs a value even for a layout `parseChannelConfig` can't resolve —
+    // but the raw string rides along on `moq.channelConfig` so
+    // `toAudioDecoderConfig` can tell "declared 2" from "unresolved" and
+    // reject rather than silently decode as stereo.
+    const text = JSON.stringify({
+      version: '1',
+      tracks: [
+        {
+          name: 'audio',
+          packaging: 'loc',
+          isLive: true,
+          role: 'audio',
+          codec: 'mp4a.40.2',
+          samplerate: 44_100,
+          channelConfig: 'JOC',
+        },
+      ],
+    });
+    const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+    const audio = getTracksByType(presentation, 'audio')[0] as MoqAudioTrack;
+    expect(audio.channels).toBe(2);
+    expect(audio.moq.channelConfig).toBe('JOC');
   });
 
   it('derives stable track ids from full track names', () => {
@@ -253,6 +325,113 @@ describe('applyMoqCatalogUpdate', () => {
     const presentation = moqCatalogToPresentation(updated, { url: SOURCE_URL }, SESSION_URI);
     const videoIds = getTracksByType(presentation, 'video').map((track) => track.id);
     expect(videoIds).toContain(moqTrackId(['conference.example.com', 'conference123', 'alice'], '540p-video'));
+  });
+
+  it('updates a subset of fields on an existing track, preserving the rest (§5.1.6)', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    // The §5.6.4 example form: the target is named by `name`, not parentName.
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [
+        {
+          op: 'update',
+          tracks: [{ name: '1080p-video', namespace: 'conference.example.com/conference123/alice', bitrate: 4000000 }],
+        },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, options);
+    // Position held, and every undeclared attribute survived.
+    expect(updated.tracks.map((track) => track.name)).toEqual(['1080p-video', 'audio']);
+    expect(updated.tracks[0]).toMatchObject({
+      name: '1080p-video',
+      bitrate: 4000000, // overridden
+      codec: 'av01.0.08M.10.0.110.09', // preserved
+      width: 1920, // preserved
+      height: 1080, // preserved
+      targetLatency: 2000, // preserved
+    });
+  });
+
+  it('identifies an update target by parentName, like clone (§5.2.33)', () => {
+    const updateOptions = { catalogNamespace: ['other', 'catalog'] };
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, updateOptions);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [
+        {
+          op: 'update',
+          tracks: [
+            {
+              parentName: 'audio',
+              parentNamespace: 'conference.example.com/conference123/alice',
+              bitrate: 64000,
+            },
+          ],
+        },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, updateOptions);
+    expect(updated.tracks).toHaveLength(2);
+    expect(updated.tracks.find((track) => track.name === 'audio')).toMatchObject({
+      bitrate: 64000,
+      codec: 'opus', // preserved
+      samplerate: 48000, // preserved
+      namespace: ['conference.example.com', 'conference123', 'alice'], // unchanged
+    });
+  });
+
+  // §5.1.6 requires `parentName` and the §5.6.4 example uses `name`; this
+  // reader accepts either, so the error has to name both — otherwise a
+  // publisher following the spec's own example is sent looking for a field
+  // that was never required.
+  it('names both accepted identifiers when an update states neither', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [{ op: 'update', tracks: [{ bitrate: 1 }] }],
+    });
+    expect(() => applyMoqCatalogUpdate(initial, delta, options)).toThrow(/parentName \(or name\)/);
+  });
+
+  it('rejects an update targeting a track that does not exist', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [{ op: 'update', tracks: [{ parentName: 'no-such-track', bitrate: 1 }] }],
+    });
+    expect(() => applyMoqCatalogUpdate(initial, delta, options)).toThrow(/unknown track/);
+  });
+
+  it('applies an add and a later update to it in array order (§5.3)', () => {
+    const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      generatedAt: 1746104606044,
+      deltaUpdate: [
+        {
+          op: 'add',
+          tracks: [
+            {
+              name: '720p-video',
+              packaging: 'loc',
+              isLive: true,
+              role: 'video',
+              codec: 'avc1.64001f',
+              bitrate: 800000,
+            },
+          ],
+        },
+        { op: 'update', tracks: [{ name: '720p-video', bitrate: 900000, width: 1280 }] },
+      ],
+    });
+    const updated = applyMoqCatalogUpdate(initial, delta, options);
+    const added = updated.tracks.find((track) => track.name === '720p-video');
+    expect(added).toMatchObject({
+      namespace: ['conference', 'alice'], // catalog namespace, from the add
+      bitrate: 900000,
+      width: 1280,
+      codec: 'avc1.64001f',
+    });
+    expect(updated.tracks).toHaveLength(3);
   });
 
   it('resolves a delta-added track initRef against the delta root initDataList', () => {

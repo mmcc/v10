@@ -6,7 +6,8 @@
  * Audio has no forced-keyframe control (`encode` takes no options and
  * every emitted chunk is independently decodable), so each chunk starts
  * its own MOQT group downstream; a codec `description` (e.g. AAC
- * AudioSpecificConfig — Opus carries none) therefore rides every frame.
+ * AudioSpecificConfig — Opus carries none) therefore rides every frame,
+ * in the LOC Audio Config property.
  */
 import type { EncodedChunkSink, EncoderActor, EncoderActorOptions, EncoderMessage } from './encoder-actor';
 import { createEncoderActor } from './encoder-actor';

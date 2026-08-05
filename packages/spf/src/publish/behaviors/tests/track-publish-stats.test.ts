@@ -170,7 +170,7 @@ describe('trackPublishStats', () => {
     expect(stats.droppedFrames).toBe(0);
   });
 
-  it('works video-only, reporting zero audio rates', async () => {
+  it('works video-only, reporting the audio rate as unknown', async () => {
     const { state, context } = setupStats();
     const video = makeSource({ encodedFrames: 10, encodedBytes: 5_000 });
     context.videoEncoderActor.set(video.source);
@@ -179,8 +179,24 @@ describe('trackPublishStats', () => {
     await vi.waitFor(() => {
       expect(state.publishStats.get()).toBeDefined();
     });
-    expect(state.publishStats.get()!.audioBitrate).toBe(0);
+    // NaN, not 0: a missing encoder is "unknown", while 0 means the leg
+    // exists and produced nothing this window.
+    expect(state.publishStats.get()!.audioBitrate).toBeNaN();
     expect(state.publishStats.get()!.bytesSent).toBe(4_000);
+  });
+
+  it('works audio-only, reporting the video rates as unknown', async () => {
+    const { state, context } = setupStats();
+    const audio = makeSource({ encodedFrames: 50, encodedBytes: 8_000 });
+    context.audioEncoderActor.set(audio.source);
+
+    await vi.waitFor(() => {
+      expect(state.publishStats.get()).toBeDefined();
+    });
+    // Zero here read as a stalled video encoder downstream and branded
+    // every healthy audio-only session 'fair' connection quality.
+    expect(state.publishStats.get()!.encodedFps).toBeNaN();
+    expect(state.publishStats.get()!.videoBitrate).toBeNaN();
   });
 
   it('stops sampling and clears the stats when the encoders go away', async () => {
