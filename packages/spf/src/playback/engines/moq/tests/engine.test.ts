@@ -423,19 +423,50 @@ describe('createMoqEngine', () => {
     });
 
     signals.context.renderSurface.set(document.createElement('canvas'));
-    const presentedUs = () => signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+    const renderer = () => signals.context.videoRendererActor.get();
+    const presentedUs = () => renderer()?.snapshot.get().context.lastPresentedTimestampUs;
     await vi.waitFor(() => expect(presentedUs()).toBeDefined(), { timeout: 5000 });
+    const firstPresentedUs = presentedUs()!;
 
-    return { engine, firstPresentedUs: presentedUs()!, newestUs, targetSeconds: latency?.defaultTargetLatency ?? 0.5 };
+    // **Where playout settles, not where it starts.** The renderer decodes
+    // the backlog behind its anchor in order and drop-lates it, so the join
+    // presents a rising staircase of intermediate frames before it reaches
+    // the anchor — bounded by `decodeAhead`, one step per rAF, ~60ms for
+    // this 30-group replay. Sampling the first presented frame samples that
+    // staircase, so the settled position is what has to be waited for: the
+    // presented frame is within one group of the renderer's own clock, i.e.
+    // there is no backlog left to fast-forward through. With `joinAtEdge`
+    // off this is true from the first frame — the anchor *is* the front of
+    // the replay — which is why both cases can wait on the same condition.
+    let settledPresentedUs!: number;
+    await vi.waitFor(
+      () => {
+        const presented = presentedUs();
+        const clockUs = renderer()?.getClockTimeUs();
+        expect(presented).toBeDefined();
+        expect(clockUs).toBeDefined();
+        expect(clockUs! - presented!).toBeLessThan(GROUP_DURATION_US);
+        settledPresentedUs = presented!;
+      },
+      { timeout: 5000 }
+    );
+
+    return {
+      engine,
+      firstPresentedUs,
+      settledPresentedUs,
+      newestUs,
+      targetSeconds: latency?.defaultTargetLatency ?? 0.5,
+    };
   }
 
   it('joins a replayed backlog at the live edge', async () => {
-    const { engine, firstPresentedUs, newestUs, targetSeconds } = await playReplayedGroups({});
+    const { engine, settledPresentedUs, newestUs, targetSeconds } = await playReplayedGroups({});
 
     // Within the target latency (plus the group the anchor lands inside) of
     // the newest frame the relay served — not at the front of the replay.
-    expect(firstPresentedUs).toBeGreaterThan(newestUs - targetSeconds * 1_000_000 - 100_000);
-    expect(firstPresentedUs).toBeLessThanOrEqual(newestUs);
+    expect(settledPresentedUs).toBeGreaterThan(newestUs - targetSeconds * 1_000_000 - 100_000);
+    expect(settledPresentedUs).toBeLessThanOrEqual(newestUs);
 
     await engine.destroy();
   });
