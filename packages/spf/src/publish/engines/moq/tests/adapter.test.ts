@@ -412,6 +412,28 @@ describe('MoqPublishMediaMixin', () => {
     expect(media.publishStartedAt).toBeNaN();
   });
 
+  it('fires publishstatechange when an error lands while the session stays live', async () => {
+    const media = makeMedia();
+    media.engine.state.sessionStatus.set('live');
+    await vi.waitFor(() => {
+      expect(media.publishState).toBe('live');
+    });
+
+    const seen: (typeof media.publishError)[] = [];
+    media.addEventListener('publishstatechange', () => {
+      seen.push(media.publishError);
+    });
+
+    // Encoder and track failures surface without moving sessionStatus —
+    // consumers re-read publishError only on this event, so an error-only
+    // change must dispatch too.
+    media.engine.state.publishError.set({ code: 'encode', message: 'encoder died' });
+    await vi.waitFor(() => {
+      expect(seen).toEqual([{ code: 2, message: 'encoder died' }]);
+    });
+    expect(media.publishState).toBe('live');
+  });
+
   it('fires publishstatsupdate on every stats transition, including the reset to undefined', async () => {
     const media = makeMedia();
     const seen: (number | null)[] = [];

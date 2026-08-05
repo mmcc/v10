@@ -479,6 +479,15 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           }
         ),
         this.#bridge(
+          () => state.publishError.get(),
+          // Encoder and track-publisher failures surface while the session
+          // stays 'live', so the mapped state above never moves for them —
+          // without this bridge the store feature (which re-reads
+          // `publishError` only on 'publishstatechange') would keep
+          // exposing null. Clearing on republish re-syncs the same way.
+          () => this.#dispatch('publishstatechange')
+        ),
+        this.#bridge(
           () => state.captureStatus.get() ?? 'idle',
           () => this.#dispatch('capturestatechange')
         ),

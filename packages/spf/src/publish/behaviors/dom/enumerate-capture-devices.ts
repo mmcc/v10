@@ -9,7 +9,8 @@
  * Simple behavior: one platform listener plus one effect watching the
  * capture status. Each refresh writes a fresh array (a new enumeration
  * snapshot), even when the contents are unchanged. In-flight enumerations
- * that resolve after cleanup are discarded via a `disposed` flag.
+ * that resolve after cleanup — or after a newer refresh started — are
+ * discarded, so a slow older snapshot can never overwrite a newer one.
  *
  * Sole writer of `state.captureDevices`.
  */
@@ -51,9 +52,13 @@ function enumerateCaptureDevicesSetup({
   if (!mediaDevices?.enumerateDevices) return undefined;
 
   let disposed = false;
+  let generation = 0;
   const refresh = async () => {
+    // devicechange and the post-grant status refresh can overlap; only the
+    // newest enumeration may commit, whatever order the platform resolves.
+    const ticket = ++generation;
     const devices = await mediaDevices.enumerateDevices();
-    if (disposed) return;
+    if (disposed || ticket !== generation) return;
     const inputs: CaptureDeviceFacts[] = [];
     for (const { deviceId, kind, label } of devices) {
       if (isCaptureInputKind(kind)) inputs.push({ deviceId, kind, label });
