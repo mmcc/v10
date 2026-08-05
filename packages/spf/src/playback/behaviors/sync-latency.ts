@@ -154,7 +154,10 @@ export interface SyncLatencyState {
   currentTime?: number;
   /**
    * Which renderer `currentTime` was last sampled from, published by
-   * `trackPlayoutTime`. `undefined` before either clock runs.
+   * `trackPlayoutTime`. `undefined` before either clock runs — and again
+   * whenever neither is producing a position, which is the only way to tell a
+   * stopped clock from a running one, since `currentTime` holds its last
+   * value.
    */
   playoutClockOwner?: PlayoutClockOwner;
 }
@@ -351,6 +354,17 @@ function setupSyncLatency({
   let controlledSubscriber: TrackSubscriberActor | undefined;
 
   /**
+   * The clock owner those readings were taken against, tracked alongside the
+   * subscriber because it is the other half of "what is being controlled".
+   *
+   * A clock that stops does not change the subscriber — the edge fallback
+   * re-selects the same actor, and on an audio-only broadcast there is only
+   * one — so without this, a nudge decided against a clock that has since
+   * stopped goes on being applied to a track that is refilling.
+   */
+  let controlledClockOwner: PlayoutClockOwner | undefined;
+
+  /**
    * Stop steering, without going inactive: rate 1 (`stable` is the name for
    * "not correcting"), and no measured latency, because there is not one.
    *
@@ -417,11 +431,10 @@ function setupSyncLatency({
     // `measuredLatency`, so the join window was steering on a number with
     // no physical meaning. Following the owner makes it mean something.
     //
-    // With no owner yet — neither clock has produced a position — nothing is
-    // measured anyway (`currentTime` is `undefined` and the controller idles
-    // below), and the preference falls back to whichever track has an edge
-    // so the setpoint published above is still resolved against a real
-    // track.
+    // With no owner, nothing is measured at all — see the guard below. The
+    // preference still falls back to whichever track has an edge, because the
+    // setpoint published above is a fact about the configuration and has to be
+    // resolved against a real track either way.
     //
     // Two tracks of one broadcast need not have coincident delivery edges.
     // A track re-encoded anywhere upstream trails a passed-through one by
@@ -446,9 +459,16 @@ function setupSyncLatency({
     // Per-subscriber memory, and this is the only place the subscriber can
     // change (see `controlledSubscriber`). The first `undefined` on the way in
     // is not a handoff either way.
-    if (subscriber !== controlledSubscriber) {
-      const isHandoff = controlledSubscriber !== undefined;
+    //
+    // **The clock owner is half of that identity.** A clock that starts,
+    // hands over or stops ends the run of readings just as surely as the track
+    // changing does, and it can do so with the subscriber unchanged: on an
+    // audio-only broadcast, or wherever the edge fallback below re-selects the
+    // same actor the departed owner named.
+    if (subscriber !== controlledSubscriber || owner !== controlledClockOwner) {
+      const isHandoff = controlledSubscriber !== undefined || controlledClockOwner !== undefined;
       controlledSubscriber = subscriber;
+      controlledClockOwner = owner;
       correcting = 0;
       catchUpArmed = false;
       // **The published outputs are per-track too, and clearing the memories
@@ -471,11 +491,23 @@ function setupSyncLatency({
     const target = targetSeconds(subscriber);
     state.effectiveTargetLatency.set(target);
 
-    // Nothing is being presented yet (pre-roll, or a renderer that has not
-    // been handed a surface): there is no playout position to hold, and
-    // guessing one from the buffer is what produced the old understatement.
+    // **No clock owns the position, so there is no latency to hold.** Nothing
+    // is being played out: pre-roll, a renderer that has not been handed a
+    // surface, or a schedule emptied by a track switch and not yet refilled.
+    //
+    // The stopped-clock case has to be decided on the owner, because
+    // `currentTime` cannot say it. `trackPlayoutTime` publishes a position when
+    // it samples one and leaves the last one standing otherwise — it must,
+    // since the media-element facade reads `undefined` as 0 and the handoff
+    // promotion gate reads it as "promote immediately" — so a clock that has
+    // stopped is indistinguishable from a running one by its position alone.
+    // Measuring against it charges the whole stopped interval to the refilling
+    // track: the reading grows by one `intervalMs` every evaluation and crosses
+    // `catchUpThreshold` on a stream nobody is playing, where a skip discards a
+    // group the replacement has only just buffered. Whatever was published for
+    // the clock that stopped was parked above, when the owner changed.
     const currentTime = peek(state.currentTime);
-    if (currentTime === undefined) return;
+    if (owner === undefined || currentTime === undefined) return;
     const playoutTimestampUs = currentTime * 1_000_000;
 
     // Measured on the subscriber selected above, so the depth and the
@@ -572,6 +604,7 @@ function setupSyncLatency({
           correcting = 0;
           catchUpArmed = false;
           controlledSubscriber = undefined;
+          controlledClockOwner = undefined;
           const timer = setInterval(evaluate, controlConfig.intervalMs);
           return () => {
             clearInterval(timer);

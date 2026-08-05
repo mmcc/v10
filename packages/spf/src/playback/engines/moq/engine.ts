@@ -114,9 +114,11 @@ export interface MoqEngineState {
   currentTime?: number;
   /**
    * Which renderer `currentTime` came from, published alongside it by
-   * `trackPlayoutTime`. The latency controller measures the delivery edge of
-   * *that* track, since a depth taken against another one's clock is a
-   * subtraction across two timebases.
+   * `trackPlayoutTime`, and `undefined` while neither clock is producing a
+   * position. The latency controller measures the delivery edge of *that*
+   * track, since a depth taken against another one's clock is a subtraction
+   * across two timebases — and measures nothing at all without an owner, since
+   * `currentTime` holds its last value rather than clearing.
    */
   playoutClockOwner?: PlayoutClockOwner;
 }

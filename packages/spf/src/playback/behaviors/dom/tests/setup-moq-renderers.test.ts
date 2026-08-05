@@ -336,6 +336,45 @@ describe('trackPlayoutTime', () => {
     cleanup();
   });
 
+  // The handover has a third state, and it is the one the owner is *for*.
+  // Both clocks can stop producing a position at once — an audio track switch
+  // runs `setTrack`, which closes the decoder and empties the schedule, so
+  // `getClockTimeUs()` returns undefined until the replacement has been
+  // scheduled; a video renderer replaced along with it has presented nothing
+  // yet. Neither branch below runs, and a name left latched on the clock that
+  // stopped is worse than no name: `syncLatency` measures the delivery edge of
+  // whichever track the owner names, so the refilling replacement gets
+  // controlled against a frozen position and reads further behind every
+  // evaluation.
+  it('drops the owner when neither clock is producing a position', async () => {
+    const { state, context, cleanup } = setupTrackPlayoutTime();
+
+    let audioClockUs: number | undefined = 9_000_000;
+    context.audioRendererActor.set({
+      snapshot: signal({ context: {} }),
+      setTrack: vi.fn(),
+      getClockTimeUs: () => audioClockUs,
+      destroy: vi.fn(),
+    } as unknown as AudioRendererActor);
+
+    await vi.waitFor(() => expect(state.playoutClockOwner.get()).toBe('audio'));
+    expect(state.currentTime.get()).toBe(9);
+
+    // The schedule is emptied and there is no video renderer to fall back to.
+    audioClockUs = undefined;
+    await vi.waitFor(() => expect(state.playoutClockOwner.get()).toBeUndefined());
+
+    // The *position* is deliberately left where it was. `currentTime` is also
+    // the media element's `currentTime` (which reads `undefined` as 0) and the
+    // track-handoff promotion gate's due-time reference (which reads it as
+    // "promote immediately"), so clearing it would send a position of zero to
+    // the facade and open a gate that exists to stay shut. The owner is the
+    // signal that says the position is no longer live.
+    expect(state.currentTime.get()).toBe(9);
+
+    cleanup();
+  });
+
   // The reason this is its own behavior: gated on the AudioContext, the
   // clock would go silent in exactly the video-only case it exists for.
   it('runs with no AudioContext and no audio renderer', async () => {

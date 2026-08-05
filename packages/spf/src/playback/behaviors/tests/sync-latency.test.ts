@@ -165,6 +165,46 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
+  // And the clock going away again, which is not the same as never having had
+  // one. `currentTime` is latched — `trackPlayoutTime` publishes a position
+  // when it samples one and leaves the last one standing otherwise, because
+  // the media-element facade and the handoff promotion gate both read
+  // `undefined` as something else. So a stopped clock looks exactly like a
+  // running one from here, and only the owner distinguishes them: measure the
+  // refilling replacement against the dead clock's last reading and it reads
+  // further behind on every evaluation, which is a skip on the second one.
+  it('idles while no clock owns the playout position', async () => {
+    const audio = fakeSubscriber();
+    const deps = makeDeps(audio.subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    audio.setBufferDepth(0.9);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    // The audio schedule is emptied by a track switch and there is no video
+    // renderer, so no clock is producing a position. The replacement's buffer
+    // fills behind a playout position that has stopped advancing.
+    deps.state.playoutClockOwner.set(undefined);
+    audio.setBufferDepth(4);
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deps.state.measuredLatency.get()).toBeUndefined();
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+    // Nothing is being played out, so there is no latency to be 3.5s over.
+    expect(audio.skipToLatestGroup).not.toHaveBeenCalled();
+
+    // Playout resumes and the controller picks up on a live reading.
+    deps.state.playoutClockOwner.set('audio');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(4, 3);
+
+    reactor.destroy();
+  });
+
   // Neither clock has produced a position yet, so nothing is measured at all —
   // but the setpoint is still published, and it has to be resolved against a
   // real track to be worth publishing.

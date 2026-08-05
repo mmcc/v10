@@ -83,10 +83,12 @@ export interface MoqRendererState {
   paused?: boolean;
   currentTime?: number;
   /**
-   * Which renderer `currentTime` was last sampled from. Owned by
-   * `trackPlayoutTime` and read by `syncLatency`, which can only call
-   * `newest buffered − currentTime` a latency if it measures the edge of the
-   * track that position came from.
+   * Which renderer `currentTime` was last sampled from, and `undefined` when
+   * neither is producing a position. Owned by `trackPlayoutTime` and read by
+   * `syncLatency`, which can only call `newest buffered − currentTime` a
+   * latency if it measures the edge of the track that position came from, and
+   * only while that position is still live — `currentTime` holds its last
+   * value when the clock stops, so this is what says it stopped.
    */
   playoutClockOwner?: PlayoutClockOwner;
 }
@@ -400,7 +402,27 @@ function trackPlayoutTimeSetup({
     if (presentedUs !== undefined) {
       state.playoutClockOwner.set('video');
       state.currentTime.set(presentedUs / 1_000_000);
+      return;
     }
+    // **Neither clock produced a position, so there is no owner.** Both can
+    // stop at once: an audio track switch runs `setTrack`, which closes the
+    // decoder and empties the schedule, so `getClockTimeUs()` is undefined
+    // again until the replacement is scheduled — and a video renderer
+    // replaced alongside it has presented nothing yet. Leaving the last name
+    // standing is worse than clearing it, because `syncLatency` measures the
+    // delivery edge of whichever track the owner names: the refilling
+    // replacement would be controlled against a position that has stopped,
+    // reading further behind on every evaluation until it skips a group on a
+    // stream nobody is playing.
+    //
+    // The *position* is left where it was, deliberately. `currentTime` is
+    // also the media element's `currentTime` — the facade reads `undefined`
+    // as 0 — and the track-handoff promotion gate's due-time reference, where
+    // `undefined` means "promote immediately". Clearing it would report a
+    // seek to zero and open a gate whose whole job is to stay shut. The owner
+    // is the signal that the position is no longer live; the position stays
+    // the last one that was.
+    state.playoutClockOwner.set(undefined);
   }, CLOCK_PUBLISH_INTERVAL_MS);
   return () => clearInterval(timer);
 }
@@ -421,6 +443,12 @@ function trackPlayoutTimeSetup({
  * A controller inferring the owner from those instead measures across two
  * timebases for the whole of that window. Owner and position are therefore
  * written together, owner first, from one sample.
+ *
+ * When neither clock offers a position the owner is cleared and the position
+ * is not. `currentTime` has two other readers that treat `undefined` as a
+ * statement rather than an absence — the media element's `currentTime`, and
+ * the handoff promotion gate — so the last known position stands, and the
+ * owner is what says it is no longer live.
  *
  * Ungated on purpose. Its two consumers — the media-element facade's
  * readiness derivation and `syncLatency`'s setpoint — both need a value in
