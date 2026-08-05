@@ -36,15 +36,26 @@ function fakeSubscriber(catalog?: { jitterMs?: number; targetLatencyMs?: number 
     context: { status: 'active', hasDecodableFrame: true, frameCount: 0 } as TrackSubscriberContext,
   });
 
+  let arrivalEpoch = 0;
+
   /** Publish an arrival envelope whose spread is `spreadMs`. */
   const setArrivalJitter = (spreadMs: number, sampleCount = 200) => {
     snapshot.set({
       value: 'active',
       context: {
         ...snapshot.get().context,
-        arrivalJitter: { minOffsetMs: 1_000, maxOffsetMs: 1_000 + spreadMs, sampleCount },
+        arrivalJitter: { minOffsetMs: 1_000, maxOffsetMs: 1_000 + spreadMs, sampleCount, epoch: arrivalEpoch },
       },
     });
+  };
+
+  /**
+   * What `resetArrivalBaseline` does to the published envelope: the bounds
+   * and the count restart, and the epoch moves. Subsequent
+   * `setArrivalJitter` calls describe the new measurement.
+   */
+  const restartArrivalEnvelope = () => {
+    arrivalEpoch++;
   };
 
   const subscriber: TrackSubscriberActor = {
@@ -55,7 +66,7 @@ function fakeSubscriber(catalog?: { jitterMs?: number; targetLatencyMs?: number 
     skipToLatestGroup: () => 0,
     destroy: () => {},
   };
-  return { subscriber, setArrivalJitter };
+  return { subscriber, setArrivalJitter, restartArrivalEnvelope };
 }
 
 function makeDeps(subscriber: TrackSubscriberActor | undefined) {
@@ -377,7 +388,7 @@ describe('adaptLatencyTarget', () => {
   // them, and the moment just after a path failure is when its envelope reads
   // narrowest.
   it('re-baselines the observation window when the arrival envelope restarts', async () => {
-    const { subscriber, setArrivalJitter } = fakeSubscriber();
+    const { subscriber, setArrivalJitter, restartArrivalEnvelope } = fakeSubscriber();
     const deps = makeDeps(subscriber);
     setArrivalJitter(200);
     const reactor = adaptLatencyTarget.setup(deps);
@@ -388,6 +399,7 @@ describe('adaptLatencyTarget', () => {
 
     // Reconnected: one frame establishes the new baseline, and a jitter-free
     // envelope is what a single sample always looks like.
+    restartArrivalEnvelope();
     setArrivalJitter(0, 1);
     await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
 
@@ -402,6 +414,51 @@ describe('adaptLatencyTarget', () => {
     const narrowed = deps.state.adaptiveTargetLatency.get()!;
     expect(narrowed).toBeLessThan(settled);
     expect(narrowed).toBeGreaterThan(DEFAULT_ADAPTIVE_LATENCY_CONFIG.minTargetLatency);
+
+    reactor.destroy();
+  });
+
+  // The same restart, seen through this behavior's *own* sampling cadence.
+  // The controller reads the envelope on a 2s timer, not on every frame, so a
+  // count that restarts at zero and climbs back past its last-read value
+  // inside one of those windows never appears to have gone backwards — and
+  // those are the ordinary cadences, not a corner: the gate wants 60 samples
+  // and 60 samples is ~1.3s of 48kHz audio, so anything short of two full
+  // windows of pre-outage counting is overtaken. Inferring the restart from
+  // the count is therefore lossy in exactly the case that matters, which is
+  // why the envelope says outright that it restarted.
+  it('re-baselines when the restarted count overtakes the last one it read', async () => {
+    const { subscriber, setArrivalJitter, restartArrivalEnvelope } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    // Two seconds into the subscription, with a real spread behind it.
+    setArrivalJitter(200, 94);
+    const reactor = adaptLatencyTarget.setup(deps);
+
+    // First evaluation: 94 samples, but under `warmupSeconds` of observation,
+    // so nothing is published and 94 is the count on record.
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+    expect(deps.state.adaptiveTargetLatency.get()).toBeUndefined();
+
+    // The auth-expiry resubscribe lands and 103 frames arrive before the next
+    // evaluation — a fresh, narrow envelope whose count is *above* the 94 on
+    // record, so nothing about it reads as a restart.
+    restartArrivalEnvelope();
+    setArrivalJitter(40, 103);
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+
+    // Both halves of the gate are satisfied on paper — 103 ≥ 60 samples, 4s
+    // ≥ `warmupSeconds` — but every one of those samples is younger than the
+    // reconnect. Publishing here is the worst case of all: with no previous
+    // proposal to hold, the first publication lands whole, so the narrowest
+    // envelope the path ever shows becomes the setpoint outright.
+    expect(deps.state.adaptiveTargetLatency.get()).toBeUndefined();
+
+    // The reconnected path is trusted once it has been observed for as long
+    // as any other epoch has to be.
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+    expect(deps.state.adaptiveTargetLatency.get()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+    expect(deps.state.adaptiveTargetLatency.get()).toBeCloseTo(0.16, 3);
 
     reactor.destroy();
   });

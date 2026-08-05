@@ -445,11 +445,13 @@ function setupAdaptLatencyTarget({
   let seenUnderruns = 0;
   let seenDrops = 0;
   /**
-   * Arrival count the controlled subscriber last reported, so a count that
-   * goes *backwards* can be recognised as a new measurement epoch on the
-   * same actor — see `evaluate`.
+   * Envelope epoch the controlled subscriber last reported, so a restart of
+   * its arrival measurements can be recognised as a new observation epoch on
+   * the same actor — see `evaluate`. `undefined` before any envelope has been
+   * read, and reset to it whenever the subscriber changes, because the count
+   * is the subscriber's own and means nothing across a swap.
    */
-  let seenArrivalSamples = 0;
+  let seenArrivalEpoch: number | undefined;
   /**
    * Late-frame drops counted but not yet worth a failure event.
    *
@@ -474,7 +476,7 @@ function setupAdaptLatencyTarget({
     seenSkips = 0;
     seenUnderruns = 0;
     seenDrops = 0;
-    seenArrivalSamples = 0;
+    seenArrivalEpoch = undefined;
     dropCarry = 0;
     state.adaptiveTargetLatency.set(undefined);
   };
@@ -535,6 +537,7 @@ function setupAdaptLatencyTarget({
     if (subscriber !== lastSubscriber) {
       const isHandoff = lastSubscriber !== undefined;
       lastSubscriber = subscriber;
+      seenArrivalEpoch = undefined;
       if (isHandoff) beginObservationEpoch(now);
     }
     if (!subscriber) return;
@@ -588,10 +591,23 @@ function setupAdaptLatencyTarget({
     // well under `warmupSeconds` of new observation behind them — and the
     // moment just after a path failure is precisely when its envelope reads
     // narrowest, so the proposal it produces is the lowest target at the
-    // worst time to propose one. A count that went backwards identifies the
-    // restart, the same rule `counterDelta` applies to the failure counters.
-    if (jitter !== undefined && jitter.sampleCount < seenArrivalSamples) beginObservationEpoch(now);
-    seenArrivalSamples = jitter?.sampleCount ?? 0;
+    // worst time to propose one.
+    //
+    // The restart is read from `epoch`, which the envelope publishes for this,
+    // rather than inferred from a count that fell. **The inference is lossy at
+    // exactly these cadences**, because this loop samples the envelope on its
+    // own `intervalMs` and not per frame: a count that restarts at zero and
+    // climbs back past its last-read value inside one window never appears to
+    // have gone backwards. The gate wants `minArrivalSamples` = ~1.3s of
+    // 48kHz audio, so any restart with under two full windows of counting
+    // behind it — the join, a resubscribe during a slow start — is overtaken
+    // and missed, and missing it publishes the narrow post-reconnect envelope
+    // whole, there being no earlier proposal to hold. An epoch cannot be
+    // overtaken.
+    if (jitter !== undefined && seenArrivalEpoch !== undefined && jitter.epoch !== seenArrivalEpoch) {
+      beginObservationEpoch(now);
+    }
+    if (jitter !== undefined) seenArrivalEpoch = jitter.epoch;
     const warm =
       jitter !== undefined &&
       jitter.sampleCount >= adaptive.minArrivalSamples &&

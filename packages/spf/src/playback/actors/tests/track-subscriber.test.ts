@@ -185,7 +185,7 @@ describe('createTrackSubscriberActor', () => {
     };
 
     deliver(0);
-    expect(jitter()).toEqual({ minOffsetMs: 100, maxOffsetMs: 100, sampleCount: 1 });
+    expect(jitter()).toEqual({ minOffsetMs: 100, maxOffsetMs: 100, sampleCount: 1, epoch: 0 });
 
     deliver(1, 40);
     expect(jitter().sampleCount).toBe(2);
@@ -343,6 +343,11 @@ describe('createTrackSubscriberActor', () => {
     // the warm-up gate holds until the new subscription has described
     // itself — the same treatment a subscriber handoff gets.
     expect(jitter.sampleCount).toBe(1);
+    // And the restart is stated rather than left to be inferred from the
+    // count: a reader sampling on its own timer cannot see a count fall if
+    // enough frames arrive before its next read, so the envelope carries the
+    // epoch it belongs to.
+    expect(jitter.epoch).toBe(1);
     // The outage must not land in the throughput totals either: folded into
     // `totalDurationMs` against one object's bytes it is a single
     // arbitrarily low outlier for the bandwidth estimator.

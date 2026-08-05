@@ -72,8 +72,15 @@ export interface TrackSubscriberContext {
    * rather than being an unbounded running min/max. An unbounded minimum
    * is what makes an offset-based latency estimate drift permanently
    * pessimistic after one lucky early frame — the bound has to forget.
+   *
+   * `epoch` counts the times the envelope has been *restarted*
+   * (`resetArrivalBaseline`, on the auth-expiry resubscribe), so a reader
+   * sampling this at its own cadence can tell "the same measurement,
+   * continued" from "a different measurement that happens to be on the same
+   * actor" without inferring it from the other two numbers. See
+   * `adaptLatencyTarget`, whose observation window that distinction gates.
    */
-  arrivalJitter?: { minOffsetMs: number; maxOffsetMs: number; sampleCount: number };
+  arrivalJitter?: { minOffsetMs: number; maxOffsetMs: number; sampleCount: number; epoch: number };
   error?: RequestError | unknown;
   done?: PublishDone;
 }
@@ -165,6 +172,10 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   let offsetMinMs: number | undefined;
   let offsetMaxMs = 0;
   let offsetSamples = 0;
+  // Times the envelope has been restarted, published so a reader sampling at
+  // its own cadence can recognise a new measurement — see `arrivalJitter`
+  // and `resetArrivalBaseline`.
+  let offsetEpoch = 0;
 
   const sampleArrivalOffset = (nowMs: number, timestampUs: number, elapsedMs: number | undefined): void => {
     const offsetMs = nowMs - timestampUs / 1000;
@@ -274,7 +285,12 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
       frame,
       totalBytes,
       totalDurationMs,
-      arrivalJitter: { minOffsetMs: offsetMinMs!, maxOffsetMs: offsetMaxMs, sampleCount: offsetSamples },
+      arrivalJitter: {
+        minOffsetMs: offsetMinMs!,
+        maxOffsetMs: offsetMaxMs,
+        sampleCount: offsetSamples,
+        epoch: offsetEpoch,
+      },
     });
   };
 
@@ -310,16 +326,23 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
    * warm-up gate, which is what makes the reconnected subscription describe
    * itself: `adaptLatencyTarget` holds its last proposal while
    * `sampleCount` is short, exactly as it does for a subscriber handoff.
-   * The restarted `sampleCount` is also how that controller *recognises*
-   * the new epoch — a count that goes backwards is a resubscribe, and it
-   * re-baselines its observation window on it. Publishing a count that only
-   * ever rises would leave the window counting from before the outage.
+   *
+   * `epoch` is how that controller *recognises* the restart, and it has to
+   * be said outright rather than inferred from the restarted `sampleCount`.
+   * The controller samples this context on a timer, not on every frame, so
+   * a count that dips to zero and climbs back past its last-read value
+   * inside one of those windows never appears to have gone backwards at all
+   * — and at the cadences in play that is the ordinary case, not the corner:
+   * the window is 2s, the gate wants 60 samples, and 60 samples is ~1.3s of
+   * 48kHz audio. A counter that only ever rises is monotone in the reader's
+   * sampled view; an epoch is not.
    */
   const resetArrivalBaseline = (): void => {
     lastArrivalMs = undefined;
     offsetMinMs = undefined;
     offsetMaxMs = 0;
     offsetSamples = 0;
+    offsetEpoch++;
   };
 
   const subscribe = (parameters: MessageParameters): void => {
