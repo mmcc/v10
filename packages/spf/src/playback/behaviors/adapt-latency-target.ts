@@ -493,9 +493,32 @@ function setupAdaptLatencyTarget({
   };
 
   /**
-   * The track whose delivery the controller reasons about: audio when
-   * there is any, because it owns the master clock and starves audibly.
-   * The same preference `syncLatency` applies to its measurement.
+   * The track whose delivery the controller reasons about: audio when there
+   * is any, because it owns the master clock in steady state and starves
+   * audibly.
+   *
+   * **Deliberately not the clock-owner selection `syncLatency` makes**, and
+   * the asymmetry is worth stating because the two look like they should
+   * match. They answer different questions. That controller subtracts a
+   * position from an edge, so it must have both ends on one track or the
+   * number is not a latency at all. This one asks how much delivery variance
+   * a jitter buffer has to absorb — a property of the *path*, which both
+   * tracks of a broadcast share, sampled on whichever of them will make a
+   * shortfall obvious first.
+   *
+   * Following the clock owner here would restart the observation epoch on
+   * every handover — the join, an autoplay unlock, a sustained pause
+   * releasing — and each restart costs `warmupSeconds` before this behavior
+   * may say anything at all. At a normal start that is two restarts (video
+   * takes the clock, then audio does), so the first proposal would arrive
+   * seconds later on every playback, to align a selection whose only
+   * consequence is which of two tracks on one path supplied the spread.
+   *
+   * What must not happen — a proposal derived from a track that has no
+   * arrivals to describe, while the other one is the whole reason the
+   * controller is running — is already impossible: the warm-up gate is
+   * evaluated on *this* subscriber's envelope, so an edgeless one publishes
+   * nothing rather than something arbitrary.
    */
   const controlledSubscriber = (): TrackSubscriberActor | undefined =>
     peek(context.audioSubscriberActor) ?? peek(context.videoSubscriberActor);

@@ -341,6 +341,33 @@ describe('adaptLatencyTarget', () => {
     reactor.destroy();
   });
 
+  // The invariant that makes the audio-first selection safe to keep while
+  // `syncLatency` follows the playout clock instead. The two selections can
+  // differ during a join — audio subscribed, nothing scheduled, video still
+  // driving `currentTime` — and the question is whether this behavior can
+  // publish a proposal derived from a track it has no evidence about. It
+  // cannot: the warm-up gate reads the *selected* subscriber's envelope, so an
+  // audio track with no arrivals publishes nothing however long video has been
+  // delivering, and the setpoint chain stays at consumer → catalog → default.
+  it('publishes nothing while the track it reasons about has no arrivals', async () => {
+    const audio = fakeSubscriber();
+    const video = fakeSubscriber();
+    const deps = makeDeps(audio.subscriber);
+    deps.context.videoSubscriberActor.set(video.subscriber);
+    video.setArrivalJitter(40);
+
+    const reactor = adaptLatencyTarget.setup(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deps.state.adaptiveTargetLatency.get()).toBeUndefined();
+
+    // And once audio does describe itself, the proposal is audio's.
+    audio.setArrivalJitter(200);
+    await vi.advanceTimersByTimeAsync(WARM_MS);
+    expect(deps.state.adaptiveTargetLatency.get()).toBeCloseTo(0.4, 3);
+
+    reactor.destroy();
+  });
+
   // The same fresh epoch, arriving without an actor swap: the auth-expiry
   // resubscribe drops the subscriber's arrival baseline, so the envelope
   // restarts on the very object the controller is already watching. Only the
