@@ -7,6 +7,7 @@ import {
   ControlMessageDeframer,
   decodeControlMessage,
   encodeGoaway,
+  encodeRequestOk,
   encodeSetup,
   PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
@@ -190,6 +191,42 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(results).toEqual([{ accepted: false, errorCode: REQUEST_ERROR_CODE.TIMEOUT }]);
     });
+    session.destroy();
+  });
+
+  it('ignores a PUBLISH response that arrives after the request timeout', async () => {
+    const pair = createTransportPair();
+    // A peer that completes SETUP, holds the request stream past the
+    // timeout, then answers late.
+    let requestStream: Awaited<ReturnType<typeof pair.server.createBidirectionalStream>> | undefined;
+    void (async () => {
+      const control = await pair.server.createUnidirectionalStream();
+      const writer = control.getWriter();
+      await writer.write(encodeSetup([]));
+      const streams = pair.server.incomingBidirectionalStreams.getReader();
+      requestStream = (await streams.read()).value;
+    })();
+    const results: { accepted: boolean; errorCode?: number }[] = [];
+    const session = createMoqtPublishSession(pair.client, {
+      requestTimeoutMs: 50,
+      callbacks: {
+        onPublishResult: (result) => results.push({ accepted: result.accepted, errorCode: result.error?.errorCode }),
+      },
+    });
+    await session.ready;
+    session.publishTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+
+    await vi.waitFor(() => {
+      expect(results).toEqual([{ accepted: false, errorCode: REQUEST_ERROR_CODE.TIMEOUT }]);
+      expect(requestStream).toBeDefined();
+    });
+
+    // The timeout must have killed the request stream: a late REQUEST_OK
+    // fired onPublishResult a second time when it was left open.
+    const writer = requestStream!.writable.getWriter();
+    await writer.write(encodeRequestOk()).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(results).toEqual([{ accepted: false, errorCode: REQUEST_ERROR_CODE.TIMEOUT }]);
     session.destroy();
   });
 
