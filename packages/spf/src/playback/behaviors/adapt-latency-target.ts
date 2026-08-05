@@ -177,8 +177,9 @@ export interface AdaptiveLatencyConfig {
   /** Add the catalog's declared `jitter` (msf-01 §5.2.9) to the margin. */
   useCatalogJitter: boolean;
   /**
-   * Late-frame drops that add up to one failure event. Underruns and
-   * catch-up skips each count as one on their own; drops need bulk.
+   * Late-frame drops that add up to one failure event — a positive whole
+   * number of frames, validated. Underruns and catch-up skips each count
+   * as one on their own; drops need bulk.
    */
   dropsPerEvent: number;
   /** Seconds added to `widenBias` per failure event. */
@@ -322,14 +323,23 @@ export function resolveAdaptiveLatencyConfig(config?: AdaptLatencyTargetConfig):
   // first dropped frame, slamming `widenBias` to its ceiling and holding
   // the target there; a negative divisor inverts the feedback, so drops
   // subtract events instead of adding them.
+  //
+  // A *fractional* one divides up rather than down, which is the same
+  // failure arriving quietly: `Math.floor(1 / 0.5)` is two failure events
+  // out of one dropped frame, and 0.1 is ten of them. Measured against the
+  // defaults, one late frame peaked the published target at 0.28s with a
+  // budget of 1, 0.40s at 0.5 and 0.84s at 0.1 — where the default budget
+  // of 10 reads one drop as what it is, no evidence at all. So the count
+  // is a count: this divisor exists to say "only in bulk", and any value
+  // below 1 says the opposite.
   if (
     supplied.dropsPerEvent !== undefined &&
-    (!Number.isFinite(supplied.dropsPerEvent) || supplied.dropsPerEvent <= 0)
+    (!Number.isInteger(supplied.dropsPerEvent) || supplied.dropsPerEvent <= 0)
   ) {
     throw new RangeError(
-      `adaptiveLatency.dropsPerEvent (${supplied.dropsPerEvent}) must be a finite positive count: it divides the ` +
-        'late-frame drop delta into failure events, so zero makes one dropped frame an unbounded number of them ' +
-        'and a negative value inverts the feedback.'
+      `adaptiveLatency.dropsPerEvent (${supplied.dropsPerEvent}) must be a positive whole number of frames: it ` +
+        'divides the late-frame drop delta into failure events, so zero makes one dropped frame an unbounded number ' +
+        'of them, a negative value inverts the feedback, and a fraction amplifies one drop into several.'
     );
   }
   if (supplied.maxWidenRatePerSecond !== undefined && supplied.maxWidenRatePerSecond >= budget) {

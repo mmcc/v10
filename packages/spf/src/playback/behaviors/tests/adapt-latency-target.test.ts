@@ -459,6 +459,18 @@ describe('resolveAdaptiveLatencyConfig', () => {
     expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 1 } })).not.toThrow();
   });
 
+  // The same failure the other way up: a divisor below 1 divides *up*, so
+  // one dropped frame becomes several failure events. Measured on the
+  // behavior with the default tuning, a single drop peaked the published
+  // target at 0.28s with a budget of 1, 0.40s at 0.5 and 0.84s at 0.1 —
+  // against 0.16s (no event at all) at the default budget of 10.
+  it('throws on a fractional drop budget, which divides one drop into several events', () => {
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 0.5 } })).toThrow(RangeError);
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 0.1 } })).toThrow(RangeError);
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 10.5 } })).toThrow(RangeError);
+    expect(() => resolveAdaptiveLatencyConfig({ adaptiveLatency: { dropsPerEvent: 10 } })).not.toThrow();
+  });
+
   it('throws on an inverted target range', () => {
     expect(() =>
       resolveAdaptiveLatencyConfig({ adaptiveLatency: { minTargetLatency: 2, maxTargetLatency: 1 } })
