@@ -310,6 +310,10 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
    * warm-up gate, which is what makes the reconnected subscription describe
    * itself: `adaptLatencyTarget` holds its last proposal while
    * `sampleCount` is short, exactly as it does for a subscriber handoff.
+   * The restarted `sampleCount` is also how that controller *recognises*
+   * the new epoch — a count that goes backwards is a resubscribe, and it
+   * re-baselines its observation window on it. Publishing a count that only
+   * ever rises would leave the window counting from before the outage.
    */
   const resetArrivalBaseline = (): void => {
     lastArrivalMs = undefined;

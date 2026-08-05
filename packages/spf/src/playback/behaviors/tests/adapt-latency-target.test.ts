@@ -341,6 +341,44 @@ describe('adaptLatencyTarget', () => {
     reactor.destroy();
   });
 
+  // The same fresh epoch, arriving without an actor swap: the auth-expiry
+  // resubscribe drops the subscriber's arrival baseline, so the envelope
+  // restarts on the very object the controller is already watching. Only the
+  // sample count re-arms by itself — the observation window kept counting
+  // from an epoch that had ended, so 60 quick post-reconnect frames satisfied
+  // both halves of the gate with under a second of new observation behind
+  // them, and the moment just after a path failure is when its envelope reads
+  // narrowest.
+  it('re-baselines the observation window when the arrival envelope restarts', async () => {
+    const { subscriber, setArrivalJitter } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    setArrivalJitter(200);
+    const reactor = adaptLatencyTarget.setup(deps);
+
+    await vi.advanceTimersByTimeAsync(WARM_MS);
+    const settled = deps.state.adaptiveTargetLatency.get()!;
+    expect(settled).toBeCloseTo(0.4, 3);
+
+    // Reconnected: one frame establishes the new baseline, and a jitter-free
+    // envelope is what a single sample always looks like.
+    setArrivalJitter(0, 1);
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+
+    // The count is back over the threshold well inside `warmupSeconds`.
+    setArrivalJitter(0, DEFAULT_ADAPTIVE_LATENCY_CONFIG.minArrivalSamples);
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
+    expect(deps.state.adaptiveTargetLatency.get()).toBe(settled);
+
+    // And once the window really has elapsed the reconnected path speaks for
+    // itself, narrowing from the held proposal rather than stepping to it.
+    await vi.advanceTimersByTimeAsync(20_000);
+    const narrowed = deps.state.adaptiveTargetLatency.get()!;
+    expect(narrowed).toBeLessThan(settled);
+    expect(narrowed).toBeGreaterThan(DEFAULT_ADAPTIVE_LATENCY_CONFIG.minTargetLatency);
+
+    reactor.destroy();
+  });
+
   it('clears its proposal when the last subscriber goes away', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);

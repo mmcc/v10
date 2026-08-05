@@ -111,6 +111,11 @@
  * existing consumer → catalog → default chain. Same discipline as
  * `hasGoodEstimate` in the bandwidth estimator: publishing a target
  * computed from three frames is worse than publishing none.
+ *
+ * Both halves re-arm together whenever the observation epoch restarts — a
+ * subscriber handoff, or the subscriber dropping its own arrival baseline
+ * across an auth-expiry resubscribe. Re-arming only the sample count would
+ * leave the window counting from an epoch that had ended.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -440,6 +445,12 @@ function setupAdaptLatencyTarget({
   let seenUnderruns = 0;
   let seenDrops = 0;
   /**
+   * Arrival count the controlled subscriber last reported, so a count that
+   * goes *backwards* can be recognised as a new measurement epoch on the
+   * same actor — see `evaluate`.
+   */
+  let seenArrivalSamples = 0;
+  /**
    * Late-frame drops counted but not yet worth a failure event.
    *
    * `dropsPerEvent` is a threshold on the *total*, not on one evaluation's
@@ -463,8 +474,22 @@ function setupAdaptLatencyTarget({
     seenSkips = 0;
     seenUnderruns = 0;
     seenDrops = 0;
+    seenArrivalSamples = 0;
     dropCarry = 0;
     state.adaptiveTargetLatency.set(undefined);
+  };
+
+  /**
+   * Start a fresh observation epoch: nothing measured before `now` is
+   * evidence about the delivery the controller is watching from here.
+   *
+   * Both halves move together, because a fresh epoch is exactly as suspect
+   * as a failure — `warmupSeconds` before anything is published at all, and
+   * `quietSeconds` before the target may narrow again.
+   */
+  const beginObservationEpoch = (now: number): void => {
+    observedSince = now;
+    quietUntil = now + adaptive.quietSeconds * 1000;
   };
 
   /**
@@ -487,10 +512,7 @@ function setupAdaptLatencyTarget({
     if (subscriber !== lastSubscriber) {
       const isHandoff = lastSubscriber !== undefined;
       lastSubscriber = subscriber;
-      if (isHandoff) {
-        observedSince = now;
-        quietUntil = now + adaptive.quietSeconds * 1000;
-      }
+      if (isHandoff) beginObservationEpoch(now);
     }
     if (!subscriber) return;
 
@@ -533,6 +555,20 @@ function setupAdaptLatencyTarget({
 
     // --- warm-up gate --------------------------------------------------
     const jitter = subscriber.snapshot.get().context.arrivalJitter;
+    // **An envelope can restart without the actor changing.** The auth-expiry
+    // resubscribe drops the subscriber's arrival baseline
+    // (`resetArrivalBaseline`), which is a new measurement epoch on the very
+    // object the controller is already watching, and only the *sample count*
+    // half of the gate below re-arms by itself. The observation window would
+    // go on counting from an epoch that had ended, so a burst of
+    // `minArrivalSamples` post-reconnect frames satisfies both halves with
+    // well under `warmupSeconds` of new observation behind them — and the
+    // moment just after a path failure is precisely when its envelope reads
+    // narrowest, so the proposal it produces is the lowest target at the
+    // worst time to propose one. A count that went backwards identifies the
+    // restart, the same rule `counterDelta` applies to the failure counters.
+    if (jitter !== undefined && jitter.sampleCount < seenArrivalSamples) beginObservationEpoch(now);
+    seenArrivalSamples = jitter?.sampleCount ?? 0;
     const warm =
       jitter !== undefined &&
       jitter.sampleCount >= adaptive.minArrivalSamples &&
