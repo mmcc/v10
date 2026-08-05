@@ -828,6 +828,49 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
+  // The half of that reset round 2 stopped short of. Clearing the memories
+  // stops the controller *deciding* anything about the replacement from the
+  // track that left, but the memories are not what the renderers read — the
+  // published rate is, and the guards between the reset and the next rate
+  // decision return without touching it. A replacement that has not buffered
+  // a frame yet has no depth to measure, so the evaluation returns at
+  // `depth === undefined` and leaves the old track's nudge driving both
+  // renderers, for as long as the replacement takes to fill.
+  it('parks its outputs when the controlled track changes', async () => {
+    const first = fakeSubscriber();
+    const deps = makeDeps(first.subscriber);
+    deps.state.targetLatency.set(0.5);
+    const reactor = syncLatency.setup(deps);
+
+    // 0.4s over target: draining at +5%.
+    first.setBufferDepth(0.9);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(0.9, 3);
+
+    // The replacement is subscribed but still filling — no delivery edge, so
+    // nothing about it can be measured. Draining a buffer that is trying to
+    // fill is the opposite of what it needs, and the reported latency belongs
+    // to a track that is gone.
+    const second = fakeSubscriber();
+    deps.context.audioSubscriberActor.set(second.subscriber);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+    expect(deps.state.measuredLatency.get()).toBeUndefined();
+
+    // Once it has an edge it is controlled on its own reading, in the same
+    // evaluation that takes it: parking is what happens instead of steering,
+    // not a tick spent waiting.
+    second.setBufferDepth(0.9);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deps.state.measuredLatency.get()).toBeCloseTo(0.9, 3);
+    expect(deps.state.playoutRate.get()).toBeCloseTo(1.05);
+
+    reactor.destroy();
+  });
+
   it('counts catch-up skips as the cost side of the target it is holding', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);

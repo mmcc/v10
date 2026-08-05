@@ -344,8 +344,28 @@ function setupSyncLatency({
    * inherited direction is the same mistake at lower volume: the replacement
    * is held at a nudged rate for a deviation inside its own deadband, which
    * is the band that means do nothing.
+   *
+   * The published outputs are per-track on the same grounds, and clearing the
+   * memories is not enough to reset them — see `parkOutputs`.
    */
   let controlledSubscriber: TrackSubscriberActor | undefined;
+
+  /**
+   * Stop steering, without going inactive: rate 1 (`stable` is the name for
+   * "not correcting"), and no measured latency, because there is not one.
+   *
+   * The memories above are what the controller *decides* from; these are what
+   * the renderers and the UI actually read, and they are latched — a published
+   * rate goes on being applied by both renderers until something publishes
+   * another one. So every path that stops the controller reaching a rate
+   * decision has to park them on the way out, or the last decision taken about
+   * some other track, or some other epoch, keeps driving playout.
+   */
+  const parkOutputs = (): void => {
+    state.playoutRate.set(1);
+    state.playoutState.set('stable');
+    state.measuredLatency.set(undefined);
+  };
 
   const derivedStateSignal = computed<FsmState>(() =>
     context.videoSubscriberActor.get() || context.audioSubscriberActor.get() ? 'controlling' : 'inactive'
@@ -424,13 +444,26 @@ function setupSyncLatency({
     const clockOwnerSubscriber = owner === 'audio' ? audio : owner === 'video' ? video : undefined;
     const subscriber = clockOwnerSubscriber ?? (hasEdge(audio) ? audio : hasEdge(video) ? video : (audio ?? video));
     // Per-subscriber memory, and this is the only place the subscriber can
-    // change (see `controlledSubscriber`). Nothing else has to be undone: the
-    // rate is re-decided from this evaluation's own deviation below, and the
-    // first `undefined` on the way in is not a handoff either way.
+    // change (see `controlledSubscriber`). The first `undefined` on the way in
+    // is not a handoff either way.
     if (subscriber !== controlledSubscriber) {
+      const isHandoff = controlledSubscriber !== undefined;
       controlledSubscriber = subscriber;
       correcting = 0;
       catchUpArmed = false;
+      // **The published outputs are per-track too, and clearing the memories
+      // does not clear them.** They are latched: the renderers go on applying
+      // the last rate published until another one is. The memories only govern
+      // what this evaluation *decides*, and it may not reach a decision at all
+      // — a replacement subscribed but still filling has no delivery edge, so
+      // the guard below returns and the departed track's nudge stays in force
+      // for however long the fill takes, draining a buffer that is trying to
+      // fill while `measuredLatency` reports a distance to a track that is
+      // gone. Parked here rather than after the guards, because a handoff is
+      // the point at which the old values stopped describing anything;
+      // whenever this evaluation does reach a decision it overwrites them in
+      // the same pass, so nothing is spent waiting.
+      if (isHandoff) parkOutputs();
     }
     // Published before the guards below: the resolved setpoint is a fact
     // about the configuration, readable from the moment the controller is
