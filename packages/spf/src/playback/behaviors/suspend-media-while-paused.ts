@@ -44,7 +44,7 @@ import { defineBehavior } from '../../core/composition/create-composition';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
 import { preferredTargetLatencySeconds } from '../../media/moq/timeline';
-import { DEFAULT_LATENCY_CONTROL_CONFIG, type LatencyControlConfig } from './sync-latency';
+import { type LatencyControlConfig, resolveLatencyControlConfig } from './sync-latency';
 
 export interface SuspendMediaWhilePausedState {
   /** Adapter-written pause flag; `undefined` means playing. */
@@ -88,7 +88,7 @@ export const suspendMediaWhilePaused = defineBehavior({
     };
     config?: SuspendMediaWhilePausedConfig;
   }) => {
-    const latencyConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
+    const latencyConfig: LatencyControlConfig = resolveLatencyControlConfig(config?.latency);
 
     // setTimeout coerces a non-finite or negative delay to "fire now", so
     // an invalid consumer `targetLatency` or `pauseHoldSeconds` would turn

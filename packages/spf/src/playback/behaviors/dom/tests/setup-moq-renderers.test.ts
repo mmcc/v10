@@ -450,6 +450,24 @@ describe('setupVideoRenderer', () => {
     reactor.destroy();
   });
 
+  // The last layer of the chain, and the one that used to get through: with
+  // nothing else stating a target there is nothing below a config default to
+  // fall through to, so `resolveLatencyControlConfig` replaces it before the
+  // renderer ever sees it.
+  it('keeps the target clock finite when the configured default is unusable', async () => {
+    vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
+    const { context, reactor } = setupSetupVideoRenderer({ latency: { defaultTargetLatency: Number.NaN } });
+
+    await vi.waitFor(() => expect(createVideoRendererActor).toHaveBeenCalledTimes(1));
+    const { getTargetClockUs } = vi.mocked(createVideoRendererActor).mock.calls[0]![0];
+
+    // No consumer target, no catalog target: the built-in 0.5s default.
+    context.videoSubscriberActor.set(makeFakeSubscriber(4_000_000));
+    expect(getTargetClockUs!()).toBe(3_500_000);
+
+    reactor.destroy();
+  });
+
   it('supplies no target clock with joinAtEdge off', async () => {
     vi.mocked(createVideoRendererActor).mockImplementation(() => makeFakeVideoRenderer());
     const { context, reactor } = setupSetupVideoRenderer({ latency: { joinAtEdge: false } });

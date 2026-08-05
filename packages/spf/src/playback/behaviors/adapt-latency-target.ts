@@ -117,7 +117,7 @@ import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
 import type { TrackSubscriberActor } from '../actors/track-subscriber';
-import { DEFAULT_LATENCY_CONTROL_CONFIG, type LatencyControlConfig, type PlayoutState } from './sync-latency';
+import { type LatencyControlConfig, type PlayoutState, resolveLatencyControlConfig } from './sync-latency';
 
 // =============================================================================
 // State / context / config
@@ -291,7 +291,7 @@ export function resolveAdaptiveLatencyConfig(config?: AdaptLatencyTargetConfig):
   adaptive: AdaptiveLatencyConfig;
   latency: LatencyControlConfig;
 } {
-  const latency: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
+  const latency: LatencyControlConfig = resolveLatencyControlConfig(config?.latency);
   const supplied = config?.adaptiveLatency ?? {};
   const budget = correctionBudgetPerSecond(latency);
 

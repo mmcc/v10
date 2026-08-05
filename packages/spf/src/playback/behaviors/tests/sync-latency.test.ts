@@ -3,7 +3,7 @@ import { signal } from '../../../core/signals/primitives';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
 import type { TrackSubscriberActor, TrackSubscriberContext } from '../../actors/track-subscriber';
 import type { PlayoutState } from '../sync-latency';
-import { syncLatency } from '../sync-latency';
+import { DEFAULT_LATENCY_CONTROL_CONFIG, resolveLatencyControlConfig, syncLatency } from '../sync-latency';
 
 function fakeSubscriber(targetLatencyMs?: number) {
   const track = {
@@ -656,6 +656,42 @@ describe('syncLatency', () => {
     reactor.destroy();
   });
 
+  // The bottom of the chain is the one layer resolution cannot skip, so an
+  // unusable `defaultTargetLatency` reached the controller intact — and every
+  // comparison against `NaN` is false, so the controller reported `stable` at
+  // rate 1 with a measured depth 10s over target and never nudged or skipped,
+  // while publishing `NaN` as the setpoint the renderers' join anchor reads.
+  it('holds a real setpoint when the configured default is unusable', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    const reactor = syncLatency.setup({ ...deps, config: { latency: { defaultTargetLatency: Number.NaN } } });
+
+    setBufferDepth(0.5);
+    await vi.advanceTimersByTimeAsync(600);
+
+    // The built-in default, which is the layer below a config that stated
+    // nothing usable.
+    expect(deps.state.effectiveTargetLatency.get()).toBe(0.5);
+    expect(deps.state.playoutRate.get()).toBe(1);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
+  it('skips a default target that would anchor playout at or past the edge', async () => {
+    const { subscriber, setBufferDepth } = fakeSubscriber();
+    const deps = makeDeps(subscriber);
+    const reactor = syncLatency.setup({ ...deps, config: { latency: { defaultTargetLatency: -1 } } });
+
+    setBufferDepth(0.5);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(deps.state.effectiveTargetLatency.get()).toBe(0.5);
+    expect(deps.state.playoutState.get()).toBe('stable');
+
+    reactor.destroy();
+  });
+
   it('counts catch-up skips as the cost side of the target it is holding', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
@@ -698,5 +734,33 @@ describe('syncLatency', () => {
     expect(deps.state.measuredLatency.get()).toBeUndefined();
 
     reactor.destroy();
+  });
+});
+
+describe('resolveLatencyControlConfig', () => {
+  it('merges a partial config over the defaults', () => {
+    expect(resolveLatencyControlConfig()).toEqual(DEFAULT_LATENCY_CONTROL_CONFIG);
+    expect(resolveLatencyControlConfig({ deadband: 0.1, defaultTargetLatency: 2 })).toEqual({
+      ...DEFAULT_LATENCY_CONTROL_CONFIG,
+      deadband: 0.1,
+      defaultTargetLatency: 2,
+    });
+  });
+
+  // Every other layer of the target chain can be skipped for stating
+  // something no clock can hold; this one cannot, because there is nothing
+  // below it — so it is replaced here instead, once, for all four readers.
+  it('replaces a default target no clock can hold', () => {
+    for (const unusable of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY]) {
+      expect(resolveLatencyControlConfig({ defaultTargetLatency: unusable }).defaultTargetLatency).toBe(
+        DEFAULT_LATENCY_CONTROL_CONFIG.defaultTargetLatency
+      );
+    }
+    // Every other knob is left exactly as stated: this replaces one broken
+    // number, it does not vet the config.
+    expect(resolveLatencyControlConfig({ defaultTargetLatency: Number.NaN, rateNudge: 0.2 })).toEqual({
+      ...DEFAULT_LATENCY_CONTROL_CONFIG,
+      rateNudge: 0.2,
+    });
   });
 });

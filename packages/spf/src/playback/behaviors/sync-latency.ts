@@ -98,6 +98,7 @@ import { createMachineReactor } from '../../core/reactors/create-machine-reactor
 import { computed, peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
 import {
   bufferDepthSeconds,
+  isUsableTargetSeconds,
   preferredTargetLatencySeconds,
   resolveTargetLatencySeconds,
 } from '../../media/moq/timeline';
@@ -149,7 +150,12 @@ export interface SyncLatencyConfig {
 }
 
 export interface LatencyControlConfig {
-  /** Fallback target latency in seconds. */
+  /**
+   * Fallback target latency in seconds — the bottom of the resolution
+   * chain, so it is the one layer that has nothing below it to fall
+   * through to. An unusable value here is replaced by the built-in
+   * default; see `resolveLatencyControlConfig`.
+   */
   defaultTargetLatency: number;
   /**
    * Latency deviation (seconds) tolerated before a rate nudge **engages**.
@@ -201,6 +207,40 @@ export const DEFAULT_LATENCY_CONTROL_CONFIG: LatencyControlConfig = {
 };
 
 /**
+ * Merge a host's partial latency config over the defaults, and **complete
+ * the target chain's safety guarantee at its one open end.**
+ *
+ * `resolveTargetLatencySeconds` skips any layer that states a target no
+ * clock can hold (`isUsableTargetSeconds`) — consumer input, the adaptive
+ * proposal, the catalog. `defaultTargetLatency` is the exception, because
+ * it is the bottom of the chain: skipping it would leave nothing to
+ * return. So a `{ latency: { defaultTargetLatency: NaN } }` reached the
+ * controller and the renderers' join anchor intact, and by the route the
+ * chain was hardened to close — one read leaves the video self-clock
+ * permanently `NaN` (it writes each slew correction back as its own
+ * anchor) and parks the nudge at `1 − rateNudge`, both silently.
+ *
+ * Sanitized rather than thrown, for the same reason every other layer is:
+ * an unusable target is *no statement*, and the layer below a config
+ * default is the built-in one. It is also the precedent the neighbouring
+ * knob already sets — `video-renderer` clamps `clockSlewRate` into
+ * `[0, 0.9]` rather than trusting the config. Values a caller set
+ * deliberately as a *relationship* between two knobs still throw; that is
+ * `resolveAdaptiveLatencyConfig`'s job, and a single broken number is not
+ * that.
+ *
+ * Every consumer of `LatencyControlConfig` resolves it through here — the
+ * controller, both renderer setups, and the pause-hold derivation — so the
+ * guarantee holds wherever the config is read rather than wherever someone
+ * remembered to check.
+ */
+export function resolveLatencyControlConfig(latency?: Partial<LatencyControlConfig>): LatencyControlConfig {
+  const merged: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...latency };
+  if (isUsableTargetSeconds(merged.defaultTargetLatency)) return merged;
+  return { ...merged, defaultTargetLatency: DEFAULT_LATENCY_CONTROL_CONFIG.defaultTargetLatency };
+}
+
+/**
  * How close to the target an engaged nudge insists on getting before it
  * releases, in seconds.
  *
@@ -249,7 +289,7 @@ function setupSyncLatency({
   };
   config?: SyncLatencyConfig;
 }): Reactor<FsmState | 'destroying' | 'destroyed'> {
-  const controlConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
+  const controlConfig = resolveLatencyControlConfig(config?.latency);
   const reclaimBand = reclaimBandSeconds(controlConfig);
 
   /**

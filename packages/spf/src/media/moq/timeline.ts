@@ -144,7 +144,7 @@ export function bufferDepthSeconds(newestTimestampUs: number, playoutTimestampUs
  * `<simple-moq-video>` applies to its `target-latency` attribute, applied
  * where every source of a target passes rather than only that one.
  */
-function isUsableTargetSeconds(seconds: number | undefined): seconds is number {
+export function isUsableTargetSeconds(seconds: number | undefined): seconds is number {
   return seconds !== undefined && Number.isFinite(seconds) && seconds > 0;
 }
 
@@ -157,6 +157,12 @@ function isUsableTargetSeconds(seconds: number | undefined): seconds is number {
  * A layer that states something unusable (see `isUsableTargetSeconds`) is
  * skipped rather than honored — including the catalog, which is a remote
  * publisher's number and the one layer nothing else validates.
+ *
+ * `defaultTargetSeconds` is the one layer this function cannot skip: it is
+ * the bottom of the chain, so there is nothing below it to fall through
+ * to. It is guaranteed usable by `resolveLatencyControlConfig`, which is
+ * where every caller's `LatencyControlConfig` comes from — pass a raw
+ * `config.latency` here and the guarantee is gone.
  */
 export function resolveTargetLatencySeconds(
   consumerTargetSeconds: number | undefined,

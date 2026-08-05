@@ -57,7 +57,7 @@ import {
 } from '../../actors/dom/audio-renderer';
 import { createVideoRendererActor, type VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
-import { DEFAULT_LATENCY_CONTROL_CONFIG, type LatencyControlConfig } from '../sync-latency';
+import { type LatencyControlConfig, resolveLatencyControlConfig } from '../sync-latency';
 
 // =============================================================================
 // Shared state/context shapes
@@ -202,7 +202,7 @@ function setupAudioRendererSetup({
   };
   config?: MoqRendererConfig;
 }): Reactor<'preconditions-unmet' | 'renderer-active' | 'destroying' | 'destroyed'> {
-  const latencyConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
+  const latencyConfig: LatencyControlConfig = resolveLatencyControlConfig(config?.latency);
   const derivedStateSignal = computed(() =>
     context.audioContext.get() ? ('renderer-active' as const) : ('preconditions-unmet' as const)
   );
@@ -286,7 +286,7 @@ function setupVideoRendererSetup({
   };
   config?: MoqRendererConfig;
 }): Reactor<'preconditions-unmet' | 'renderer-active' | 'destroying' | 'destroyed'> {
-  const latencyConfig: LatencyControlConfig = { ...DEFAULT_LATENCY_CONTROL_CONFIG, ...config?.latency };
+  const latencyConfig: LatencyControlConfig = resolveLatencyControlConfig(config?.latency);
   const derivedStateSignal = computed(() =>
     context.renderSurface.get() ? ('renderer-active' as const) : ('preconditions-unmet' as const)
   );
