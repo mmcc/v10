@@ -65,6 +65,19 @@ export interface MoqMediaProps {
   /** Target latency in seconds. */
   targetLatency: number | undefined;
   /**
+   * Let the engine choose the target latency from observed delivery
+   * instead of holding a fixed one. An explicit `targetLatency` still
+   * wins — this only fills in where the consumer stated nothing.
+   *
+   * Tri-state, the same shape `targetLatency` has: `undefined` is not
+   * "off", it is *unstated*, and it defers to
+   * `engineConfig.adaptiveLatency.enabled` (itself off by default).
+   * Reading it back reports the override rather than the effective state,
+   * so a host that enabled adaptation through config sees `undefined`
+   * here and a proposal in `adaptiveTargetLatency`.
+   */
+  adaptiveLatency: boolean | undefined;
+  /**
    * Begin playback as soon as a source is set, without waiting for
    * `play()`. Autoplay policy still gates the audio clock: outside a user
    * gesture the AudioContext cannot resume, so video starts on the
@@ -78,6 +91,7 @@ export const moqMediaDefaultProps: MoqMediaProps = {
   src: '',
   preload: '',
   targetLatency: undefined,
+  adaptiveLatency: undefined,
   autoplay: false,
 };
 
@@ -98,6 +112,15 @@ export interface MoqMediaAPI extends MoqMediaProps {
   /** Live streams have no bounded duration. */
   readonly duration: number;
   readonly measuredLatency: number | undefined;
+  /**
+   * The target the latency controller is actually holding, in seconds,
+   * after consumer → adaptive → catalog → default resolution. Pair it
+   * with `measuredLatency` to read the controller: they are the setpoint
+   * and the process variable.
+   */
+  readonly effectiveTargetLatency: number | undefined;
+  /** The adaptive controller's proposal, or `undefined` when it has none. */
+  readonly adaptiveTargetLatency: number | undefined;
 }
 
 /**
@@ -201,6 +224,18 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     set targetLatency(value: number | undefined) {
       this.#signals.state.targetLatency.set(value);
+    }
+
+    get adaptiveLatency(): boolean | undefined {
+      // The slot itself, not `?? false`: collapsing unstated to false made
+      // this getter report adaptation off while it was running from
+      // `engineConfig.adaptiveLatency.enabled`, and left no way to hand the
+      // decision back to config once the property had been written.
+      return this.#signals.state.adaptiveLatencyEnabled.get();
+    }
+
+    set adaptiveLatency(value: boolean | undefined) {
+      this.#signals.state.adaptiveLatencyEnabled.set(value);
     }
 
     get autoplay(): boolean {
@@ -402,6 +437,14 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     get measuredLatency(): number | undefined {
       return this.#signals.state.measuredLatency.get();
+    }
+
+    get effectiveTargetLatency(): number | undefined {
+      return this.#signals.state.effectiveTargetLatency.get();
+    }
+
+    get adaptiveTargetLatency(): number | undefined {
+      return this.#signals.state.adaptiveTargetLatency.get();
     }
 
     destroy(): void {

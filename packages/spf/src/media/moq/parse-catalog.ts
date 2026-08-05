@@ -57,6 +57,13 @@ export interface MoqCatalogTrack {
   renderGroup?: number;
   altGroup?: number;
   targetLatency?: number;
+  /**
+   * Publisher-declared minimum buffer in milliseconds (msf-01 §5.2.9) —
+   * the packaging/encode jitter a receiver has to absorb even on a perfect
+   * path. Read by the adaptive latency controller as one additive term of
+   * its margin; unused by the fixed-setpoint chain.
+   */
+  jitter?: number;
   buffers?: { target?: number; min?: number; max?: number };
   maxGopDuration?: number;
   maxGroupDuration?: number;
@@ -88,6 +95,8 @@ export interface MoqTrackFields {
   renderGroup?: number;
   altGroup?: number;
   targetLatency?: number;
+  /** Publisher-declared minimum buffer in milliseconds (msf-01 §5.2.9). */
+  jitter?: number;
   buffers?: { target?: number; min?: number; max?: number };
   maxGopDuration?: number;
   maxGroupDuration?: number;
@@ -223,6 +232,7 @@ function parseCatalogTrackFields(
   fields.renderGroup = number(raw.renderGroup);
   fields.altGroup = number(raw.altGroup);
   fields.targetLatency = number(raw.targetLatency);
+  fields.jitter = number(raw.jitter);
   fields.maxGopDuration = number(raw.maxGopDuration);
   fields.maxGroupDuration = number(raw.maxGroupDuration);
   fields.temporalId = number(raw.temporalId);
@@ -276,8 +286,8 @@ export interface MoqCatalogUpdateOptions {
 /**
  * Apply one catalog object to the current catalog state. An independent
  * catalog (no `deltaUpdate`) replaces the state; a delta update requires
- * a current catalog and applies its `add`/`remove`/`clone` operations in
- * order (§5.1.6). Returns the new catalog.
+ * a current catalog and applies its `add`/`remove`/`clone`/`update`
+ * operations in order (§5.1.6). Returns the new catalog.
  */
 export function applyMoqCatalogUpdate(
   current: MoqCatalog | undefined,
@@ -367,6 +377,37 @@ function applyDelta(
         }
         break;
       }
+      case 'update': {
+        for (const entry of entries) {
+          // §5.1.6 requires parentName on an update track object, but the
+          // §5.6.4 example identifies its target with `name` — the two
+          // readings of the same draft disagree. Both are accepted: under
+          // the strict one, a publisher following the spec's own example
+          // takes down the catalog subscription.
+          const targetName = isString(entry.parentName) ? entry.parentName : entry.name;
+          // Names both, because both are accepted: an error that says
+          // `parentName` sends a publisher following §5.6.4's example
+          // looking for a field this reader does not require.
+          if (!isString(targetName)) {
+            throw new Error('MSF update operation is missing parentName (or name) to identify its target');
+          }
+          const scope = isString(entry.parentName) ? entry.parentNamespace : entry.namespace;
+          const targetNamespace = isString(scope) ? parseNamespaceString(scope) : options.catalogNamespace;
+          const index = tracks.findIndex(
+            (track) => keyOf(track.namespace, track.name) === keyOf(targetNamespace, targetName)
+          );
+          // msf-01 does not say what to do when the target is absent.
+          // Treated as an error, matching clone's unknown-parent handling
+          // and §5.3's "evaluation continues until all operations are
+          // successfully applied".
+          if (index === -1) throw new Error(`MSF update operation references unknown track ${targetName}`);
+          // Declared attributes override, absent ones survive (§5.1.6), and
+          // the track holds its position so a later operation sees the list
+          // the publisher built.
+          tracks[index] = { ...tracks[index]!, ...pruneUndefined(parseCatalogTrackFields(entry, initDataList)) };
+        }
+        break;
+      }
       default:
         throw new Error(`unknown MSF delta operation ${operation.op}`);
     }
@@ -416,6 +457,7 @@ function moqFieldsOf(track: MoqCatalogTrack): MoqTrackFields {
   if (track.renderGroup !== undefined) fields.renderGroup = track.renderGroup;
   if (track.altGroup !== undefined) fields.altGroup = track.altGroup;
   if (track.targetLatency !== undefined) fields.targetLatency = track.targetLatency;
+  if (track.jitter !== undefined) fields.jitter = track.jitter;
   if (track.buffers !== undefined) fields.buffers = track.buffers;
   if (track.maxGopDuration !== undefined) fields.maxGopDuration = track.maxGopDuration;
   if (track.maxGroupDuration !== undefined) fields.maxGroupDuration = track.maxGroupDuration;

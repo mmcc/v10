@@ -75,7 +75,7 @@ function isValidPreload(value: string | null): value is MoqMediaProps['preload']
  * `playbackRate` (live-only), and `textTracks` (no text renderer yet).
  */
 class SimpleMoqMediaImpl extends MoqMediaBase {
-  static readonly observedAttributes = ['autoplay', 'src', 'preload', 'target-latency', 'muted'];
+  static readonly observedAttributes = ['autoplay', 'src', 'preload', 'target-latency', 'adaptive-latency', 'muted'];
   static shadowRootOptions: ShadowRootInit = { mode: 'open' };
 
   readonly #canvas: HTMLCanvasElement;
@@ -163,6 +163,13 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       // false, so latency control silently stops).
       const parsed = isNull(newValue) ? Number.NaN : Number(newValue);
       this.targetLatency = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+    } else if (name === 'adaptive-latency') {
+      // Presence-based, like `autoplay`: this is a *request*, not a
+      // number, so it routes to its own slot rather than widening
+      // `targetLatency`, and an element that never carries the attribute
+      // never writes the slot at all — leaving the engine config's own
+      // default (off) in charge. `target-latency` still wins over it.
+      this.adaptiveLatency = !isNull(newValue);
     } else if (name === 'muted') {
       // `muted` is the *default* muted state per spec: removing the
       // attribute must not unmute an element the user muted.

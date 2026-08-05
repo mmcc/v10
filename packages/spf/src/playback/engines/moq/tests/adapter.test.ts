@@ -189,6 +189,30 @@ describe('MoqMediaMixin', () => {
     media.destroy();
   });
 
+  // Tri-state, the same shape `targetLatency` has: the engine reads
+  // `undefined` as *unstated* and defers to `adaptiveLatency.enabled`, so a
+  // facade that collapsed it to `false` reported adaptation off while it was
+  // running and could never hand the decision back to config.
+  it('keeps the adaptive-latency request unstated until something states it', () => {
+    const media = new MoqMediaElement({
+      createAudioContext: () => createFakeAudioContext('running'),
+      engineConfig: { adaptiveLatency: { enabled: true } },
+    });
+
+    expect(media.adaptiveLatency).toBeUndefined();
+    expect(media.engine.state.adaptiveLatencyEnabled.get()).toBeUndefined();
+
+    media.adaptiveLatency = false;
+    expect(media.adaptiveLatency).toBe(false);
+    expect(media.engine.state.adaptiveLatencyEnabled.get()).toBe(false);
+
+    media.adaptiveLatency = undefined;
+    expect(media.adaptiveLatency).toBeUndefined();
+    expect(media.engine.state.adaptiveLatencyEnabled.get()).toBeUndefined();
+
+    media.destroy();
+  });
+
   it('starts playback from autoplay and defers audio while the context is suspended', async () => {
     const audioContext = createFakeAudioContext('suspended');
     // Chromium's pre-gesture shape: resume() parks until user activation.
