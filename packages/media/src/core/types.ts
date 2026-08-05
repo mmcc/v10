@@ -674,7 +674,7 @@ export interface MediaCaptureToggleCapability {
 
 /** Point-in-time health counters for an active publish session. */
 export interface MediaPublishStats {
-  /** Encoded video frames per second over the last sample window. */
+  /** Encoded video frames per second over the last sample window; `NaN` when unknown. */
   readonly encodedFps: number;
   /** Outgoing video bitrate in bits per second; `NaN` when unknown. */
   readonly videoBitrate: number;
