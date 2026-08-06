@@ -220,6 +220,31 @@ describe('createMoqSessionActor', () => {
     actor.destroy();
   });
 
+  it('skips token resolution for an unparseable URL so the URL error survives a failing provider', async () => {
+    // composePlaybackConnectUrl cannot attach a token to a URL it cannot
+    // parse, so resolving one is wasted work — and a throwing provider
+    // would replace the canonical `new WebTransport(url)` failure with an
+    // auth error, hiding the real fault (a malformed connect URL).
+    const fake = createFakeTransport();
+    const getToken = vi.fn(() => {
+      throw new Error('provider exploded');
+    });
+    const actor = createMoqSessionActor({
+      source: makeSource({ connectUrl: 'not a url', c4mToken: 'ignored' }),
+      createTransport: makeCreateTransport(fake),
+      authProvider: { getToken },
+    });
+
+    fake.sendServerSetup();
+    await vi.waitFor(() => {
+      expect(actor.snapshot.get().context.status).toBe('ready');
+    });
+    expect(makeCreateTransport.lastConnect?.connectUrl).toBe('not a url');
+    expect(getToken).not.toHaveBeenCalled();
+
+    actor.destroy();
+  });
+
   // The actor connects exactly once (no reconnect path — a goaway is only
   // recorded), so a refreshed token would have no connection left to
   // attach to: the jwt is fixed at connect time. Rejecting must happen

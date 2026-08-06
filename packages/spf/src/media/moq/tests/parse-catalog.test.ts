@@ -609,6 +609,47 @@ describe('moqCatalogToPresentation', () => {
     expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual([moqTrackId(BOB, 'video')]);
   });
 
+  it('keeps a name containing / out of the sibling namespace it reads like', () => {
+    // `/` is a legal byte in a track name, so `conference` + `alice/video`
+    // and `conference/alice` + `video` serialize alike under a plain join —
+    // one id for two feeds, which merges them into one ABR ladder.
+    const text = catalogOf(
+      videoTrack({ name: 'video', namespace: 'conference/alice', bitrate: 2_500_000 }),
+      videoTrack({ name: 'alice/video', namespace: 'conference', bitrate: 800_000 })
+    );
+    const videoSet = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL }));
+
+    expect(videoSet.switchingSets).toHaveLength(2);
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([
+      moqTrackId(['conference', 'alice'], 'video'),
+    ]);
+    expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual([
+      moqTrackId(['conference'], 'alice/video'),
+    ]);
+    // Selection addresses tracks by id, so the confinement is only as good
+    // as the id: two content items may never share one.
+    expect(moqTrackId(['conference', 'alice'], 'video')).not.toBe(moqTrackId(['conference'], 'alice/video'));
+    // The common case — no separator in any field — is untouched.
+    expect(moqTrackId(['conference', 'alice'], 'video')).toBe('conference/alice/video');
+  });
+
+  it('never emits two switching sets with the same id when sanitizing collapses distinct names', () => {
+    // The derived id is a display name: `a b` and `a.b` both sanitize to
+    // `a-b`, and the disambiguating suffix can itself already be taken.
+    const text = catalogOf(
+      videoTrack({ name: 'video', bitrate: 2_500_000 }),
+      videoTrack({ name: 'a.b', bitrate: 800_000 }),
+      videoTrack({ name: 'a-b-3', bitrate: 700_000 }),
+      videoTrack({ name: 'a b', bitrate: 600_000 })
+    );
+    const ids = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL })).switchingSets.map(
+      (switchingSet) => switchingSet.id
+    );
+
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('never merges an ungrouped track into an altGroup by name coincidence', () => {
     // The keys are discriminated: `altGroup: 1` and a track literally
     // named `alt:1` must stay two content items.

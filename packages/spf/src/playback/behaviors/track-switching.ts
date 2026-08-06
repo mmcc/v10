@@ -444,15 +444,27 @@ function filterByUserSelection<S extends SelectionKey, U extends UserSelectionKe
  * sibling sets are *different content* (a MoQ publisher's screen share
  * beside its camera, both role video). Confines the all-sets candidate
  * pool to one active set so the ranking rules downstream never present a
- * content change as a quality switch. Which set is active, in order:
+ * content change as a quality switch.
  *
- * 1. a set containing a `user*TrackSelection` match — the durable
+ * The two selection slots carry different things, which is what the
+ * ordering below encodes: `selected*TrackId` names one track, so it is the
+ * *content* channel; `user*TrackSelection` is a shape (width + height +
+ * bandwidth — the properties multi-CDN copies share), so it is the
+ * *quality* channel and can match a sibling set's rendition by
+ * coincidence. Which set is active, in order:
+ *
+ * 1. the set holding the current selection, when it also satisfies the
+ *    `user*TrackSelection` filter — an ambiguous quality pin (a screen
+ *    share whose dimensions and bitrate equal a camera rendition's) must
+ *    not drag an explicit cross-set selection back to the camera;
+ * 2. the first set containing a `user*TrackSelection` match — the durable
  *    consumer-intent slot, which survives selection clears (constraint
  *    prunes, source hiccups), so an explicit content choice is never
- *    silently reverted to the default;
- * 2. the set containing the current selection — an engine-level
+ *    silently reverted to the default, and a pin naming *only* a sibling
+ *    set still outranks a stale selection;
+ * 3. the set containing the current selection — an engine-level
  *    cross-set `selectedVideoTrackId` write moves the active set;
- * 3. the first (rendered-by-default) set.
+ * 4. the first (rendered-by-default) set.
  *
  * Single-set presentations (HLS) pass through untouched.
  */
@@ -465,15 +477,18 @@ function confineToActiveSwitchingSet<S extends SelectionKey, U extends UserSelec
   const userKey = config.userSelectionKey;
   const userFilter = userKey ? state[userKey]?.get() : undefined;
   const selectedId = state[config.selectionKey].get();
+  // The set carries the presentation's track union; the filter came from the
+  // same presentation's video tracks, so the match is safe. No filter means
+  // every set satisfies it, which collapses the order to selection-then-first.
+  const satisfiesUserFilter = (set: (typeof sets)[number]) =>
+    !userFilter || set.tracks.some((track) => matchesPartialTrack(track as unknown as T, userFilter));
+  const selectedSet = selectedId
+    ? sets.find(({ tracks: setTracks }) => setTracks.some(({ id }) => id === selectedId))
+    : undefined;
   const active =
-    (userFilter
-      ? // The set carries the presentation's track union; the filter came
-        // from the same presentation's video tracks, so the match is safe.
-        sets.find(({ tracks: setTracks }) =>
-          setTracks.some((track) => matchesPartialTrack(track as unknown as T, userFilter))
-        )
-      : undefined) ??
-    (selectedId ? sets.find(({ tracks: setTracks }) => setTracks.some(({ id }) => id === selectedId)) : undefined) ??
+    (selectedSet && satisfiesUserFilter(selectedSet) ? selectedSet : undefined) ??
+    (userFilter ? sets.find(satisfiesUserFilter) : undefined) ??
+    selectedSet ??
     sets[0];
   if (!active) return tracks;
   const activeIds = new Set(active.tracks.map(({ id }) => id));
