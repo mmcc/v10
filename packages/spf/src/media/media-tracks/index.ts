@@ -8,6 +8,7 @@
 
 export type { AudioDedupeKey, AudioTrack, VideoDedupeKey, VideoTrack } from './media-tracks';
 export {
+  activeVideoTrack,
   dedupedAudioTracks,
   dedupedVideoTracks,
   findAudioTrackById,

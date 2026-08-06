@@ -39,15 +39,28 @@ export interface AudioDedupeKey {
 /**
  * The distinct video tracks of a presentation, deduped by {@link VideoDedupeKey} (first occurrence wins).
  *
+ * Entries from sibling switching sets are addressable by `id` only —
+ * {@link toUserVideoTrackSelection} is quality-shaped, so it cannot tell a
+ * screen share from a same-shaped camera rendition. Selecting a *content
+ * item* means writing its `id` to `selectedVideoTrackId`; the quality
+ * criteria then pin the rendition within whichever set that id chose.
+ *
  * Returns `[]` when the presentation is unresolved or has no video tracks.
  */
 export function dedupedVideoTracks(presentation: MaybeResolvedPresentation | undefined): VideoTrack[] {
   if (!presentation) return [];
 
-  return dedupe({
-    tracks: getTracksByType(presentation, 'video') as readonly VideoTrack[],
-    keyFn: toUserVideoTrackSelection,
-  });
+  // Dedupe within each switching set, never across: sibling sets are
+  // distinct content items (a MoQ publisher's camera and screen share),
+  // and a screen track that happens to match a camera rendition's
+  // dimensions/bitrate is not the same track. Set order (rendered set
+  // first) is preserved so consumers see the default content first.
+  const switchingSets = presentation.selectionSets?.find(({ type }) => type === 'video')?.switchingSets ?? [];
+  const tracks: VideoTrack[] = [];
+  for (const switchingSet of switchingSets) {
+    tracks.push(...dedupe({ tracks: switchingSet.tracks as readonly VideoTrack[], keyFn: toUserVideoTrackSelection }));
+  }
+  return tracks;
 }
 
 /**
@@ -65,10 +78,10 @@ export function dedupedAudioTracks(presentation: MaybeResolvedPresentation | und
 
 /**
  * Find a video track by id, searching the same candidate set the engine resolves
- * against ({@link dedupedVideoTracks}'s pre-dedupe source). Returns `undefined`
- * when absent. Maps the engine's resolved `selectedVideoTrackId` back to its
- * properties for `active` reflection — the resolved id may be a per-CDN copy that
- * isn't the representative {@link dedupedVideoTracks} kept.
+ * against ({@link dedupedVideoTracks}'s pre-dedupe source, every switching set).
+ * Returns `undefined` when absent. This is the exact track, which may be a
+ * per-CDN copy the dedupe collapsed away — for the entry to reflect as `active`,
+ * use {@link activeVideoTrack}.
  */
 export function findVideoTrackById(
   presentation: MaybeResolvedPresentation | undefined,
@@ -77,6 +90,31 @@ export function findVideoTrackById(
   if (!presentation || !id) return undefined;
   const track = findTrackById(presentation, id);
   return track?.type === 'video' ? (track as VideoTrack) : undefined;
+}
+
+/**
+ * The {@link dedupedVideoTracks} entry a resolved `selectedVideoTrackId`
+ * belongs to — the one entry a consumer should reflect as `active`.
+ *
+ * Neither half of the lookup is enough alone. Comparing ids against the
+ * exposed list misses, because the engine may resolve to a per-CDN copy the
+ * dedupe collapsed away. Comparing quality keys over-matches, because
+ * sibling switching sets are different content and may hold same-shaped
+ * renditions — a screen share would light up alongside the camera. So the
+ * quality key is resolved *within the id's own switching set*, which is
+ * exactly the scope {@link dedupedVideoTracks} deduped in.
+ *
+ * Returns `undefined` when the id resolves to no video track.
+ */
+export function activeVideoTrack(
+  presentation: MaybeResolvedPresentation | undefined,
+  id: string | undefined
+): VideoTrack | undefined {
+  const resolved = findVideoTrackById(presentation, id);
+  if (!resolved || !presentation) return undefined;
+  const switchingSets = presentation.selectionSets?.find(({ type }) => type === 'video')?.switchingSets ?? [];
+  const owning = switchingSets.find(({ tracks }) => tracks.some((track) => track.id === resolved.id));
+  return (owning?.tracks as readonly VideoTrack[] | undefined)?.find((track) => isSameVideoTrack(track, resolved));
 }
 
 /** Audio counterpart of {@link findVideoTrackById}, for `enabled` reflection. */
@@ -125,6 +163,14 @@ function dedupe<T, K extends object>({
 
 /**
  * Build a partial video track that can be used as `userVideoTrackSelection`.
+ *
+ * Quality-shaped, and only that: width + height + bandwidth are exactly the
+ * properties multi-CDN copies of one rendition share, which is what makes
+ * the criteria re-select all of them. The same property set makes it
+ * content-blind — two switching sets can hold same-shaped renditions of
+ * different content — so this expresses "which rendition", never "which
+ * content item". Content travels by track id (`selectedVideoTrackId`); see
+ * `confineToActiveSwitchingSet`, which resolves the two against each other.
  */
 export function toUserVideoTrackSelection<T extends VideoDedupeKey>(rendition?: T): Partial<VideoTrack> | undefined {
   return rendition ? { width: rendition.width, height: rendition.height, bandwidth: rendition.bandwidth } : undefined;

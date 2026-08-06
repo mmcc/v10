@@ -207,6 +207,11 @@ describe('createMoqEngine', () => {
   });
 
   it('ranks ABR with the MoQ-tuned estimator config, not the segment-tuned defaults', async () => {
+    // `altGroup` is what makes two video tracks a ladder rather than two
+    // things to watch: it is the catalog's statement that they are alternate
+    // representations of the same content, and only tracks that declare it
+    // share a switching set for the ranker to move between (parse-catalog.ts,
+    // `videoAlternatesKey`).
     const catalog = JSON.stringify({
       version: '1',
       tracks: [
@@ -215,6 +220,7 @@ describe('createMoqEngine', () => {
           packaging: 'loc',
           isLive: true,
           role: 'video',
+          altGroup: 1,
           codec: 'vp8',
           width: 1280,
           height: 720,
@@ -225,6 +231,7 @@ describe('createMoqEngine', () => {
           packaging: 'loc',
           isLive: true,
           role: 'video',
+          altGroup: 1,
           codec: 'vp8',
           width: 320,
           height: 180,
