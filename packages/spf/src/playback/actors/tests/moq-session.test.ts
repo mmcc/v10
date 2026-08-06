@@ -195,6 +195,31 @@ describe('createMoqSessionActor', () => {
     actor.destroy();
   });
 
+  it('skips token resolution entirely when the source URL carries an explicit jwt', async () => {
+    // The explicit URL token wins (composePlaybackConnectUrl leaves the
+    // URL untouched), so the provider must not even be consulted: a
+    // minted token would only be discarded, and a provider failure must
+    // not block a connect that already carries its credentials.
+    const fake = createFakeTransport();
+    const getToken = vi.fn(() => {
+      throw new Error('provider exploded');
+    });
+    const actor = createMoqSessionActor({
+      source: makeSource({ connectUrl: 'https://relay.example.com/live?jwt=mine', c4mToken: 'ignored' }),
+      createTransport: makeCreateTransport(fake),
+      authProvider: { getToken },
+    });
+
+    fake.sendServerSetup();
+    await vi.waitFor(() => {
+      expect(actor.snapshot.get().context.status).toBe('ready');
+    });
+    expect(makeCreateTransport.lastConnect?.connectUrl).toBe('https://relay.example.com/live?jwt=mine');
+    expect(getToken).not.toHaveBeenCalled();
+
+    actor.destroy();
+  });
+
   // The actor connects exactly once (no reconnect path — a goaway is only
   // recorded), so a refreshed token would have no connection left to
   // attach to: the jwt is fixed at connect time. Rejecting must happen

@@ -525,7 +525,13 @@ export function parseChannelConfig(channelConfig: string | undefined): number | 
  * viewer is watching is not.
  */
 function videoAlternatesKey(track: MoqVideoTrack): string {
-  return track.moq.altGroup !== undefined ? `alt-${track.moq.altGroup}` : track.moq.name;
+  // Discriminated prefixes so an ungrouped track literally named `alt:1`
+  // can never collide with `altGroup: 1`, and the ungrouped key is the
+  // presentation-unique track id (namespace + name), not the leaf name —
+  // `alice/video` and `bob/video` are different content, not alternates.
+  // altGroup itself stays catalog-scoped: it is the publisher's own
+  // declaration of alternate-ness across the whole catalog.
+  return track.moq.altGroup !== undefined ? `alt:${track.moq.altGroup}` : `track:${track.id}`;
 }
 
 /**
@@ -547,14 +553,18 @@ function videoSwitchingSets(tracks: readonly MoqVideoTrack[]): VideoSwitchingSet
     if (group) group.push(track);
     else groups.set(key, [track]);
   }
-  return [...groups].map(([key, group], index) => ({
+  const usedIds = new Set<string>();
+  return [...groups].map(([key, group], index) => {
     // The rendered set keeps the id it had when every video track shared one
     // set, so a camera-only catalog — every catalog in production today —
-    // projects exactly as it did before screen share existed.
-    id: index === 0 ? 'moq-video-main' : `moq-video-${key}`,
-    type: 'video' as const,
-    tracks: group,
-  }));
+    // projects exactly as it did before screen share existed. Later sets
+    // derive a readable id from the alternates key; sanitizing can collide
+    // ('a/b' vs 'a-b'), so uniqueness is enforced with an index suffix.
+    let id = index === 0 ? 'moq-video-main' : `moq-video-${key.replace(/^track:/, '').replace(/[^\w-]+/g, '-')}`;
+    if (usedIds.has(id)) id = `${id}-${index}`;
+    usedIds.add(id);
+    return { id, type: 'video' as const, tracks: group };
+  });
 }
 
 /**

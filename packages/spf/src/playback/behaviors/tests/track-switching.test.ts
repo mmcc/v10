@@ -455,9 +455,11 @@ describe('switchVideoTrack', () => {
           {
             id: 'video-set',
             type: 'video' as const,
+            // Set ids deliberately differ from every track id so these
+            // tests catch a constraint that wrongly matches set ids.
             switchingSets: [
-              { id: 'camera', type: 'video' as const, tracks: cameraLadder },
-              { id: 'screen', type: 'video' as const, tracks: screenShare },
+              { id: 'camera-set', type: 'video' as const, tracks: cameraLadder },
+              { id: 'screen-set', type: 'video' as const, tracks: screenShare },
             ],
           } as VideoSelectionSet,
         ],
@@ -517,14 +519,32 @@ describe('switchVideoTrack', () => {
       reactor.destroy();
     });
 
-    it('does not offer another switching set to the user-selection filter', async () => {
-      // Not a UI-reachable choice either: the candidate set is the rendered
-      // switching set, so an id from another one falls through to it rather
-      // than silently selecting a track nothing downstream can resolve.
+    it('lets a durable user selection choose a sibling content set — and it outranks the current pick', async () => {
+      // userVideoTrackSelection is the durable consumer-intent slot: it
+      // survives selection clears (constraint prunes, source hiccups), so
+      // it decides the active set — an explicit content choice must never
+      // silently revert to the default camera.
       const state = makeState({
         presentation: createMultiSetPresentation(),
         bandwidthState: createBandwidthState(3_000_000),
+        selectedVideoTrackId: 'camera-720p',
         userVideoTrackSelection: { id: 'screen' },
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('screen');
+
+      reactor.destroy();
+    });
+
+    it('falls back to the rendered set when the user selection matches nothing', async () => {
+      // A stale id (e.g. from a previous source) must not strand playback:
+      // no set matches, so the default camera set is ranked as usual.
+      const state = makeState({
+        presentation: createMultiSetPresentation(),
+        bandwidthState: createBandwidthState(3_000_000),
+        userVideoTrackSelection: { id: 'no-such-track' },
       });
 
       const reactor = switchVideoTrack.setup({ state });

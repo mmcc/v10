@@ -156,6 +156,15 @@ function toTokenString(token: Uint8Array | string | undefined): string | undefin
  * an unparseable URL is returned verbatim so `new WebTransport(url)`
  * raises the canonical error.
  */
+function connectUrlCarriesJwt(url: string): boolean {
+  try {
+    return new URL(url).searchParams.has('jwt');
+  } catch {
+    // Unparseable URLs go to WebTransport verbatim for the canonical error.
+    return false;
+  }
+}
+
 export function composePlaybackConnectUrl(url: string, authToken?: string): string {
   if (!authToken) return url;
   try {
@@ -219,11 +228,19 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       // token — from the source's `c4m` fragment or the auth provider —
       // throws into the same 'failed' path as any other connect-time
       // error, rather than escaping past this actor's constructor.
-      let authToken = toTokenString(source.c4mToken);
-      if (authProvider) {
-        authToken = toTokenString(await authProvider.getToken()) ?? authToken;
-        // destroy() during a pending getToken() must not open a connection.
-        if (destroyed) return;
+      let authToken: string | undefined;
+      // An explicit `jwt` already in the source URL wins
+      // (`composePlaybackConnectUrl` leaves the URL untouched), so token
+      // resolution is skipped entirely: minting a provider token here
+      // would only be discarded, and a provider failure must not block a
+      // connect that already carries its credentials.
+      if (!connectUrlCarriesJwt(source.connectUrl)) {
+        authToken = toTokenString(source.c4mToken);
+        if (authProvider) {
+          authToken = toTokenString(await authProvider.getToken()) ?? authToken;
+          // destroy() during a pending getToken() must not open a connection.
+          if (destroyed) return;
+        }
       }
       const created = createTransport(composePlaybackConnectUrl(source.connectUrl, authToken), [MOQT_PROTOCOL_ID]);
       transport = created.transport;
