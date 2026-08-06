@@ -120,6 +120,19 @@ describe('captureSourceFeature', () => {
       expect(store.state.cameraState).toBe('denied');
     });
 
+    it('defaults widened-contract fields an older media host lacks instead of storing undefined', () => {
+      const media = createCaptureMedia({ cameraActive: true, cameraState: 'active' });
+      // The capability predicate checks the core fields only — a host
+      // predating micState still passes it.
+      delete (media as { micState?: unknown }).micState;
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      expect(store.state.micState).toBe('idle');
+      expect(store.state.cameraState).toBe('active');
+    });
+
     it('syncs the mic pipeline lifecycle on `capturestatechange`', () => {
       const media = createCaptureMedia({ cameraActive: true, micState: 'acquiring' });
 

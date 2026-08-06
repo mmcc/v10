@@ -120,6 +120,27 @@ describe('enumerateCaptureDevices', () => {
     });
   });
 
+  it('re-enumerates on a mic grant while the camera is already active — both statuses stay tracked', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state } = setupEnumerate();
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    state.cameraState.set('active');
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+
+    // The regression: a short-circuited gate stopped tracking micState
+    // once the camera was granted, so a later mic grant never revealed
+    // the audio-input labels.
+    state.micState.set('active');
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it('stops listening after cleanup', async () => {
     const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
     const { state, cleanup } = setupEnumerate();

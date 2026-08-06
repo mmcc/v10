@@ -1,13 +1,13 @@
 /**
  * **Own the per-track publisher actors for the publish session.** While
  * the publish session is `ready`/`live`, offers the tracks to the peer
- * (PUBLISH via the session driver — catalog first, then video/audio as
- * `state.activeEncodings` names them) and creates one
+ * (PUBLISH via the session driver — catalog first, then camera/screen/audio
+ * as `state.activeEncodings` names them) and creates one
  * `TrackPublisherActor` per track bound to the session's `openUniStream`,
  * publishing the `catalogTrackPublisher` / `videoTrackPublisher` /
- * `audioTrackPublisher` context slots. The catalog and audio publishers
- * run in `groupPerFrame` mode (every object is a random-access point per
- * LOC/MSF); video groups follow keyframes.
+ * `screenTrackPublisher` / `audioTrackPublisher` context slots. The
+ * catalog and audio publishers run in `groupPerFrame` mode (every object
+ * is a random-access point per LOC/MSF); video groups follow keyframes.
  *
  * Publishers are keyed on **session identity + track names, not encoder
  * identity**: they come up with the first active encoding and then live
@@ -27,7 +27,7 @@
  * reverse creation order, each track gets its PUBLISH_DONE
  * (`handle.done()`), and the slots are cleared.
  *
- * Sole writer of the three track-publisher context slots; co-writer of
+ * Sole writer of the four track-publisher context slots; co-writer of
  * `state.publishError` (track stream failures only).
  */
 import { defineBehavior } from '../../core/composition/create-composition';

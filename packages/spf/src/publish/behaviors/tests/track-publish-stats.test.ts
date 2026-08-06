@@ -151,8 +151,8 @@ describe('trackPublishStats', () => {
 
   it('aggregates camera + screen encoders into one video reading', async () => {
     const { state, context } = setupStats();
-    const camera = makeSource({ encodedFrames: 0, encodedBytes: 0 });
-    const screen = makeSource({ encodedFrames: 0, encodedBytes: 0 });
+    const camera = makeSource({ encodedFrames: 0, encodedBytes: 0, droppedFrames: 2 });
+    const screen = makeSource({ encodedFrames: 0, encodedBytes: 0, droppedFrames: 3 });
     context.cameraEncoderActor.set(camera.source);
     context.screenEncoderActor.set(screen.source);
 
@@ -167,6 +167,11 @@ describe('trackPublishStats', () => {
     await vi.waitFor(() => {
       expect(state.publishStats.get()?.encodedFps ?? 0).toBeGreaterThan(0);
     });
+    // droppedFrames is a cumulative sum, not a rate diff, so it is a
+    // timing-independent proof that both legs' counters reach the merge —
+    // dropping either leg (or averaging instead of summing) would read 2,
+    // 3, or 2.5 here instead of 5.
+    expect(state.publishStats.get()!.droppedFrames).toBe(5);
     // Screen alone tearing down must not drop the aggregate to unknown —
     // the camera leg still exists.
     context.screenEncoderActor.set(undefined);

@@ -102,7 +102,7 @@ describe('setupTrackPublishers', () => {
     });
   });
 
-  it('adds the screen publisher additively alongside camera + audio', async () => {
+  it('adds the screen publisher additively alongside camera', async () => {
     const { actor, publishes } = makeSessionActor();
     const { state, context } = setupBehavior();
     const SCREEN_CONFIG = { codec: 'vp8', width: 1920, height: 1080 } as VideoEncoderConfig;

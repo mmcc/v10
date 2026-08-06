@@ -253,6 +253,28 @@ describe('acquireCameraSource', () => {
     });
   });
 
+  it('clears a stale capture error when a fresh acquisition starts', async () => {
+    const getUserMedia = vi
+      .spyOn(navigator.mediaDevices, 'getUserMedia')
+      .mockRejectedValueOnce(new Error('camera busy'))
+      .mockResolvedValueOnce(asStream(new FakeMediaStream([new FakeMediaStreamTrack('video')])));
+    const { state } = setupAcquire();
+
+    state.cameraActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toMatchObject({ code: 'capture' });
+    });
+
+    // The retry supersedes the stale failure — a recovered source must not
+    // keep reporting an obsolete capture error through the media surface.
+    state.cameraActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.cameraState.get()).toBe('active');
+    });
+    expect(state.publishError.get()).toBeUndefined();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
   it('releases the stream and lands in ended when the track ends outside our control', async () => {
     const videoTrack = new FakeMediaStreamTrack('video');
     const stream = new FakeMediaStream([videoTrack]);

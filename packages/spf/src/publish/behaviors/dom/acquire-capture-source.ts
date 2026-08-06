@@ -213,6 +213,11 @@ function runCaptureAcquisition({
   };
 
   status.set('acquiring');
+  // A fresh attempt supersedes any stale capture failure: the slot is
+  // shared by three pipelines, so per-source blame isn't expressible —
+  // but an in-flight acquisition either succeeds (error gone is right)
+  // or re-writes its own failure below. Other codes are never touched.
+  if (peek(publishError)?.code === 'capture') publishError.set(undefined);
   void run();
 
   return () => {

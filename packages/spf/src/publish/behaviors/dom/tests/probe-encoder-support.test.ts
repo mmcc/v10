@@ -7,6 +7,8 @@ import {
   probeEncoderSupport,
 } from '../probe-encoder-support';
 
+const disposals: (() => void)[] = [];
+
 function setupProbe(config: ProbeEncoderSupportConfig = {}) {
   const state = {
     cameraTracks: signal<ProbeEncoderSupportState['cameraTracks']>(undefined),
@@ -16,8 +18,20 @@ function setupProbe(config: ProbeEncoderSupportConfig = {}) {
     activeEncodings: signal<ProbeEncoderSupportState['activeEncodings']>(undefined),
     publishError: signal<ProbeEncoderSupportState['publishError']>(undefined),
   };
-  const cleanup = probeEncoderSupport.setup({ state, config });
-  return { state, cleanup };
+  disposals.push(probeEncoderSupport.setup({ state, config }));
+  return { state };
+}
+
+/**
+ * Force the video ladder's verdict. `supported()` is read per candidate, so
+ * a test can flip a machine from "nothing encodes" to "everything does"
+ * between probe runs.
+ */
+function mockVideoEncoderSupport(supported: () => boolean): void {
+  vi.spyOn(VideoEncoder, 'isConfigSupported').mockImplementation(async (config) => ({
+    supported: supported(),
+    config,
+  }));
 }
 
 const CAMERA_TRACK = { width: 320, height: 240, frameRate: 30 };
@@ -26,11 +40,12 @@ const MIC_TRACK = { sampleRate: 48_000, channelCount: 1 };
 
 describe('probeEncoderSupport', () => {
   afterEach(() => {
+    for (const dispose of disposals.splice(0)) dispose();
     vi.restoreAllMocks();
   });
 
   it('probes real encoder support per kind and picks the active encodings', async () => {
-    const { state, cleanup } = setupProbe();
+    const { state } = setupProbe();
 
     state.cameraTracks.set(CAMERA_TRACK);
     state.micTracks.set(MIC_TRACK);
@@ -50,12 +65,10 @@ describe('probeEncoderSupport', () => {
     expect(active.audio).toMatchObject({ codec: 'opus', sampleRate: 48_000, numberOfChannels: 1 });
     expect(active.screen).toBeUndefined();
     expect(state.publishError.get()).toBeUndefined();
-
-    cleanup();
   });
 
   it('probes only the tracks actually present', async () => {
-    const { state, cleanup } = setupProbe();
+    const { state } = setupProbe();
 
     state.micTracks.set({ sampleRate: 48_000, channelCount: 2 });
 
@@ -66,12 +79,10 @@ describe('probeEncoderSupport', () => {
     expect(state.encoderSupport.get()!.screen).toBeUndefined();
     expect(state.activeEncodings.get()!.camera).toBeUndefined();
     expect(state.activeEncodings.get()!.audio).toMatchObject({ numberOfChannels: 2 });
-
-    cleanup();
   });
 
   it('camera and screen probe independently — one appearing never clobbers the other', async () => {
-    const { state, cleanup } = setupProbe();
+    const { state } = setupProbe();
 
     state.cameraTracks.set(CAMERA_TRACK);
     await vi.waitFor(() => {
@@ -92,26 +103,35 @@ describe('probeEncoderSupport', () => {
       expect(state.activeEncodings.get()?.screen).toBeUndefined();
     });
     expect(state.activeEncodings.get()!.camera).toBe(cameraEncoding);
-
-    cleanup();
   });
 
   it('defaults the screen ladder to a lower framerate/bitrate than the camera (degrade-screen-first)', async () => {
-    const { state, cleanup } = setupProbe();
+    const { state } = setupProbe();
 
     state.screenTracks.set(SCREEN_TRACK);
 
     await vi.waitFor(() => {
       expect(state.activeEncodings.get()?.screen).toBeDefined();
     });
-    expect(state.activeEncodings.get()!.screen).toMatchObject({ framerate: 15 });
+    expect(state.activeEncodings.get()!.screen).toMatchObject({ framerate: 15, bitrate: 1_500_000 });
+  });
 
-    cleanup();
+  it('keeps the screen defaults when the screen tuning carries explicit undefined fields', async () => {
+    // The shape a caller produces by spreading a partial config: the keys
+    // are present, so spread order alone would drop the screen defaults.
+    const { state } = setupProbe({ screen: { frameRate: undefined, bitrate: undefined } });
+
+    state.screenTracks.set(SCREEN_TRACK);
+
+    await vi.waitFor(() => {
+      expect(state.activeEncodings.get()?.screen).toBeDefined();
+    });
+    expect(state.activeEncodings.get()!.screen).toMatchObject({ framerate: 15, bitrate: 1_500_000 });
   });
 
   it('resolves the active encodings through the selectEncoderConfig seam', async () => {
     const chosen: ActiveEncodingsFacts = {};
-    const { state, cleanup } = setupProbe({
+    const { state } = setupProbe({
       selectEncoderConfig: (support) => {
         chosen.camera = support.camera?.at(-1);
         return chosen;
@@ -125,12 +145,10 @@ describe('probeEncoderSupport', () => {
     });
     expect(state.activeEncodings.get()!.camera).toBe(chosen.camera);
     expect(state.activeEncodings.get()!.camera).toBe(state.encoderSupport.get()!.camera!.at(-1));
-
-    cleanup();
   });
 
   it('clears only its own kind when its tracks go away', async () => {
-    const { state, cleanup } = setupProbe();
+    const { state } = setupProbe();
 
     state.cameraTracks.set(CAMERA_TRACK);
     state.micTracks.set(MIC_TRACK);
@@ -145,12 +163,10 @@ describe('probeEncoderSupport', () => {
       expect(state.activeEncodings.get()?.camera).toBeUndefined();
     });
     expect(state.activeEncodings.get()?.audio).toBeDefined();
-
-    cleanup();
   });
 
   it('restores the absent facts — not an empty object — when the last kind goes away', async () => {
-    const { state, cleanup } = setupProbe();
+    const { state } = setupProbe();
 
     state.cameraTracks.set(CAMERA_TRACK);
     state.micTracks.set(MIC_TRACK);
@@ -174,21 +190,93 @@ describe('probeEncoderSupport', () => {
       expect(state.encoderSupport.get()).toBeUndefined();
       expect(state.activeEncodings.get()).toBeUndefined();
     });
-
-    cleanup();
   });
 
-  it('leaves the active encodings absent when the strategy vetoes the only kind', async () => {
-    const { state, cleanup } = setupProbe({ selectEncoderConfig: () => ({}) });
+  it('treats a strategy veto as policy, not failure — no publishError', async () => {
+    const { state } = setupProbe({ selectEncoderConfig: () => ({}) });
 
     state.cameraTracks.set(CAMERA_TRACK);
 
     await vi.waitFor(() => {
+      expect(state.encoderSupport.get()?.camera).toBeDefined();
+    });
+    // The kind probed fine; the strategy chose not to publish it.
+    expect(state.encoderSupport.get()!.camera!.length).toBeGreaterThanOrEqual(1);
+    expect(state.activeEncodings.get()).toBeUndefined();
+    expect(state.publishError.get()).toBeUndefined();
+  });
+
+  it('raises an encode publishError when nothing on the kind ladder is supported', async () => {
+    mockVideoEncoderSupport(() => false);
+    const { state } = setupProbe();
+
+    state.cameraTracks.set(CAMERA_TRACK);
+
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toBeDefined();
+    });
+    expect(state.publishError.get()).toMatchObject({
+      code: 'encode',
+      message: 'No supported encoder configuration for the camera track.',
+    });
+    expect(state.encoderSupport.get()!.camera).toEqual([]);
+    expect(state.activeEncodings.get()).toBeUndefined();
+  });
+
+  it('retracts its encode error when the kind is released', async () => {
+    mockVideoEncoderSupport(() => false);
+    const { state } = setupProbe();
+
+    state.cameraTracks.set(CAMERA_TRACK);
+    await vi.waitFor(() => {
       expect(state.publishError.get()?.code).toBe('encode');
     });
-    expect(state.encoderSupport.get()?.camera).toBeDefined();
-    expect(state.activeEncodings.get()).toBeUndefined();
 
-    cleanup();
+    // A verdict about a track that no longer exists must not pin the slot.
+    state.cameraTracks.set(undefined);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toBeUndefined();
+    });
+  });
+
+  it('retracts its encode error when the kind re-probes successfully', async () => {
+    let encodable = false;
+    mockVideoEncoderSupport(() => encodable);
+    const { state } = setupProbe();
+
+    state.cameraTracks.set(CAMERA_TRACK);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()?.code).toBe('encode');
+    });
+
+    // Re-acquire (a fresh tracks identity re-probes through the cleanup).
+    encodable = true;
+    state.cameraTracks.set({ ...CAMERA_TRACK });
+
+    await vi.waitFor(() => {
+      expect(state.activeEncodings.get()?.camera).toBeDefined();
+    });
+    expect(state.publishError.get()).toBeUndefined();
+  });
+
+  it('leaves an error another writer put in the slot alone when its kind recovers', async () => {
+    mockVideoEncoderSupport(() => false);
+    const { state } = setupProbe();
+
+    state.cameraTracks.set(CAMERA_TRACK);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()?.code).toBe('encode');
+    });
+
+    // `publishError` is a single-value multi-writer slot: a capture failure
+    // written after ours is the live one, and our retraction is not its.
+    const captureError = { code: 'capture', message: 'device exploded' } as const;
+    state.publishError.set(captureError);
+    state.cameraTracks.set(undefined);
+
+    await vi.waitFor(() => {
+      expect(state.encoderSupport.get()).toBeUndefined();
+    });
+    expect(state.publishError.get()).toBe(captureError);
   });
 });

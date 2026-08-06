@@ -191,4 +191,35 @@ describe('createMoqPublishEngine', () => {
     expect(screenActor.snapshot.get().value).toBe('destroyed');
     expect(engine.state.cameraState.get()).toBe('active');
   }, 30_000);
+
+  it('still honors the deprecated `video` tuning as the camera tuning', async () => {
+    mockGetUserMedia();
+    // The pre-rename config key: clients that never migrated must keep
+    // tuning the camera ladder rather than be silently ignored.
+    const engine = createMoqPublishEngine({ video: { width: 320, height: 240, bitrate: 900_000 } });
+    disposals.push(() => void engine.destroy());
+
+    engine.state.cameraActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(engine.state.activeEncodings.get()?.camera).toBeDefined();
+    });
+    expect(engine.state.activeEncodings.get()!.camera).toMatchObject({ width: 320, height: 240, bitrate: 900_000 });
+  });
+
+  it('prefers `camera` over the deprecated `video` alias when both are given', async () => {
+    mockGetUserMedia();
+    const engine = createMoqPublishEngine({
+      camera: { width: 320, height: 240, bitrate: 1_100_000 },
+      video: { width: 320, height: 240, bitrate: 900_000 },
+    });
+    disposals.push(() => void engine.destroy());
+
+    engine.state.cameraActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(engine.state.activeEncodings.get()?.camera).toBeDefined();
+    });
+    expect(engine.state.activeEncodings.get()!.camera).toMatchObject({ bitrate: 1_100_000 });
+  });
 });

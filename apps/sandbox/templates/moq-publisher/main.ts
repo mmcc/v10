@@ -158,6 +158,22 @@ class LoopbackPublishVideoElement extends LoopbackPublishVideoBase {
     cameraActive: { type: Boolean, attribute: 'camera-active' },
     screenShareActive: { type: Boolean, attribute: 'screen-share-active' },
   };
+
+  constructor() {
+    super();
+    // The engine consumes the intent slots on terminal outcomes (denied,
+    // failed, out-of-band ended — see acquire-capture-source's
+    // multi-writer contract), and these Boolean attributes must follow:
+    // the element property setter routes through `toggleAttribute`, so a
+    // stale attribute would swallow the next `cameraActive = true` (no
+    // attribute mutation → no attributeChangedCallback → no retry).
+    // Writing the host's own value back dedupes at the signal layer, so
+    // this cannot loop.
+    this.addEventListener('capturesourcechange', () => {
+      this.toggleAttribute('camera-active', this.host.cameraActive);
+      this.toggleAttribute('screen-share-active', this.host.screenShareActive);
+    });
+  }
 }
 
 customElements.define('loopback-publish-video', LoopbackPublishVideoElement);
@@ -266,6 +282,7 @@ type PublisherHostLike = Pick<
   | 'screenShareActive'
   | 'cameraState'
   | 'screenShareState'
+  | 'micState'
   | 'publishState'
   | 'publishStartedAt'
   | 'publishError'
@@ -306,7 +323,7 @@ function renderStatus(): void {
   const error = media.publishError?.message ?? '';
   const lines = [
     `mode:    ${modeLabel}${params.has('synthetic') ? ' · synthetic capture' : ''}`,
-    `capture: camera=${media.cameraState} screen=${media.screenShareState}${source}`,
+    `capture: camera=${media.cameraState} screen=${media.screenShareState} mic=${media.micState}${source}`,
     `publish: ${media.publishState}${since}`,
     `stats:   ${formatStats(media.publishStats)}`,
   ];

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: implemented
 ---
 
 # MoQ Publisher Multi-Source Capture
@@ -28,7 +28,7 @@ Camera + screen simultaneously is table stakes for any product with a "share you
 
 ## Recommendation
 
-Adopt the additive-source model. At the level needing agreement:
+Adopted the additive-source model. At the level that needed agreement:
 
 - **Contract (the public-API crux)**: `MediaCaptureSourceCapability` evolves from one exclusive `captureSource` slot to additive sources — camera and screen each independently acquirable and releasable, microphone owned separately. The exact shape (a `screenShareActive` boolean beside the existing `captureSource`, versus a source set) belongs to the follow-up design record, but the *semantics* decided here are: starting a share no longer releases the camera, and stopping one source never re-prompts another. The affected packages are still in the v10 beta line (`10.0.0-beta.x`), where a deliberate breaking change to a capability contract is acceptable before stable; the v1 swap behavior stays recoverable by releasing the camera before acquiring the screen.
 - **Capture**: per-source acquisition pipelines replace the single-stream behavior. The microphone merge disappears; a mic device change re-acquires only the mic pipeline, which fixes the open defect by construction rather than by patching the fused path.
@@ -48,4 +48,4 @@ Non-goals: simulcast (same array seam, separate proposal); composition/layout to
 
 ## Final decision
 
-Pending review. Implementation would follow on its own branch once the contract shape is agreed in a design record; the current publisher branch ships the v1 exclusive model unchanged.
+Accepted and implemented. `MediaCaptureSourceCapability` now exposes additive `cameraActive` / `screenShareActive` booleans, each with independent `cameraState` / `screenShareState`, instead of one exclusive `captureSource` slot — the microphone is its own always-available pipeline gated on either video source. See [publisher-multi-source-capture.md](../internal/design/spf/features/publisher-multi-source-capture.md) for the resolved contract (including why a boolean-beside-the-enum and a source set were rejected) and the implementation surface; it resolves the open questions above as well.

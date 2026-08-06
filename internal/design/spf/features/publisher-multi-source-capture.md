@@ -50,6 +50,8 @@ export interface MediaCaptureSourceCapability {
   readonly cameraState: MediaCaptureState;
   /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */
   readonly screenShareState: MediaCaptureState;
+  /** Microphone pipeline lifecycle. Fires `capturestatechange`. */
+  readonly micState: MediaCaptureState;
   /** Live camera stream while `cameraState` is `active`, else `null`. */
   readonly cameraStream: MediaStreamLike | null;
   /** Live screen-share stream while `screenShareState` is `active`, else `null`. */

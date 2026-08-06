@@ -336,6 +336,16 @@ export class FakePublishMedia
     if (kind === 'camera') this.#cameraActive = false;
     else this.#screenShareActive = false;
     this.dispatchEvent(new Event('capturesourcechange'));
+    // Every involuntary-release caller (acquire failure, track-ended) routes
+    // through here, so this is the one place that can see "no source left" —
+    // a live session with nothing capturing must not stay live.
+    if (
+      !this.#cameraActive &&
+      !this.#screenShareActive &&
+      (this.#publishState === 'connecting' || this.#publishState === 'live')
+    ) {
+      this.unpublish();
+    }
   }
 
   async #getCameraStream(): Promise<MediaStream> {
@@ -388,13 +398,20 @@ export class FakePublishMedia
         () => {
           const owner = kind === 'camera' ? this.#cameraStream : this.#screenShareStream;
           if (owner !== stream) return;
+          if (track.kind === 'audio') {
+            // The merged mic track is not the video pipeline — the real
+            // engine runs the mic as its own independent pipeline (see
+            // acquire-capture-source's module doc), so losing it must not
+            // release camera/screen. Drop just this track; `micState`'s
+            // live-audio-track check then reads 'idle' on its own.
+            stream.removeTrack(track);
+            track.stop();
+            this.dispatchEvent(new Event('capturestatechange'));
+            return;
+          }
           this.#releaseStream(kind);
           this.#setCaptureState(kind, 'ended');
           this.#consumeIntent(kind);
-          const stillActive = kind === 'camera' ? this.#screenShareActive : this.#cameraActive;
-          if (!stillActive && (this.#publishState === 'connecting' || this.#publishState === 'live')) {
-            this.unpublish();
-          }
         },
         { once: true }
       );

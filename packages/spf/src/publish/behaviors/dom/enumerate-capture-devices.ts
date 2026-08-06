@@ -75,8 +75,14 @@ function enumerateCaptureDevicesSetup({
   const removeDeviceChange = listen(mediaDevices, 'devicechange', () => void refresh());
   // Labels appear once capture is granted — refresh when either the
   // camera or the mic goes active (each reveals a different input kind).
+  // Both statuses are read unconditionally BEFORE the gate: a
+  // short-circuited `&&` would drop the mic from the effect's tracked
+  // dependencies while the camera is active, and a later mic grant would
+  // never reveal the audio-input labels.
   const cleanupStatus = effect(() => {
-    if (state.cameraState.get() !== 'active' && state.micState.get() !== 'active') return;
+    const cameraGranted = state.cameraState.get() === 'active';
+    const micGranted = state.micState.get() === 'active';
+    if (!cameraGranted && !micGranted) return;
     void refresh();
   });
 

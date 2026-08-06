@@ -32,8 +32,14 @@
  * others', so camera support resolving never clobbers screen's (or vice
  * versa) and either can come and go independently through a session. The
  * last kind leaving restores the absent state rather than an empty object
- * — see `withoutKind`. Co-writer of `state.publishError`
- * (nothing-encodable-for-a-kind failures only).
+ * — see `withoutKind`.
+ *
+ * Co-writer of `state.publishError`, for one condition only: a kind whose
+ * candidate ladder probed entirely unsupported. A `selectEncoderConfig`
+ * omitting a kind is a policy veto, not a failure. The error is retracted
+ * when that kind re-probes successfully or its source is released —
+ * `retractError` compares object identity first, so a capture or transport
+ * failure written after ours survives our recovery.
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
@@ -124,9 +130,12 @@ function videoCandidates(track: CaptureTrackFacts, tuning: VideoEncodeTuning | u
 
 function screenCandidates(track: CaptureTrackFacts, tuning: VideoEncodeTuning | undefined): VideoEncoderConfig[] {
   return videoCandidates(track, {
-    frameRate: DEFAULT_SCREEN_FRAME_RATE,
-    bitrate: DEFAULT_SCREEN_BITRATE,
     ...tuning,
+    // Coalesced, not spread-ordered: a caller spreading a partial config
+    // passes `frameRate: undefined` as a present key, which would drop the
+    // screen defaults and silently re-inherit the camera-level ones.
+    frameRate: tuning?.frameRate ?? DEFAULT_SCREEN_FRAME_RATE,
+    bitrate: tuning?.bitrate ?? DEFAULT_SCREEN_BITRATE,
   });
 }
 
@@ -199,6 +208,25 @@ function probeEncoderSupportSetup({
 }): () => void {
   const select = config.selectEncoderConfig ?? defaultSelectEncoderConfig;
 
+  /**
+   * The encode errors THIS behavior instance wrote, per kind. `publishError`
+   * is a single-value multi-writer slot, so retracting requires knowing
+   * which object we put there: a capture or transport failure another
+   * subsystem wrote after ours must survive our kind recovering.
+   */
+  const authoredErrors = new Map<keyof EncoderSupportFacts, PublishErrorFacts>();
+
+  /** Retract this kind's encode error — its source is gone, or it encodes now. */
+  function retractError(kind: keyof EncoderSupportFacts): void {
+    const authored = authoredErrors.get(kind);
+    if (authored === undefined) return;
+    authoredErrors.delete(kind);
+    if (peek(state.publishError) !== authored) return;
+    // Another kind may still be un-encodable; hand it the slot back rather
+    // than let its failure vanish with ours.
+    state.publishError.set([...authoredErrors.values()][0]);
+  }
+
   function runProbe<Track extends CaptureTrackFacts, EncConfig extends VideoEncoderConfig | AudioEncoderConfig>(
     kind: keyof EncoderSupportFacts,
     tracks: ReadonlySignal<Track | undefined>,
@@ -226,11 +254,18 @@ function probeEncoderSupportSetup({
                   ? withoutKind(peek(state.activeEncodings), kind)
                   : ({ ...peek(state.activeEncodings), [kind]: resolvedKindValue } as ActiveEncodingsFacts)
               );
-              if (resolvedKindValue === undefined) {
-                state.publishError.set({
+              // Only an empty ladder is a failure. A strategy that omits a
+              // kind it could have picked is a policy veto — publishing
+              // without that track is the intended outcome, not an error.
+              if (supported.length === 0) {
+                const error: PublishErrorFacts = {
                   code: 'encode',
                   message: `No supported encoder configuration for the ${kind} track.`,
-                });
+                };
+                authoredErrors.set(kind, error);
+                state.publishError.set(error);
+              } else {
+                retractError(kind);
               }
             };
             void probe();
@@ -239,6 +274,9 @@ function probeEncoderSupportSetup({
               stale = true;
               state.encoderSupport.set(withoutKind(peek(state.encoderSupport), kind));
               state.activeEncodings.set(withoutKind(peek(state.activeEncodings), kind));
+              // The source is released (or about to be re-probed): a verdict
+              // about a track that no longer exists must not outlive it.
+              retractError(kind);
             };
           },
         },

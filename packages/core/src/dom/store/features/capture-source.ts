@@ -40,13 +40,17 @@ export const captureSourceFeature = definePlayerFeature({
       screenShareAvailability: canScreenShare() ? 'available' : 'unsupported',
     });
 
+    // Defaulted reads: the capability predicate checks presence of the
+    // core fields, not the whole widened contract, so a media host from
+    // an older generation may lack e.g. `micState` — the slice must never
+    // hold `undefined` where UIs expect a lifecycle value.
     const sync = () =>
       set({
-        cameraActive: media.cameraActive,
-        screenShareActive: media.screenShareActive,
-        cameraState: media.cameraState,
-        screenShareState: media.screenShareState,
-        micState: media.micState,
+        cameraActive: media.cameraActive ?? false,
+        screenShareActive: media.screenShareActive ?? false,
+        cameraState: media.cameraState ?? 'idle',
+        screenShareState: media.screenShareState ?? 'idle',
+        micState: media.micState ?? 'idle',
       });
 
     sync();

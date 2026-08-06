@@ -12,7 +12,12 @@ import type { EncodedChunkSink, EncodedChunkSinkMeta } from '../../actors/dom/en
 import type { VideoEncoderActor } from '../../actors/dom/video-encoder';
 import type { TrackPublisherActor } from '../../actors/track-publisher';
 import { deriveCatalog } from '../../behaviors/derive-catalog';
-import type { CaptureSourceKind, CaptureStatus, CaptureTrackFacts, PublishErrorFacts } from '../../behaviors/dom/acquire-capture-source';
+import type {
+  CaptureSourceKind,
+  CaptureStatus,
+  CaptureTrackFacts,
+  PublishErrorFacts,
+} from '../../behaviors/dom/acquire-capture-source';
 import { acquireCameraSource, acquireMicrophone, acquireScreenShare } from '../../behaviors/dom/acquire-capture-source';
 import { applyTrackToggles } from '../../behaviors/dom/apply-track-toggles';
 import type { CaptureDeviceFacts } from '../../behaviors/dom/enumerate-capture-devices';
@@ -57,8 +62,8 @@ export type {
   PublishStatsFacts,
   SelectEncoderConfig,
   TrackPublisherActor,
-  VideoEncodeTuning,
   VideoEncoderActor,
+  VideoEncodeTuning,
 };
 
 /**
@@ -140,6 +145,12 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   groupDurationSec?: number;
   /** Camera video tuning (an array per kind is the simulcast seam, later). */
   camera?: VideoEncodeTuning;
+  /**
+   * @deprecated Renamed to {@link MoqPublishEngineConfig.camera} when screen
+   * share became a peer video source. Still honored when `camera` is absent;
+   * `camera` wins when both are given.
+   */
+  video?: VideoEncodeTuning;
   /** Screen-share video tuning; defaults to a lower framerate/bitrate than `camera` (static degrade-screen-first). */
   screen?: VideoEncodeTuning;
   audio?: { bitrate?: number };
@@ -227,6 +238,10 @@ export function createMoqPublishEngine(
 
   const engineConfig: MoqPublishEngineConfig = {
     ...config,
+    // The `video` → `camera` rename is resolved here, before the config
+    // reaches `probeEncoderSupport`: that behavior knows only `camera`, so a
+    // client still passing `video` would otherwise be silently ignored.
+    camera: config.camera ?? config.video,
     chunkSink: config.chunkSink ?? routeToTrackPublishers,
   };
   const composition = createComposition(

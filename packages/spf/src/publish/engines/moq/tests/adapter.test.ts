@@ -321,6 +321,34 @@ describe('MoqPublishMediaMixin', () => {
     expect(sourceChanged).toHaveBeenCalledTimes(2);
   });
 
+  it('fires capturestreamchange when a slot stream is replaced, not only on presence changes', async () => {
+    const first = makeFakeVideoStream('cam-1');
+    const second = makeFakeVideoStream('cam-2');
+    let currentVideo = first;
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
+      if (constraints?.audio) return asStream(makeFakeAudioStream());
+      return asStream(currentVideo);
+    });
+    const media = makeMedia();
+    const streamChanged = vi.fn();
+    media.addEventListener('capturestreamchange', streamChanged);
+
+    media.cameraActive = true;
+    await vi.waitFor(() => {
+      expect(media.cameraStream).toBe(asStream(first));
+    });
+    const callsAfterFirst = streamChanged.mock.calls.length;
+
+    // A device switch re-acquires IN PLACE: the slot stays occupied but the
+    // stream identity changes — meters holding the old tracks must be told.
+    currentVideo = second;
+    media.videoInputDeviceId = 'cam-2';
+    await vi.waitFor(() => {
+      expect(media.cameraStream).toBe(asStream(second));
+    });
+    expect(streamChanged.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+  });
+
   it('reads cameraActive false after a denial and re-attempts on the next set — one-click retry', async () => {
     const getUserMedia = vi
       .spyOn(navigator.mediaDevices, 'getUserMedia')

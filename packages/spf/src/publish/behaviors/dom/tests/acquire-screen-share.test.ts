@@ -172,6 +172,26 @@ describe('acquireScreenShare', () => {
     expect(state.screenShareState.get()).toBe('ended');
   });
 
+  it('maps a terminal acquisition failure to a capture error and consumes the intent', async () => {
+    const failure = Object.assign(new Error('display busy'), { name: 'NotReadableError' });
+    vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockRejectedValue(failure);
+    const { state, context } = setupAcquire();
+
+    state.screenShareActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toMatchObject({ code: 'capture', cause: failure });
+    });
+    expect(state.screenShareState.get()).toBe('idle');
+    expect(context.screenStream.get()).toBeUndefined();
+    expect(state.screenTracks.get()).toBeUndefined();
+    // Failed pipelines consume the intent like denied/ended — the mic's
+    // OR-gate must not stay hot behind a share that never started.
+    await vi.waitFor(() => {
+      expect(state.screenShareActive.get()).toBe(false);
+    });
+  });
+
   it('stops the owned stream on destroy', async () => {
     const videoTrack = new FakeMediaStreamTrack('video');
     const displayStream = new FakeMediaStream([videoTrack]);

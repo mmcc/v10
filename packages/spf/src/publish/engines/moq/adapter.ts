@@ -526,8 +526,16 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           () => `${state.cameraActive.get() ?? false}|${state.screenShareActive.get() ?? false}`,
           () => this.#dispatch('capturesourcechange')
         ),
+        // Identity, not presence: a re-acquire (device switch, replug
+        // recovery) REPLACES a slot's stream in place, and consumers
+        // holding the old tracks (level meters) must hear about it. One
+        // bridge per slot keeps the Object.is dedupe exact.
         this.#bridge(
-          () => `${context.cameraStream.get() !== undefined}|${context.screenStream.get() !== undefined}`,
+          () => context.cameraStream.get(),
+          () => this.#dispatch('capturestreamchange')
+        ),
+        this.#bridge(
+          () => context.screenStream.get(),
           () => this.#dispatch('capturestreamchange')
         ),
         this.#bridge(
