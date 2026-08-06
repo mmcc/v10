@@ -5,6 +5,7 @@
  *
  * Usage:
  *   pnpm size                    # Measure the HLS engine entry (@videojs/spf/hls)
+ *   pnpm size --moq              # Measure the MoQ engine entry (@videojs/spf/moq)
  *   pnpm size:all                # Measure all exports (all.ts)
  */
 
@@ -14,6 +15,7 @@ import { gzipSync } from 'node:zlib';
 
 const measureAll = process.argv.includes('--all');
 const measureEngine = process.argv.includes('--hls');
+const measureMoq = process.argv.includes('--moq');
 
 let entry, label, bundlePath;
 
@@ -21,6 +23,10 @@ if (measureAll) {
   entry = 'all.ts';
   label = 'All Exports';
   bundlePath = './dist/all.js';
+} else if (measureMoq) {
+  entry = 'playback/engines/moq/index.ts';
+  label = 'MoQ Engine';
+  bundlePath = './dist/index.js';
 } else if (measureEngine) {
   entry = 'playback/engines/hls/index.ts';
   label = 'HLS Engine';

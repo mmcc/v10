@@ -39,6 +39,10 @@ const media = [
   'simple-hls-video',
   'dash-video',
 ];
+// `simple-moq-video` is deliberately absent: the MoQ engine has no error
+// slot yet, so the element cannot report a failed transport, an unsupported
+// codec, or a bad catalog. Publishing it to the CDN would ship a player that
+// fails silently. Add it back once the engine surfaces errors.
 
 const localeEntries = globSync('src/cdn/locales/*.ts').map((file) => ({
   src: file,
