@@ -538,6 +538,49 @@ describe('switchVideoTrack', () => {
       reactor.destroy();
     });
 
+    it('keeps an explicit cross-set selection when a quality pin matches both sets', async () => {
+      // width/height/bandwidth is a *rendition* shape, not a content
+      // identity — a screen share can match a camera rendition exactly. The
+      // pin then names no content item, so it must not overrule the id.
+      const shape = { width: 1280, height: 720, bandwidth: 2_400_000 };
+      const state = makeState({
+        presentation: {
+          id: 'presentation-ambiguous-pin',
+          url: 'moqt://relay.example.com/live',
+          selectionSets: [
+            {
+              id: 'video-set',
+              type: 'video' as const,
+              switchingSets: [
+                {
+                  id: 'camera-set',
+                  type: 'video' as const,
+                  tracks: [
+                    createVideoTrack('camera-360p', 600_000),
+                    { ...createVideoTrack('camera-720p', 2_400_000), ...shape },
+                  ],
+                },
+                {
+                  id: 'screen-set',
+                  type: 'video' as const,
+                  tracks: [{ ...createVideoTrack('screen', 2_400_000), ...shape }],
+                },
+              ],
+            } as VideoSelectionSet,
+          ],
+        } as Presentation,
+        bandwidthState: createBandwidthState(3_000_000),
+        selectedVideoTrackId: 'screen',
+        userVideoTrackSelection: shape,
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('screen');
+
+      reactor.destroy();
+    });
+
     it('falls back to the rendered set when the user selection matches nothing', async () => {
       // A stale id (e.g. from a previous source) must not strand playback:
       // no set matches, so the default camera set is ranked as usual.

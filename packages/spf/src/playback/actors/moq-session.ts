@@ -144,6 +144,28 @@ function toTokenString(token: Uint8Array | string | undefined): string | undefin
 }
 
 /**
+ * Whether resolving an auth token for this URL would be wasted work — the
+ * exact complement of the two cases where {@link composePlaybackConnectUrl}
+ * discards the token it is handed:
+ *
+ *   - the URL already carries an explicit `jwt` param, which wins;
+ *   - the URL is unparseable, so it goes to WebTransport verbatim.
+ *
+ * The two must agree. When they disagree, the actor mints a token that is
+ * then thrown away — and a *throwing* provider surfaces its own error
+ * instead of the canonical `new WebTransport(url)` failure the malformed
+ * URL should have produced, which reads as an auth outage rather than the
+ * typo it is.
+ */
+function skipTokenResolution(url: string): boolean {
+  try {
+    return new URL(url).searchParams.has('jwt');
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Compose the WebTransport connect URL for a source. moq-lite-rs lineage
  * relays (Mux's relay-rs fleet, the Varnish lab relays) authenticate with
  * a JWT `?jwt=` query parameter on the connect URL and close the
@@ -156,15 +178,6 @@ function toTokenString(token: Uint8Array | string | undefined): string | undefin
  * an unparseable URL is returned verbatim so `new WebTransport(url)`
  * raises the canonical error.
  */
-function connectUrlCarriesJwt(url: string): boolean {
-  try {
-    return new URL(url).searchParams.has('jwt');
-  } catch {
-    // Unparseable URLs go to WebTransport verbatim for the canonical error.
-    return false;
-  }
-}
-
 export function composePlaybackConnectUrl(url: string, authToken?: string): string {
   if (!authToken) return url;
   try {
@@ -229,12 +242,11 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       // throws into the same 'failed' path as any other connect-time
       // error, rather than escaping past this actor's constructor.
       let authToken: string | undefined;
-      // An explicit `jwt` already in the source URL wins
-      // (`composePlaybackConnectUrl` leaves the URL untouched), so token
-      // resolution is skipped entirely: minting a provider token here
-      // would only be discarded, and a provider failure must not block a
-      // connect that already carries its credentials.
-      if (!connectUrlCarriesJwt(source.connectUrl)) {
+      // Skip token resolution whenever the token would be discarded by
+      // `composePlaybackConnectUrl` (see `skipTokenResolution`): minting one
+      // would be pointless work, and a provider failure must not block —
+      // or mis-report — a connect whose URL was never going to carry it.
+      if (!skipTokenResolution(source.connectUrl)) {
         authToken = toTokenString(source.c4mToken);
         if (authProvider) {
           authToken = toTokenString(await authProvider.getToken()) ?? authToken;
