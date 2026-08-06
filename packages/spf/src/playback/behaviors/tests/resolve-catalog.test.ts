@@ -73,7 +73,13 @@ function createFakeSessionActor() {
     value: 'active' as const,
     context: { status: 'ready', session } as MoqSessionActorContext,
   });
-  const refreshAuthToken = vi.fn(async () => ({ authorizationTokens: [new Uint8Array([1])] }));
+  // The real actor's refreshAuthToken always rejects — the connect-time-only
+  // ?jwt= carriage means a refreshed token has no connection left to attach
+  // to (see moq-session.ts). This fake matches that contract rather than
+  // resolving with a shape the actor can no longer produce.
+  const refreshAuthToken = vi.fn(async (): Promise<never> => {
+    throw new Error('cannot refresh the MoQ auth token: the actor does not reconnect');
+  });
   const actor: MoqSessionActor = {
     snapshot: snapshot as MoqSessionActor['snapshot'],
     getAuthParameters: () => ({}),
@@ -191,10 +197,15 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
-  it('refreshes the token and recreates the catalog subscription on EXPIRED_AUTH_TOKEN', async () => {
+  // refreshAuthToken always rejects (see moq-session.ts) — a refreshed
+  // token has no connection left to attach to. The one-shot retry must
+  // still give up cleanly: log the failure, leave the original
+  // subscription/fetch in place, and never retry again.
+  it('gives up cleanly on EXPIRED_AUTH_TOKEN since refreshAuthToken cannot supply a usable token', async () => {
     const { actor, subscriptions, fetches, refreshAuthToken } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
     subscriptions[0]!.handlers.onError?.({
@@ -203,38 +214,27 @@ describe('resolveCatalog', () => {
       reason: 'expired',
     });
 
-    await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
-    expect(refreshAuthToken).toHaveBeenCalledOnce();
-    expect(subscriptions[0]!.cancelled).toBe(true);
-    expect(fetches[0]!.cancelled).toBe(true);
-    expect(fetches).toHaveLength(2);
-    expect(subscriptions[1]!.options).toMatchObject({
-      trackNamespace: ['live'],
-      trackName: 'catalog',
-      parameters: { authorizationTokens: [new Uint8Array([1])] },
-    });
+    await vi.waitFor(() => expect(refreshAuthToken).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(consoleError).toHaveBeenCalledWith('[resolveCatalog] auth refresh failed:', expect.any(Error))
+    );
+    // No retry: the original subscription/fetch are untouched, and the
+    // catalog stays unresolved rather than a pointless second request.
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]!.cancelled).toBe(false);
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]!.cancelled).toBe(false);
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
 
-    // The fresh attempt resolves the catalog through its own joining fetch.
-    fetches[1]!.handlers.onEntry?.({
-      kind: 'object',
-      groupId: 5,
-      objectId: 0,
-      priority: 128,
-      properties: [],
-      payload: utf8Encode(CATALOG),
-    });
-    fetches[1]!.handlers.onEnd?.();
-    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
-
-    // A second expiry is log-only — the retry is one-shot.
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    subscriptions[1]!.handlers.onError?.({
+    // A second expiry is log-only too — the retry is one-shot regardless
+    // of whether the first refresh attempt succeeded or failed.
+    subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 0,
       reason: 'expired again',
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions).toHaveLength(1);
     expect(refreshAuthToken).toHaveBeenCalledOnce();
     consoleError.mockRestore();
 
@@ -293,42 +293,15 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
-  it('keeps a cancelled first fetch from settling the retry attempt early', async () => {
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
-    const deps = makeDeps(actor, { url: MOQ_URL });
-    const reactor = resolveCatalog.setup(deps);
-
-    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
-    subscriptions[0]!.handlers.onError?.({
-      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
-      retryInterval: 0,
-      reason: 'expired',
-    });
-    await vi.waitFor(() => expect(fetches).toHaveLength(2));
-
-    // Cancelling a fetch does not stop callbacks already in flight — the
-    // first fetch's late settle must not flush the retry's buffer early.
-    fetches[0]!.handlers.onEnd?.();
-
-    // Still buffering: the retry's live delta waits for its own fetch...
-    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
-    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
-
-    // ...and applies in order once that fetch replays the base catalog.
-    fetches[1]!.handlers.onEntry?.({
-      kind: 'object',
-      groupId: 5,
-      objectId: 0,
-      priority: 128,
-      properties: [],
-      payload: utf8Encode(CATALOG),
-    });
-    fetches[1]!.handlers.onEnd?.();
-    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
-    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
-
-    reactor.destroy();
-  });
+  // No longer reachable: the only way `start()` runs a second time is a
+  // successful auth refresh, and `refreshAuthToken` always rejects (see
+  // moq-session.ts) — there is no relay generation the current fleet
+  // supports where a refreshed token has anywhere to attach. The
+  // `attempt`/`isCurrent` guard this used to exercise (a cancelled first
+  // fetch's late callback must not disturb a second attempt) stays in
+  // resolve-catalog.ts for the future relay generation the module doc
+  // describes; it has no live path to cover today without reintroducing
+  // the impossible-resolve mock this fix removed.
 
   it('stays idle for non-moqt sources and before the session is ready', async () => {
     const { actor, subscriptions } = createFakeSessionActor();
