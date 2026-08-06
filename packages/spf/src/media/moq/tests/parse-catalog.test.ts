@@ -323,7 +323,13 @@ describe('applyMoqCatalogUpdate', () => {
     });
 
     const presentation = moqCatalogToPresentation(updated, { url: SOURCE_URL }, SESSION_URI);
-    const videoIds = getTracksByType(presentation, 'video').map((track) => track.id);
+    // Across every switching set: cloning inherits attributes, not
+    // alternate-ness — a clone that redefines the content (the same
+    // operation declares a screen share as easily as a lower rendition) is
+    // its own content item until `altGroup` says otherwise.
+    const videoIds = presentation.selectionSets
+      .filter((set) => set.type === 'video')
+      .flatMap((set) => set.switchingSets.flatMap((switchingSet) => switchingSet.tracks.map((track) => track.id)));
     expect(videoIds).toContain(moqTrackId(['conference.example.com', 'conference123', 'alice'], '540p-video'));
   });
 
@@ -495,6 +501,113 @@ describe('applyMoqCatalogUpdate', () => {
 });
 
 describe('moqCatalogToPresentation', () => {
+  const ALICE = ['conference.example.com', 'conference123', 'alice'];
+
+  const videoTrack = (fields: Record<string, unknown>) => ({
+    namespace: ALICE.join('/'),
+    packaging: 'loc',
+    isLive: true,
+    role: 'video',
+    codec: 'avc1.64001f',
+    ...fields,
+  });
+
+  const catalogOf = (...tracks: Record<string, unknown>[]) => JSON.stringify({ version: '1', tracks });
+
+  const videoSetOf = (presentation: ReturnType<typeof parseMoqCatalog>) =>
+    presentation.selectionSets.find((set) => set.type === 'video')!;
+
+  it('projects a camera-only catalog into the single switching set it always had', () => {
+    // Every catalog in production today. Structural identity with the
+    // pre-multi-source projection is the contract, ids included.
+    const videoSet = videoSetOf(parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL }));
+    expect(videoSet.id).toBe('moq-video');
+    expect(videoSet.switchingSets).toHaveLength(1);
+    expect(videoSet.switchingSets[0]!.id).toBe('moq-video-main');
+    expect(videoSet.switchingSets[0]!.type).toBe('video');
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, '1080p-video')]);
+  });
+
+  // The regression: camera + screen are additive video tracks sharing one
+  // `renderGroup` (render together) and declaring no `altGroup`. In one
+  // switching set the bandwidth ranker read them as quality alternates of one
+  // another and swapped the viewer from camera to screen share on a dip.
+  it('gives camera and screen their own switching sets, camera first', () => {
+    const text = catalogOf(
+      videoTrack({ name: 'video', renderGroup: 1, width: 1280, height: 720, bitrate: 2_500_000 }),
+      videoTrack({ name: 'screen', renderGroup: 1, width: 1920, height: 1080, bitrate: 800_000 })
+    );
+    const videoSet = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL }));
+
+    expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
+      'moq-video-main',
+      'moq-video-screen',
+    ]);
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'video')]);
+    expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'screen')]);
+    // What selection enumerates: the camera set, deterministically, whatever
+    // the throughput estimate says.
+    expect(getTracksByType(parseMoqCatalog(text, { url: SOURCE_URL }), 'video').map((track) => track.id)).toEqual([
+      moqTrackId(ALICE, 'video'),
+    ]);
+  });
+
+  it('keeps a declared altGroup ladder in one switching set so ABR still ranks it', () => {
+    // `altGroup` is MSF's own statement that tracks are alternate
+    // representations of the same content — the one thing that makes two
+    // video tracks interchangeable.
+    const text = catalogOf(
+      videoTrack({ name: 'hd', altGroup: 1, width: 1920, height: 1080, bitrate: 4_800_000 }),
+      videoTrack({ name: 'sd', altGroup: 1, width: 640, height: 360, bitrate: 600_000 })
+    );
+    const videoSet = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL }));
+
+    expect(videoSet.switchingSets).toHaveLength(1);
+    expect(videoSet.switchingSets[0]!.id).toBe('moq-video-main');
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([
+      moqTrackId(ALICE, 'hd'),
+      moqTrackId(ALICE, 'sd'),
+    ]);
+  });
+
+  it('ranks a ladder within its content item while a screen share sits outside it', () => {
+    const text = catalogOf(
+      videoTrack({ name: 'hd', altGroup: 1, bitrate: 4_800_000 }),
+      videoTrack({ name: 'screen', renderGroup: 1, bitrate: 800_000 }),
+      videoTrack({ name: 'sd', altGroup: 1, bitrate: 600_000 })
+    );
+    const videoSet = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL }));
+
+    expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
+      'moq-video-main',
+      'moq-video-screen',
+    ]);
+    // Group order follows first appearance; a track joining an existing group
+    // does not reorder the sets.
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([
+      moqTrackId(ALICE, 'hd'),
+      moqTrackId(ALICE, 'sd'),
+    ]);
+  });
+
+  it('keeps a delta-added non-alternate video track out of the rendered set', () => {
+    const options = { catalogNamespace: ALICE };
+    const catalog = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+    const delta = JSON.stringify({
+      version: '1',
+      deltaUpdate: [{ op: 'add', tracks: [videoTrack({ name: 'screen', renderGroup: 1, bitrate: 400_000 })] }],
+    });
+    const presentation = moqCatalogToPresentation(
+      applyMoqCatalogUpdate(catalog, delta, options),
+      { url: SOURCE_URL },
+      SESSION_URI
+    );
+
+    expect(videoSetOf(presentation).switchingSets).toHaveLength(2);
+    // A screen share starting mid-session must not change what is on screen.
+    expect(getTracksByType(presentation, 'video').map((track) => track.id)).toEqual([moqTrackId(ALICE, '1080p-video')]);
+  });
+
   it('keeps ids stable across updates so selection equality holds', () => {
     const options = { catalogNamespace: ['conference', 'alice'] };
     const catalog = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);

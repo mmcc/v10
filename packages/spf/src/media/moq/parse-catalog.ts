@@ -10,7 +10,10 @@
  * 2. `moqCatalogToPresentation` — project the catalog onto the shared
  *    CMAF-HAM model (`Presentation` → `SelectionSet` → `SwitchingSet` →
  *    live tracks), which the reused track-selection machinery consumes
- *    unchanged.
+ *    unchanged. That reuse sets the projection's hardest constraint: the
+ *    ABR ranker treats a switching set as quality alternates of one thing,
+ *    so video tracks that are not alternates get their own switching sets
+ *    (see `videoAlternatesKey`).
  *
  * Track ids are derived from full track names (namespace + name), NOT
  * `generateId()` like the HLS parser: live catalog updates re-parse into
@@ -28,6 +31,7 @@ import type {
   SelectionSet,
   TextSelectionSet,
   VideoSelectionSet,
+  VideoSwitchingSet,
 } from '../types';
 import { encodeNamespaceName, parseMoqSource } from './parse-source';
 
@@ -498,6 +502,62 @@ export function parseChannelConfig(channelConfig: string | undefined): number | 
 }
 
 /**
+ * Alternates identity of a video track — what makes two renditions quality
+ * alternates the ABR ranker may swap between, rather than two different
+ * things to look at.
+ *
+ * MSF states it explicitly with `altGroup` — the field for tracks that are
+ * alternate representations of the same content. A track declaring none is
+ * not declared an alternate of anything, so it is its own content, keyed by
+ * its name (unique within a namespace).
+ *
+ * This is what keeps a publisher's camera (`video`) and screen share
+ * (`screen`) apart. Both are LOC video with `role: 'video'` and both sit in
+ * one `renderGroup` — which means *render together*, the opposite of
+ * interchangeable. Folded into one switching set they became ABR
+ * alternates, and a throughput dip swapped the viewer from the camera to
+ * the screen share and back.
+ *
+ * The cost is deliberate: a publisher shipping an ABR ladder that declares
+ * no `altGroup` gets one switching set per rendition, and only the first is
+ * rendered — no adaptation. That failure is recoverable by declaring
+ * `altGroup`, which is what the field is for. Silently changing what the
+ * viewer is watching is not.
+ */
+function videoAlternatesKey(track: MoqVideoTrack): string {
+  return track.moq.altGroup !== undefined ? `alt-${track.moq.altGroup}` : track.moq.name;
+}
+
+/**
+ * Group video tracks into one switching set per content item, in catalog
+ * order.
+ *
+ * Order is load-bearing: the first switching set is the one the engine
+ * renders (`getTracksByType` and every selection behavior through it read
+ * switching set 0), and it is the only set the bandwidth ranker ever sees —
+ * which is what makes the default deterministic and cross-content switching
+ * impossible. The publisher emits the camera before the screen share, so
+ * the camera is the view.
+ */
+function videoSwitchingSets(tracks: readonly MoqVideoTrack[]): VideoSwitchingSet[] {
+  const groups = new Map<string, MoqVideoTrack[]>();
+  for (const track of tracks) {
+    const key = videoAlternatesKey(track);
+    const group = groups.get(key);
+    if (group) group.push(track);
+    else groups.set(key, [track]);
+  }
+  return [...groups].map(([key, group], index) => ({
+    // The rendered set keeps the id it had when every video track shared one
+    // set, so a camera-only catalog — every catalog in production today —
+    // projects exactly as it did before screen share existed.
+    id: index === 0 ? 'moq-video-main' : `moq-video-${key}`,
+    type: 'video' as const,
+    tracks: group,
+  }));
+}
+
+/**
  * Project the current catalog onto the shared media model. The result is
  * a fully resolved `Presentation` whose tracks are `LiveOf` shapes
  * (`deliveryMode: 'push'`) — selection consumes them as-is; nothing else
@@ -568,10 +628,16 @@ export function moqCatalogToPresentation(
     const set: VideoSelectionSet = {
       id: 'moq-video',
       type: 'video',
-      switchingSets: [{ id: 'moq-video-main', type: 'video', tracks: video }],
+      switchingSets: videoSwitchingSets(video),
     };
     selectionSets.push(set);
   }
+  // Audio and text stay at one switching set per type on purpose. Their
+  // renditions are reached only through switching set 0 too, so splitting
+  // them by alternates identity would make every language but the first
+  // unselectable; `groupId` (`alt-<n>`) already carries the grouping those
+  // tracks need, and no bandwidth-ranked pick among them changes what is
+  // being watched.
   if (audio.length) {
     const set: AudioSelectionSet = {
       id: 'moq-audio',
