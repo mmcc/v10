@@ -11,10 +11,13 @@ afterEach(() => {
 
 function createWrapper({ captureState = 'idle' as MediaCaptureState } = {}) {
   return createPlayerWrapper({
-    captureSource: null,
-    captureState,
+    cameraActive: false,
+    screenShareActive: false,
+    cameraState: captureState,
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'available',
-    selectCaptureSource: vi.fn(),
+    toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
   }).Wrapper;
 }

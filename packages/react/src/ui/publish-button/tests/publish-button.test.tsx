@@ -20,10 +20,13 @@ function createWrapper({
     publish,
     unpublish,
     // `captureSource` feature slice
-    captureSource: captureState === 'active' ? 'camera' : null,
-    captureState,
+    cameraActive: captureState === 'active',
+    screenShareActive: false,
+    cameraState: captureState,
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'available',
-    selectCaptureSource: vi.fn(),
+    toggleCamera: vi.fn(),
     toggleScreenShare: vi.fn(),
   });
 

@@ -7,22 +7,27 @@ import { definePlayerFeature } from '../../feature';
 export const captureSourceFeature = definePlayerFeature({
   name: 'captureSource',
   state: ({ target }): MediaCaptureSourceState => ({
-    captureSource: null,
-    captureState: 'idle',
+    cameraActive: false,
+    screenShareActive: false,
+    cameraState: 'idle',
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'unavailable',
 
-    selectCaptureSource(source) {
+    toggleCamera() {
       const { media } = target();
-      if (!isMediaCaptureSourceCapable(media)) return;
-      media.captureSource = source;
+      if (!isMediaCaptureSourceCapable(media)) return false;
+      const next = !media.cameraActive;
+      media.cameraActive = next;
+      return next;
     },
 
     toggleScreenShare() {
       const { media } = target();
       if (!isMediaCaptureSourceCapable(media)) return false;
-      const sharing = media.captureSource === 'screen';
-      media.captureSource = sharing ? 'camera' : 'screen';
-      return !sharing;
+      const next = !media.screenShareActive;
+      media.screenShareActive = next;
+      return next;
     },
   }),
 
@@ -35,10 +40,17 @@ export const captureSourceFeature = definePlayerFeature({
       screenShareAvailability: canScreenShare() ? 'available' : 'unsupported',
     });
 
+    // Defaulted reads: the capability predicate checks presence of the
+    // core fields, not the whole widened contract, so a media host from
+    // an older generation may lack e.g. `micState` — the slice must never
+    // hold `undefined` where UIs expect a lifecycle value.
     const sync = () =>
       set({
-        captureSource: media.captureSource,
-        captureState: media.captureState,
+        cameraActive: media.cameraActive ?? false,
+        screenShareActive: media.screenShareActive ?? false,
+        cameraState: media.cameraState ?? 'idle',
+        screenShareState: media.screenShareState ?? 'idle',
+        micState: media.micState ?? 'idle',
       });
 
     sync();

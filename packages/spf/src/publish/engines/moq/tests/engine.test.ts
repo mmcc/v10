@@ -5,13 +5,12 @@ import { createMoqPublishEngine } from '../engine';
 const disposals: (() => void)[] = [];
 
 /**
- * A real, continuously producing `MediaStream` built without any capture
- * device: an animated canvas capture for video (frames only flow while
- * the canvas repaints) plus a WebAudio oscillator routed to a stream
- * destination for audio. Real tracks give `MediaStreamTrackProcessor`
- * real frames in headless Chromium, where no fake camera exists.
+ * A real, continuously producing video-only `MediaStream` built without
+ * any capture device: an animated canvas capture (frames only flow while
+ * the canvas repaints). Real tracks give `MediaStreamTrackProcessor` real
+ * frames in headless Chromium, where no fake camera exists.
  */
-function makeLiveCameraStream(): MediaStream {
+function makeLiveVideoStream(): MediaStream {
   const canvas = document.createElement('canvas');
   canvas.width = 320;
   canvas.height = 240;
@@ -23,8 +22,11 @@ function makeLiveCameraStream(): MediaStream {
     context.fillRect(0, 0, canvas.width, canvas.height);
   }, 33);
   disposals.push(() => clearInterval(paint));
-  const stream = canvas.captureStream(30);
+  return canvas.captureStream(30);
+}
 
+/** A real, continuously producing audio-only `MediaStream` via a WebAudio oscillator. */
+function makeLiveAudioStream(): MediaStream {
   const audioContext = new AudioContext({ sampleRate: 48_000 });
   disposals.push(() => void audioContext.close().catch(() => undefined));
   const oscillator = audioContext.createOscillator();
@@ -33,9 +35,20 @@ function makeLiveCameraStream(): MediaStream {
   oscillator.start();
   // Fire-and-forget: a suspended context just means silent audio frames.
   void audioContext.resume().catch(() => undefined);
-  for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
+  return destination.stream;
+}
 
-  return stream;
+/**
+ * The camera and mic pipelines both call `getUserMedia`, distinguished
+ * only by which of `video`/`audio` is truthy in the constraints — mirror
+ * that dispatch so each pipeline gets its own live stream instead of
+ * sharing one (which would make releasing one stop the other's tracks).
+ */
+function mockGetUserMedia(): void {
+  vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
+    if (constraints?.audio) return makeLiveAudioStream();
+    return makeLiveVideoStream();
+  });
 }
 
 describe('createMoqPublishEngine', () => {
@@ -45,7 +58,7 @@ describe('createMoqPublishEngine', () => {
   });
 
   it('drives capture → probe → encode → publishStats end to end', async () => {
-    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(makeLiveCameraStream());
+    mockGetUserMedia();
     const sunk: EncodedChunkSinkMeta[] = [];
     const engine = createMoqPublishEngine({
       statsIntervalMs: 250,
@@ -54,21 +67,22 @@ describe('createMoqPublishEngine', () => {
     });
     disposals.push(() => void engine.destroy());
 
-    engine.state.captureSource.set({ kind: 'camera' });
+    engine.state.cameraActive.set(true);
     await vi.waitFor(() => {
-      expect(engine.state.captureStatus.get()).toBe('active');
+      expect(engine.state.cameraState.get()).toBe('active');
+      expect(engine.state.micState.get()).toBe('active');
     });
 
     // Probe facts land once the track settings are known.
     await vi.waitFor(() => {
-      expect(engine.state.encoderSupport.get()?.video?.length).toBeGreaterThanOrEqual(1);
-      expect(engine.state.activeEncodings.get()?.video).toBeDefined();
+      expect(engine.state.encoderSupport.get()?.camera?.length).toBeGreaterThanOrEqual(1);
+      expect(engine.state.activeEncodings.get()?.camera).toBeDefined();
       expect(engine.state.activeEncodings.get()?.audio).toMatchObject({ codec: 'opus' });
     });
 
     // The actor cluster follows the active encodings.
     await vi.waitFor(() => {
-      expect(engine.context.videoEncoderActor.get()).toBeDefined();
+      expect(engine.context.cameraEncoderActor.get()).toBeDefined();
       expect(engine.context.audioEncoderActor.get()).toBeDefined();
     });
 
@@ -91,34 +105,39 @@ describe('createMoqPublishEngine', () => {
     expect(engine.state.publishError.get()).toBeUndefined();
 
     // Packaged chunks reached the configured sink, keyframes first.
-    expect(sunk.some((meta) => meta.track === 'video' && meta.keyframe)).toBe(true);
+    expect(sunk.some((meta) => meta.track === 'camera' && meta.keyframe)).toBe(true);
     expect(sunk[0]!.keyframe).toBe(true);
 
-    // Releasing capture winds the encode stage down.
-    const videoActor = engine.context.videoEncoderActor.get()!;
-    engine.state.captureSource.set(undefined);
+    // Releasing the camera winds its encode stage down without touching the mic.
+    const cameraActor = engine.context.cameraEncoderActor.get()!;
+    engine.state.cameraActive.set(false);
     await vi.waitFor(() => {
-      expect(engine.context.videoEncoderActor.get()).toBeUndefined();
+      expect(engine.context.cameraEncoderActor.get()).toBeUndefined();
+    });
+    expect(cameraActor.snapshot.get().value).toBe('destroyed');
+    // The mic pipeline is independent — releasing the camera (the only
+    // video source) also collapses the mic's own gate (neither camera nor
+    // screen wants to capture anymore), so it winds down too.
+    await vi.waitFor(() => {
       expect(engine.state.publishStats.get()).toBeUndefined();
     });
-    expect(videoActor.snapshot.get().value).toBe('destroyed');
   }, 30_000);
 
   it('forces keyframes on the configured group cadence', async () => {
-    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(makeLiveCameraStream());
+    mockGetUserMedia();
     const videoKeyTimestamps: number[] = [];
     let lastVideoTimestampUs = 0;
     const engine = createMoqPublishEngine({
       groupDurationSec: 0.5,
       chunkSink: (_packaged, meta) => {
-        if (meta.track !== 'video') return;
+        if (meta.track !== 'camera') return;
         lastVideoTimestampUs = meta.timestampUs;
         if (meta.keyframe) videoKeyTimestamps.push(meta.timestampUs);
       },
     });
     disposals.push(() => void engine.destroy());
 
-    engine.state.captureSource.set({ kind: 'camera' });
+    engine.state.cameraActive.set(true);
     // Wait for ~2s of media time so several 0.5s groups elapse.
     await vi.waitFor(
       () => {
@@ -134,4 +153,73 @@ describe('createMoqPublishEngine', () => {
       expect(videoKeyTimestamps[i]! - videoKeyTimestamps[i - 1]!).toBeGreaterThanOrEqual(500_000);
     }
   }, 30_000);
+
+  it('runs camera and screen as independent, simultaneous video pipelines', async () => {
+    mockGetUserMedia();
+    vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockImplementation(async () => makeLiveVideoStream());
+    const tracks = new Set<EncodedChunkSinkMeta['track']>();
+    const engine = createMoqPublishEngine({
+      groupDurationSec: 1,
+      chunkSink: (_packaged, meta) => tracks.add(meta.track),
+    });
+    disposals.push(() => void engine.destroy());
+
+    engine.state.cameraActive.set(true);
+    engine.state.screenShareActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(engine.state.cameraState.get()).toBe('active');
+      expect(engine.state.screenShareState.get()).toBe('active');
+      expect(engine.context.cameraEncoderActor.get()).toBeDefined();
+      expect(engine.context.screenEncoderActor.get()).toBeDefined();
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(tracks.has('camera')).toBe(true);
+        expect(tracks.has('screen')).toBe(true);
+      },
+      { timeout: 15_000, interval: 250 }
+    );
+
+    // Stopping the screen share leaves the camera pipeline untouched.
+    const screenActor = engine.context.screenEncoderActor.get()!;
+    engine.state.screenShareActive.set(false);
+    await vi.waitFor(() => {
+      expect(engine.context.screenEncoderActor.get()).toBeUndefined();
+    });
+    expect(screenActor.snapshot.get().value).toBe('destroyed');
+    expect(engine.state.cameraState.get()).toBe('active');
+  }, 30_000);
+
+  it('still honors the deprecated `video` tuning as the camera tuning', async () => {
+    mockGetUserMedia();
+    // The pre-rename config key: clients that never migrated must keep
+    // tuning the camera ladder rather than be silently ignored.
+    const engine = createMoqPublishEngine({ video: { width: 320, height: 240, bitrate: 900_000 } });
+    disposals.push(() => void engine.destroy());
+
+    engine.state.cameraActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(engine.state.activeEncodings.get()?.camera).toBeDefined();
+    });
+    expect(engine.state.activeEncodings.get()!.camera).toMatchObject({ width: 320, height: 240, bitrate: 900_000 });
+  });
+
+  it('prefers `camera` over the deprecated `video` alias when both are given', async () => {
+    mockGetUserMedia();
+    const engine = createMoqPublishEngine({
+      camera: { width: 320, height: 240, bitrate: 1_100_000 },
+      video: { width: 320, height: 240, bitrate: 900_000 },
+    });
+    disposals.push(() => void engine.destroy());
+
+    engine.state.cameraActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(engine.state.activeEncodings.get()?.camera).toBeDefined();
+    });
+    expect(engine.state.activeEncodings.get()!.camera).toMatchObject({ bitrate: 1_100_000 });
+  });
 });

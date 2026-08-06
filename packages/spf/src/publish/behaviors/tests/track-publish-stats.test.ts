@@ -7,6 +7,7 @@ import {
   type EncoderActorCounters,
   type EncoderActorState,
   type EncoderStatsSource,
+  mergeVideoCounters,
   type TrackPublishStatsContext,
   type TrackPublishStatsState,
   trackPublishStats,
@@ -46,10 +47,12 @@ const disposals: (() => void)[] = [];
 function setupStats() {
   const state = { publishStats: signal<TrackPublishStatsState['publishStats']>(undefined) };
   const context = {
-    videoEncoderActor: signal<TrackPublishStatsContext['videoEncoderActor']>(undefined),
+    cameraEncoderActor: signal<TrackPublishStatsContext['cameraEncoderActor']>(undefined),
+    screenEncoderActor: signal<TrackPublishStatsContext['screenEncoderActor']>(undefined),
     audioEncoderActor: signal<TrackPublishStatsContext['audioEncoderActor']>(undefined),
     catalogTrackPublisher: signal<TrackPublishStatsContext['catalogTrackPublisher']>(undefined),
     videoTrackPublisher: signal<TrackPublishStatsContext['videoTrackPublisher']>(undefined),
+    screenTrackPublisher: signal<TrackPublishStatsContext['screenTrackPublisher']>(undefined),
     audioTrackPublisher: signal<TrackPublishStatsContext['audioTrackPublisher']>(undefined),
     publishSessionActor: signal<TrackPublishStatsContext['publishSessionActor']>(undefined),
   };
@@ -84,6 +87,24 @@ function makeSessionActor(subscriberCount: number): PublishSessionActor {
   return { snapshot, getAuthParameters: () => ({}), destroy: () => {} };
 }
 
+describe('mergeVideoCounters', () => {
+  it('merges lastTimestampUs to the real value when only one side has emitted', () => {
+    // NaN means "present but hasn't emitted yet" (the counters contract),
+    // not "unknown" — it must not poison the other side's real reading.
+    const emitting = { ...ZERO_COUNTERS, lastTimestampUs: 1_000 };
+    const pending = { ...ZERO_COUNTERS, lastTimestampUs: Number.NaN };
+
+    expect(mergeVideoCounters(emitting, pending)!.lastTimestampUs).toBe(1_000);
+    expect(mergeVideoCounters(pending, emitting)!.lastTimestampUs).toBe(1_000);
+  });
+
+  it('merges two pre-first-chunk encoders to NaN', () => {
+    const pending = { ...ZERO_COUNTERS, lastTimestampUs: Number.NaN };
+
+    expect(mergeVideoCounters(pending, pending)!.lastTimestampUs).toBeNaN();
+  });
+});
+
 describe('trackPublishStats', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
@@ -100,7 +121,7 @@ describe('trackPublishStats', () => {
     const { state, context } = setupStats();
     const video = makeSource({ droppedFrames: 2, keyframes: 1 });
     const audio = makeSource({ droppedFrames: 1 });
-    context.videoEncoderActor.set(video.source);
+    context.cameraEncoderActor.set(video.source);
     context.audioEncoderActor.set(audio.source);
 
     // Continuously moving counters (like a live encoder) so every sample
@@ -128,9 +149,39 @@ describe('trackPublishStats', () => {
     expect(stats!.subscriberCount).toBeNaN();
   });
 
+  it('aggregates camera + screen encoders into one video reading', async () => {
+    const { state, context } = setupStats();
+    const camera = makeSource({ encodedFrames: 0, encodedBytes: 0, droppedFrames: 2 });
+    const screen = makeSource({ encodedFrames: 0, encodedBytes: 0, droppedFrames: 3 });
+    context.cameraEncoderActor.set(camera.source);
+    context.screenEncoderActor.set(screen.source);
+
+    const grow = setInterval(() => {
+      const c = camera.snapshot.get().context;
+      advance(camera.snapshot, { encodedFrames: c.encodedFrames + 2, encodedBytes: c.encodedBytes + 3_000 });
+      const s = screen.snapshot.get().context;
+      advance(screen.snapshot, { encodedFrames: s.encodedFrames + 1, encodedBytes: s.encodedBytes + 1_000 });
+    }, 5);
+    disposals.push(() => clearInterval(grow));
+
+    await vi.waitFor(() => {
+      expect(state.publishStats.get()?.encodedFps ?? 0).toBeGreaterThan(0);
+    });
+    // droppedFrames is a cumulative sum, not a rate diff, so it is a
+    // timing-independent proof that both legs' counters reach the merge —
+    // dropping either leg (or averaging instead of summing) would read 2,
+    // 3, or 2.5 here instead of 5.
+    expect(state.publishStats.get()!.droppedFrames).toBe(5);
+    // Screen alone tearing down must not drop the aggregate to unknown —
+    // the camera leg still exists.
+    context.screenEncoderActor.set(undefined);
+    await new Promise((resolve) => setTimeout(resolve, STATS_INTERVAL_MS * 2));
+    expect(state.publishStats.get()!.videoBitrate).toBeGreaterThanOrEqual(0);
+  });
+
   it('samples transport facts from the track publishers and the session actor', async () => {
     const { state, context } = setupStats();
-    context.videoEncoderActor.set(makeSource().source);
+    context.cameraEncoderActor.set(makeSource().source);
     context.catalogTrackPublisher.set(makePublisher({ bytesSent: 500 }));
     context.videoTrackPublisher.set(makePublisher({ droppedGroups: 2, bytesSent: 10_000 }));
     context.audioTrackPublisher.set(makePublisher({ droppedGroups: 1, bytesSent: 2_000 }));
@@ -157,7 +208,7 @@ describe('trackPublishStats', () => {
   it('derives rates from deltas between samples, not cumulative totals', async () => {
     const { state, context } = setupStats();
     const video = makeSource({ encodedFrames: 1_000, encodedBytes: 1_000_000 });
-    context.videoEncoderActor.set(video.source);
+    context.cameraEncoderActor.set(video.source);
 
     // No counter movement after the baseline: rates must be zero even
     // though the cumulative totals are large.
@@ -173,7 +224,7 @@ describe('trackPublishStats', () => {
   it('works video-only, reporting the audio rate as unknown', async () => {
     const { state, context } = setupStats();
     const video = makeSource({ encodedFrames: 10, encodedBytes: 5_000 });
-    context.videoEncoderActor.set(video.source);
+    context.cameraEncoderActor.set(video.source);
     context.videoTrackPublisher.set(makePublisher({ bytesSent: 4_000 }));
 
     await vi.waitFor(() => {
@@ -202,12 +253,12 @@ describe('trackPublishStats', () => {
   it('stops sampling and clears the stats when the encoders go away', async () => {
     const { state, context } = setupStats();
     const video = makeSource();
-    context.videoEncoderActor.set(video.source);
+    context.cameraEncoderActor.set(video.source);
     await vi.waitFor(() => {
       expect(state.publishStats.get()).toBeDefined();
     });
 
-    context.videoEncoderActor.set(undefined);
+    context.cameraEncoderActor.set(undefined);
     await vi.waitFor(() => {
       expect(state.publishStats.get()).toBeUndefined();
     });
@@ -220,7 +271,7 @@ describe('trackPublishStats', () => {
 
   it('clears the interval on reactor destroy', async () => {
     const { state, context, reactor } = setupStats();
-    context.videoEncoderActor.set(makeSource().source);
+    context.cameraEncoderActor.set(makeSource().source);
     await vi.waitFor(() => {
       expect(state.publishStats.get()).toBeDefined();
     });

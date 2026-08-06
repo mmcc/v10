@@ -2,12 +2,15 @@
  * **Keep `state.captureDevices` synced with the platform's capture
  * inputs.** On setup (when `navigator.mediaDevices` exists) enumerates
  * `videoinput`/`audioinput` devices into the slot, then re-enumerates on
- * the platform `devicechange` event and whenever `state.captureStatus`
- * becomes `'active'` — device labels stay redacted until a capture grant,
- * so the post-grant refresh is what surfaces human-readable names.
+ * the platform `devicechange` event and whenever any capture pipeline's
+ * status becomes `'active'` — device labels stay redacted until a capture
+ * grant, so the post-grant refresh is what surfaces human-readable names
+ * (a camera grant reveals video-input labels, a mic grant reveals
+ * audio-input ones; screen share never gates an input-device permission,
+ * so it's excluded).
  *
- * Simple behavior: one platform listener plus one effect watching the
- * capture status. Each refresh writes a fresh array (a new enumeration
+ * Simple behavior: one platform listener plus one effect watching both
+ * capture statuses. Each refresh writes a fresh array (a new enumeration
  * snapshot), even when the contents are unchanged. In-flight enumerations
  * that resolve after cleanup — or after a newer refresh started — are
  * discarded, so a slow older snapshot can never overwrite a newer one.
@@ -33,7 +36,8 @@ export interface CaptureDeviceFacts {
  */
 export interface EnumerateCaptureDevicesState {
   captureDevices?: CaptureDeviceFacts[];
-  captureStatus?: CaptureStatus;
+  cameraState?: CaptureStatus;
+  micState?: CaptureStatus;
 }
 
 function isCaptureInputKind(kind: MediaDeviceKind): kind is 'videoinput' | 'audioinput' {
@@ -45,7 +49,8 @@ function enumerateCaptureDevicesSetup({
 }: {
   state: {
     captureDevices: Signal<EnumerateCaptureDevicesState['captureDevices']>;
-    captureStatus: ReadonlySignal<EnumerateCaptureDevicesState['captureStatus']>;
+    cameraState: ReadonlySignal<EnumerateCaptureDevicesState['cameraState']>;
+    micState: ReadonlySignal<EnumerateCaptureDevicesState['micState']>;
   };
 }): (() => void) | undefined {
   const mediaDevices = globalThis.navigator?.mediaDevices;
@@ -68,9 +73,16 @@ function enumerateCaptureDevicesSetup({
 
   void refresh();
   const removeDeviceChange = listen(mediaDevices, 'devicechange', () => void refresh());
-  // Labels appear once capture is granted — refresh when it goes active.
+  // Labels appear once capture is granted — refresh when either the
+  // camera or the mic goes active (each reveals a different input kind).
+  // Both statuses are read unconditionally BEFORE the gate: a
+  // short-circuited `&&` would drop the mic from the effect's tracked
+  // dependencies while the camera is active, and a later mic grant would
+  // never reveal the audio-input labels.
   const cleanupStatus = effect(() => {
-    if (state.captureStatus.get() !== 'active') return;
+    const cameraGranted = state.cameraState.get() === 'active';
+    const micGranted = state.micState.get() === 'active';
+    if (!cameraGranted && !micGranted) return;
     void refresh();
   });
 
@@ -82,7 +94,7 @@ function enumerateCaptureDevicesSetup({
 }
 
 export const enumerateCaptureDevices = defineBehavior({
-  stateKeys: ['captureDevices', 'captureStatus'],
+  stateKeys: ['captureDevices', 'cameraState', 'micState'],
   contextKeys: [],
   setup: enumerateCaptureDevicesSetup,
 });

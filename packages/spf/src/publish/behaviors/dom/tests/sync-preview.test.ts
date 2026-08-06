@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ContextSignals } from '../../../../core/composition/create-composition';
+import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
-import { type SyncPreviewContext, syncPreview } from '../sync-preview';
+import { type SyncPreviewContext, type SyncPreviewState, syncPreview } from '../sync-preview';
+
+function makeState(initial: SyncPreviewState = {}): StateSignals<SyncPreviewState> {
+  return {
+    previewSource: signal(initial.previewSource ?? 'camera'),
+  };
+}
 
 function makeContext(initial: SyncPreviewContext = {}): ContextSignals<SyncPreviewContext> {
   return {
     previewElement: signal(initial.previewElement),
-    captureStream: signal(initial.captureStream),
+    cameraStream: signal(initial.cameraStream),
+    screenStream: signal(initial.screenStream),
   };
 }
 
@@ -19,21 +26,23 @@ function makePreviewElement(): HTMLVideoElement {
 }
 
 describe('syncPreview', () => {
+  let state: StateSignals<SyncPreviewState>;
   let context: ContextSignals<SyncPreviewContext>;
   let cleanup: () => void;
 
   beforeEach(() => {
+    state = makeState();
     context = makeContext();
-    cleanup = syncPreview.setup({ context });
+    cleanup = syncPreview.setup({ state, context });
     return () => cleanup();
   });
 
-  it('mirrors the stream into the preview element (muted, inline, playing)', async () => {
+  it('mirrors the camera stream by default (muted, inline, playing)', async () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
 
     context.previewElement.set(element);
-    context.captureStream.set(stream);
+    context.cameraStream.set(stream);
 
     await vi.waitFor(() => {
       expect(element.srcObject).toBe(stream);
@@ -43,16 +52,43 @@ describe('syncPreview', () => {
     expect(element.play).toHaveBeenCalled();
   });
 
-  it('clears srcObject when the stream goes away', async () => {
+  it('ignores the screen stream while previewSource is camera', async () => {
+    const element = makePreviewElement();
+    context.previewElement.set(element);
+    context.screenStream.set(new MediaStream());
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(element.srcObject).toBeNull();
+  });
+
+  it('switches to the screen stream when previewSource changes', async () => {
+    const element = makePreviewElement();
+    const cameraStream = new MediaStream();
+    const screenStream = new MediaStream();
+    context.previewElement.set(element);
+    context.cameraStream.set(cameraStream);
+    context.screenStream.set(screenStream);
+    await vi.waitFor(() => {
+      expect(element.srcObject).toBe(cameraStream);
+    });
+
+    state.previewSource.set('screen');
+
+    await vi.waitFor(() => {
+      expect(element.srcObject).toBe(screenStream);
+    });
+  });
+
+  it('clears srcObject when the selected stream goes away', async () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
     context.previewElement.set(element);
-    context.captureStream.set(stream);
+    context.cameraStream.set(stream);
     await vi.waitFor(() => {
       expect(element.srcObject).toBe(stream);
     });
 
-    context.captureStream.set(undefined);
+    context.cameraStream.set(undefined);
 
     await vi.waitFor(() => {
       expect(element.srcObject).toBeNull();
@@ -64,7 +100,7 @@ describe('syncPreview', () => {
     const second = makePreviewElement();
     const stream = new MediaStream();
     context.previewElement.set(first);
-    context.captureStream.set(stream);
+    context.cameraStream.set(stream);
     await vi.waitFor(() => {
       expect(first.srcObject).toBe(stream);
     });
@@ -81,7 +117,7 @@ describe('syncPreview', () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
     context.previewElement.set(element);
-    context.captureStream.set(stream);
+    context.cameraStream.set(stream);
     await vi.waitFor(() => {
       expect(element.srcObject).toBe(stream);
     });
@@ -95,14 +131,14 @@ describe('syncPreview', () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
     context.previewElement.set(element);
-    context.captureStream.set(stream);
+    context.cameraStream.set(stream);
     await vi.waitFor(() => {
       expect(element.srcObject).toBe(stream);
     });
 
     const external = new MediaStream();
     element.srcObject = external;
-    context.captureStream.set(undefined);
+    context.cameraStream.set(undefined);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(element.srcObject).toBe(external);

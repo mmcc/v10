@@ -66,6 +66,7 @@ export type { I18nContext as I18nLitContext } from './i18n/context';
 export { i18nContext } from './i18n/context';
 // Media
 export { MediaContainerElement } from './media/container-element';
+export { installCaptureAttributeReflection } from './media/moq-publish-video';
 // Player
 export * from './player/context';
 export * from './player/create-player';

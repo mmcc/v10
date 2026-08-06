@@ -11,10 +11,8 @@ export type {
   AudioEncoderActor,
   CaptureDeviceFacts,
   CaptureSourceKind,
-  CaptureSourceSelection,
   CaptureStatus,
   CaptureTrackFacts,
-  CaptureTracksFacts,
   ConnectPublishTransport,
   EncodedChunkSink,
   EncodedChunkSinkMeta,
@@ -23,6 +21,7 @@ export type {
   MoqPublishEngineContext,
   MoqPublishEngineSignals,
   MoqPublishEngineState,
+  PreviewSource,
   PublishEndpoint,
   PublishErrorFacts,
   PublishSessionActor,
@@ -30,6 +29,7 @@ export type {
   PublishStatsFacts,
   SelectEncoderConfig,
   TrackPublisherActor,
+  VideoEncodeTuning,
   VideoEncoderActor,
 } from './engine';
 export { createMoqPublishEngine } from './engine';

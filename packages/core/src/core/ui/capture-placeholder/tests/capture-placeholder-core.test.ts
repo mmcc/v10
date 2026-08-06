@@ -5,10 +5,13 @@ import { CapturePlaceholderCore } from '../capture-placeholder-core';
 
 function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): MediaCaptureSourceState {
   return {
-    captureSource: null,
-    captureState: 'idle',
+    cameraActive: false,
+    screenShareActive: false,
+    cameraState: 'idle',
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'available',
-    selectCaptureSource: vi.fn(),
+    toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
     ...overrides,
   };
@@ -24,14 +27,28 @@ function createState(overrides: Partial<CapturePlaceholderState> = {}): CaptureP
 
 describe('CapturePlaceholderCore', () => {
   describe('getState', () => {
-    it('projects the capture state and label', () => {
+    it('projects the aggregate capture state and label', () => {
       const core = new CapturePlaceholderCore();
-      core.setMedia(createMediaState({ captureState: 'denied' }));
+      core.setMedia(createMediaState({ cameraState: 'denied' }));
 
       const state = core.getState();
 
       expect(state.captureState).toBe('denied');
       expect(state.label).toBe('Camera and microphone access is blocked. Update your browser permissions to continue.');
+    });
+
+    it('is active when either source is active', () => {
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'active' }));
+
+      expect(core.getState().captureState).toBe('active');
+    });
+
+    it('prefers the more in-progress status when the two disagree', () => {
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'acquiring' }));
+
+      expect(core.getState().captureState).toBe('acquiring');
     });
   });
 

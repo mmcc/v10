@@ -6,7 +6,8 @@ import { type EnumerateCaptureDevicesState, enumerateCaptureDevices } from '../e
 function makeState(initial: EnumerateCaptureDevicesState = {}): StateSignals<EnumerateCaptureDevicesState> {
   return {
     captureDevices: signal(initial.captureDevices),
-    captureStatus: signal(initial.captureStatus ?? 'idle'),
+    cameraState: signal(initial.cameraState ?? 'idle'),
+    micState: signal(initial.micState ?? 'idle'),
   };
 }
 
@@ -88,7 +89,7 @@ describe('enumerateCaptureDevices', () => {
     expect(state.captureDevices.get()).toEqual([{ deviceId: 'cam-new', kind: 'videoinput', label: 'New camera' }]);
   });
 
-  it('re-enumerates when captureStatus becomes active (labels appear post-grant)', async () => {
+  it('re-enumerates when the camera goes active (labels appear post-grant)', async () => {
     const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
     const { state } = setupEnumerate();
 
@@ -96,11 +97,47 @@ describe('enumerateCaptureDevices', () => {
       expect(enumerate).toHaveBeenCalledTimes(1);
     });
 
-    state.captureStatus.set('acquiring');
-    state.captureStatus.set('active');
+    state.cameraState.set('acquiring');
+    state.cameraState.set('active');
 
     await vi.waitFor(() => {
       expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('re-enumerates when the mic goes active too (audio-input labels appear post-grant)', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    state.micState.set('active');
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('re-enumerates on a mic grant while the camera is already active — both statuses stay tracked', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state } = setupEnumerate();
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    state.cameraState.set('active');
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+
+    // The regression: a short-circuited gate stopped tracking micState
+    // once the camera was granted, so a later mic grant never revealed
+    // the audio-input labels.
+    state.micState.set('active');
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -114,7 +151,7 @@ describe('enumerateCaptureDevices', () => {
 
     cleanup?.();
     navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
-    state.captureStatus.set('active');
+    state.cameraState.set('active');
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(enumerate).toHaveBeenCalledTimes(1);

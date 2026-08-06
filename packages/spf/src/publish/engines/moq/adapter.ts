@@ -25,13 +25,12 @@ import { effect } from '../../../core/signals/effect';
 import { peek } from '../../../core/signals/primitives';
 import type {
   CaptureDeviceFacts,
-  CaptureSourceKind,
-  CaptureSourceSelection,
   CaptureStatus,
   MoqPublishEngineConfig,
   MoqPublishEngineContext,
   MoqPublishEngineSignals,
   MoqPublishEngineState,
+  PreviewSource,
   PublishSessionStatus,
   PublishStatsFacts,
 } from './engine';
@@ -73,15 +72,19 @@ export interface MoqPublishMediaProps {
    * session's requests; empty string sends none.
    */
   publishAuthToken: string;
-  /** Selected capture source kind; `null` releases capture. */
-  captureSource: CaptureSourceKind | null;
+  /** Camera acquisition; additive with `screenShareActive`, not exclusive. */
+  cameraActive: boolean;
+  /** Screen-share acquisition; additive with `cameraActive`, not exclusive. */
+  screenShareActive: boolean;
+  /** Which capture stream the preview element mirrors. */
+  previewSource: PreviewSource;
   /** Selected camera; empty string defers to the platform default. */
   videoInputDeviceId: string;
   /** Selected microphone; empty string defers to the platform default. */
   audioInputDeviceId: string;
-  /** Whether outgoing video is muted (track disabled, capture continues). */
+  /** Whether outgoing camera video is muted (track disabled, capture continues). */
   cameraMuted: boolean;
-  /** Whether outgoing audio is muted (track disabled, capture continues). */
+  /** Whether outgoing microphone audio is muted (track disabled, capture continues). */
   micMuted: boolean;
 }
 
@@ -89,7 +92,9 @@ export const moqPublishMediaDefaultProps: MoqPublishMediaProps = {
   publishEndpoint: '',
   publishNamespace: '',
   publishAuthToken: '',
-  captureSource: null,
+  cameraActive: false,
+  screenShareActive: false,
+  previewSource: 'camera',
   videoInputDeviceId: '',
   audioInputDeviceId: '',
   cameraMuted: false,
@@ -98,10 +103,20 @@ export const moqPublishMediaDefaultProps: MoqPublishMediaProps = {
 
 export interface MoqPublishMediaAPI extends MoqPublishMediaProps {
   readonly engine: Composition<MoqPublishEngineState, MoqPublishEngineContext>;
-  /** Current capture lifecycle. Fires `capturestatechange`. */
-  readonly captureState: CaptureStatus;
-  /** The live capture stream while capture is active, else `null`. */
-  readonly captureStream: MediaStream | null;
+  /** Camera pipeline lifecycle. Fires `capturestatechange`. */
+  readonly cameraState: CaptureStatus;
+  /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */
+  readonly screenShareState: CaptureStatus;
+  /**
+   * Microphone pipeline lifecycle. Fires `capturestatechange`. `idle`
+   * while video captures means audio-less publish (no usable mic);
+   * `denied`/`ended` say why a live broadcast has no sound.
+   */
+  readonly micState: CaptureStatus;
+  /** Live camera stream while `cameraState` is `active`, else `null`. */
+  readonly cameraStream: MediaStream | null;
+  /** Live screen-share stream while `screenShareState` is `active`, else `null`. */
+  readonly screenShareStream: MediaStream | null;
   /** Known capture input devices. Fires `capturedeviceschange`. */
   readonly captureDevices: readonly CaptureDeviceFacts[];
   /** Current publish session lifecycle. Fires `publishstatechange`. */
@@ -160,7 +175,7 @@ function toPublishState(status: PublishSessionStatus | undefined): MoqPublishMed
  *
  * const media = new MoqPublishMedia();
  * media.attach(document.querySelector('video')!);
- * media.captureSource = 'camera';
+ * media.cameraActive = true;
  * media.publishEndpoint = 'https://relay.example.com/moq';
  * media.publishNamespace = 'live/abc123';
  */
@@ -250,42 +265,57 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     }
 
     // -------------------------------------------------------------------------
-    // Capture source + input devices
+    // Capture sources + input devices — additive, not exclusive: setting
+    // one never releases the other. Each pipeline reacts to its own
+    // intent slot directly; no selection object to rebuild by hand.
+    // The intent slots are multi-writer: the acquire behaviors consume
+    // them (write `false`) when a pipeline terminates on its own
+    // (`denied`/`ended`) — see `acquire-capture-source`'s module doc — so
+    // a `true` write here is always a real acquisition attempt.
     // -------------------------------------------------------------------------
 
-    get captureSource(): CaptureSourceKind | null {
-      return this.#signals.state.captureSource.get()?.kind ?? null;
+    get cameraActive(): boolean {
+      return this.#signals.state.cameraActive.get() ?? false;
     }
 
-    set captureSource(value: CaptureSourceKind | null) {
-      const { state } = this.#signals;
-      if (value === null) {
-        if (state.captureSource.get() !== undefined) state.captureSource.set(undefined);
-        return;
-      }
-      // Re-setting the current kind is a no-op while capture is in flight
-      // or live; after `denied`/`ended` (or a failed acquire) the fresh
-      // selection object below re-fires acquisition.
-      const status = state.captureStatus.get();
-      if (state.captureSource.get()?.kind === value && (status === 'acquiring' || status === 'active')) return;
-      state.captureSource.set(this.#selectionFor(value));
+    set cameraActive(value: boolean) {
+      this.#signals.state.cameraActive.set(value);
     }
 
-    #selectionFor(kind: CaptureSourceKind): CaptureSourceSelection {
-      const selection: CaptureSourceSelection = { kind };
-      if (kind === 'camera' && this.#videoInputDeviceId) selection.videoDeviceId = this.#videoInputDeviceId;
-      // Screen capture is picker-driven, but the mic merged into an
-      // audio-less display stream still honors the selected microphone.
-      if (this.#audioInputDeviceId) selection.audioDeviceId = this.#audioInputDeviceId;
-      return selection;
+    get screenShareActive(): boolean {
+      return this.#signals.state.screenShareActive.get() ?? false;
     }
 
-    get captureState(): CaptureStatus {
-      return this.#signals.state.captureStatus.get() ?? 'idle';
+    set screenShareActive(value: boolean) {
+      this.#signals.state.screenShareActive.set(value);
     }
 
-    get captureStream(): MediaStream | null {
-      return this.#signals.context.captureStream.get() ?? null;
+    get previewSource(): PreviewSource {
+      return this.#signals.state.previewSource.get() ?? 'camera';
+    }
+
+    set previewSource(value: PreviewSource) {
+      this.#signals.state.previewSource.set(value);
+    }
+
+    get cameraState(): CaptureStatus {
+      return this.#signals.state.cameraState.get() ?? 'idle';
+    }
+
+    get screenShareState(): CaptureStatus {
+      return this.#signals.state.screenShareState.get() ?? 'idle';
+    }
+
+    get micState(): CaptureStatus {
+      return this.#signals.state.micState.get() ?? 'idle';
+    }
+
+    get cameraStream(): MediaStream | null {
+      return this.#signals.context.cameraStream.get() ?? null;
+    }
+
+    get screenShareStream(): MediaStream | null {
+      return this.#signals.context.screenStream.get() ?? null;
     }
 
     get captureDevices(): readonly CaptureDeviceFacts[] {
@@ -299,7 +329,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     set videoInputDeviceId(value: string) {
       if (value === this.#videoInputDeviceId) return;
       this.#videoInputDeviceId = value;
-      this.#reselectCamera();
+      this.#signals.state.videoInputDeviceId.set(value);
       // Selections travel on the devices event — store slices re-read both
       // the device list and the selected ids from it.
       this.#dispatch('capturedeviceschange');
@@ -312,15 +342,8 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     set audioInputDeviceId(value: string) {
       if (value === this.#audioInputDeviceId) return;
       this.#audioInputDeviceId = value;
-      this.#reselectCamera();
+      this.#signals.state.audioInputDeviceId.set(value);
       this.#dispatch('capturedeviceschange');
-    }
-
-    /** Device-id changes re-acquire only camera capture (fresh selection). */
-    #reselectCamera(): void {
-      const { state } = this.#signals;
-      if (state.captureSource.get()?.kind !== 'camera') return;
-      state.captureSource.set(this.#selectionFor('camera'));
     }
 
     // -------------------------------------------------------------------------
@@ -375,7 +398,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           new Error('MoqPublishMedia: publish() requires a publishEndpoint before it can start a session.')
         );
       }
-      if (peek(state.captureStatus) !== 'active') {
+      if (peek(state.cameraState) !== 'active' && peek(state.screenShareState) !== 'active') {
         return Promise.reject(new Error('MoqPublishMedia: publish() requires an active capture source.'));
       }
       return this.#activatePublish();
@@ -495,15 +518,24 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           }
         ),
         this.#bridge(
-          () => state.captureStatus.get() ?? 'idle',
+          () =>
+            `${state.cameraState.get() ?? 'idle'}|${state.screenShareState.get() ?? 'idle'}|${state.micState.get() ?? 'idle'}`,
           () => this.#dispatch('capturestatechange')
         ),
         this.#bridge(
-          () => state.captureSource.get()?.kind ?? null,
+          () => `${state.cameraActive.get() ?? false}|${state.screenShareActive.get() ?? false}`,
           () => this.#dispatch('capturesourcechange')
         ),
+        // Identity, not presence: a re-acquire (device switch, replug
+        // recovery) REPLACES a slot's stream in place, and consumers
+        // holding the old tracks (level meters) must hear about it. One
+        // bridge per slot keeps the Object.is dedupe exact.
         this.#bridge(
-          () => context.captureStream.get() ?? null,
+          () => context.cameraStream.get(),
+          () => this.#dispatch('capturestreamchange')
+        ),
+        this.#bridge(
+          () => context.screenStream.get(),
           () => this.#dispatch('capturestreamchange')
         ),
         this.#bridge(

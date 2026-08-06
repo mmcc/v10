@@ -85,7 +85,8 @@ export interface EncodedChunkSinkMeta {
   keyframe: boolean;
   timestampUs: number;
   byteLength: number;
-  track: 'video' | 'audio';
+  /** Which capture pipeline this chunk came from — the sink-routing label. */
+  track: 'camera' | 'screen' | 'audio';
 }
 
 /**
@@ -125,6 +126,13 @@ export interface EncoderActorOptions {
    * for deterministic tests; defaults to `Date.now() * 1000`.
    */
   nowUs?: () => number;
+  /**
+   * Sink-routing label for this actor's chunks — independent of the codec
+   * kind, since camera and screen are both `'video'` on the wire but must
+   * route to different MOQT track publishers. Defaults to the video
+   * specialization's `'camera'` / the audio specialization's `'audio'`.
+   */
+  sinkTrack?: EncodedChunkSinkMeta['track'];
 }
 
 export const DEFAULT_MAX_QUEUE_DEPTH = 60;
@@ -151,6 +159,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export function createEncoderActor<Config, Frame extends { close(): void; timestamp: number }>(options: {
+  /** Codec kind — governs only which LOC Config property carries extradata. */
   track: 'video' | 'audio';
   sink: EncodedChunkSink;
   /** Builds the codec adapter; `output`/`error` are the codec callbacks. */
@@ -161,8 +170,10 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   maxQueueDepth?: number;
   onError?: (error: unknown) => void;
   nowUs?: () => number;
+  sinkTrack?: EncodedChunkSinkMeta['track'];
 }): EncoderActor<Config, Frame> {
   const { track, sink, onError } = options;
+  const sinkTrack = options.sinkTrack ?? (track === 'video' ? 'camera' : 'audio');
   const maxQueueDepth = options.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH;
   const nowUs = options.nowUs ?? (() => Date.now() * 1000);
 
@@ -213,7 +224,7 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
             ? { videoConfig: latestConfig }
             : { audioConfig: latestConfig }
       );
-      sink(packaged, { keyframe, timestampUs, byteLength: chunk.byteLength, track });
+      sink(packaged, { keyframe, timestampUs, byteLength: chunk.byteLength, track: sinkTrack });
       inner?.send({ type: 'chunk-output', byteLength: chunk.byteLength, keyframe, timestampUs });
     },
     error: (error) => {

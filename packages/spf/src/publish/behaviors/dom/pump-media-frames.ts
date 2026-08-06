@@ -1,12 +1,16 @@
 /**
- * **Pump capture-track frames into the encoder actors.** While encoder
- * actors exist and a capture stream is live, spawns one
- * `MediaStreamTrackProcessor` read loop per encoded kind and dispatches
- * every frame as an `encode` message. Video frames force
- * `keyFrame: true` on the group cadence (`config.groupDurationSec`,
- * default 2 s), computed from frame timestamps rather than wall clock so
- * paused/hidden capture doesn't skew GoP boundaries. Loops abort on state
- * exit, stream change, or teardown.
+ * **Pump capture-track frames into the encoder actors.** Three
+ * independent read loops — camera, screen, mic — each spawned while its
+ * own stream/actor pair (`context.{cameraStream,screenStream,micStream}`
+ * + the matching encoder actor) is live, using one
+ * `MediaStreamTrackProcessor` per loop and dispatching every frame as an
+ * `encode` message. The two video loops force `keyFrame: true` on the
+ * group cadence (`config.groupDurationSec`, default 2 s each, tracked
+ * independently per kind so a screen share starting mid-session starts
+ * its own group sequence rather than inheriting the camera's), computed
+ * from frame timestamps rather than wall clock so paused/hidden capture
+ * doesn't skew GoP boundaries. Loops abort on state exit, stream change,
+ * or teardown.
  *
  * Frame ownership: the encoder actor takes ownership at `send()` and
  * closes on every path. Frames the loop cannot hand off — teardown races,
@@ -19,8 +23,7 @@
  * `MediaStreamTrackProcessor` platform support only).
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
-import type { Reactor } from '../../../core/reactors/create-machine-reactor';
-import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
+import { effect } from '../../../core/signals/effect';
 import { peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import type { AudioEncoderActor } from '../../actors/dom/audio-encoder';
 import type { EncoderActor } from '../../actors/dom/encoder-actor';
@@ -32,8 +35,11 @@ export interface PumpMediaFramesState {
 }
 
 export interface PumpMediaFramesContext {
-  captureStream?: MediaStream | undefined;
-  videoEncoderActor?: VideoEncoderActor | undefined;
+  cameraStream?: MediaStream | undefined;
+  screenStream?: MediaStream | undefined;
+  micStream?: MediaStream | undefined;
+  cameraEncoderActor?: VideoEncoderActor | undefined;
+  screenEncoderActor?: VideoEncoderActor | undefined;
   audioEncoderActor?: AudioEncoderActor | undefined;
 }
 
@@ -43,8 +49,6 @@ export interface PumpMediaFramesConfig {
 }
 
 export const DEFAULT_GROUP_DURATION_SEC = 2;
-
-type PumpMediaFramesFsmState = 'idle' | 'pumping';
 
 /**
  * Timestamp-driven keyframe cadence: fires on the first frame and
@@ -88,8 +92,6 @@ function pumpFrames<Config, Frame extends { close(): void; timestamp: number }>(
     } catch (error) {
       // Our own cancel() rejects the pending read too, so only a failure
       // that lands while the pump is still live is a real track failure.
-      // Swallowing those left the session marked live with a track that
-      // silently stopped producing frames.
       if (!aborted) onError(error);
     }
   };
@@ -110,90 +112,107 @@ function pumpMediaFramesSetup({
     publishError: Signal<PumpMediaFramesState['publishError']>;
   };
   context: {
-    captureStream: ReadonlySignal<PumpMediaFramesContext['captureStream']>;
-    videoEncoderActor: ReadonlySignal<PumpMediaFramesContext['videoEncoderActor']>;
+    cameraStream: ReadonlySignal<PumpMediaFramesContext['cameraStream']>;
+    screenStream: ReadonlySignal<PumpMediaFramesContext['screenStream']>;
+    micStream: ReadonlySignal<PumpMediaFramesContext['micStream']>;
+    cameraEncoderActor: ReadonlySignal<PumpMediaFramesContext['cameraEncoderActor']>;
+    screenEncoderActor: ReadonlySignal<PumpMediaFramesContext['screenEncoderActor']>;
     audioEncoderActor: ReadonlySignal<PumpMediaFramesContext['audioEncoderActor']>;
   };
   config?: PumpMediaFramesConfig;
-}): Reactor<PumpMediaFramesFsmState | 'destroying' | 'destroyed'> {
-  return createMachineReactor<PumpMediaFramesFsmState>({
-    initial: 'idle',
-    monitor: () =>
-      context.captureStream.get() && (context.videoEncoderActor.get() || context.audioEncoderActor.get())
-        ? 'pumping'
-        : 'idle',
-    states: {
-      idle: {},
+}): () => void {
+  const groupDurationUs = (config.groupDurationSec ?? DEFAULT_GROUP_DURATION_SEC) * 1_000_000;
 
-      pumping: {
-        // effects (not entry) so a stream or actor identity change
-        // restarts the read loops through the cleanup.
-        effects: () => {
-          const stream = context.captureStream.get()!;
-          const videoActor = context.videoEncoderActor.get();
-          const audioActor = context.audioEncoderActor.get();
+  function runVideoPump(
+    stream: ReadonlySignal<MediaStream | undefined>,
+    actor: ReadonlySignal<VideoEncoderActor | undefined>
+  ): () => void {
+    return effect(() => {
+      const mediaStream = stream.get();
+      const videoActor = actor.get();
+      if (!mediaStream || !videoActor) return;
 
-          if (typeof MediaStreamTrackProcessor === 'undefined') {
-            state.publishError.set({
-              code: 'encode',
-              message: 'MediaStreamTrackProcessor is not supported in this environment.',
-            });
-            return;
-          }
+      if (typeof MediaStreamTrackProcessor === 'undefined') {
+        state.publishError.set({
+          code: 'encode',
+          message: 'MediaStreamTrackProcessor is not supported in this environment.',
+        });
+        return;
+      }
 
-          const cleanups: (() => void)[] = [];
-          const groupDurationUs = (config.groupDurationSec ?? DEFAULT_GROUP_DURATION_SEC) * 1_000_000;
+      const videoTrack = mediaStream.getVideoTracks()[0];
+      if (!videoTrack) return;
 
-          // A track the platform refuses to process (ended, transferred)
-          // surfaces as an encode error rather than tearing the effect down.
-          // Stream-identity guarded: a replaced stream's pending read can
-          // reject in the gap between the capture slot moving on and this
-          // effect's cleanup running, and reporting that would pin a stale
-          // error on the healthy replacement.
-          const reportError = (error: unknown) => {
-            if (peek(context.captureStream) !== stream) return;
-            state.publishError.set({
-              code: 'encode',
-              message: error instanceof Error ? error.message : 'Failed to read frames from a capture track.',
-              cause: error,
-            });
-          };
+      const reportError = (error: unknown) => {
+        if (peek(stream) !== mediaStream) return;
+        state.publishError.set({
+          code: 'encode',
+          message: error instanceof Error ? error.message : 'Failed to read frames from a capture track.',
+          cause: error,
+        });
+      };
 
-          const videoTrack = stream.getVideoTracks()[0];
-          if (videoActor && videoTrack) {
-            try {
-              const processor = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrack });
-              cleanups.push(
-                pumpFrames(processor.readable.getReader(), videoActor, reportError, keyframeCadence(groupDurationUs))
-              );
-            } catch (error) {
-              reportError(error);
-            }
-          }
+      try {
+        const processor = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrack });
+        return pumpFrames(processor.readable.getReader(), videoActor, reportError, keyframeCadence(groupDurationUs));
+      } catch (error) {
+        reportError(error);
+        return;
+      }
+    });
+  }
 
-          const audioTrack = stream.getAudioTracks()[0];
-          if (audioActor && audioTrack) {
-            try {
-              const processor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
-              // No cadence: every audio frame is independently decodable
-              // and starts its own MOQT group downstream.
-              cleanups.push(pumpFrames(processor.readable.getReader(), audioActor, reportError));
-            } catch (error) {
-              reportError(error);
-            }
-          }
+  function runAudioPump(): () => void {
+    return effect(() => {
+      const mediaStream = context.micStream.get();
+      const audioActor = context.audioEncoderActor.get();
+      if (!mediaStream || !audioActor) return;
 
-          return () => {
-            for (const dispose of cleanups) dispose();
-          };
-        },
-      },
-    },
-  });
+      if (typeof MediaStreamTrackProcessor === 'undefined') {
+        state.publishError.set({
+          code: 'encode',
+          message: 'MediaStreamTrackProcessor is not supported in this environment.',
+        });
+        return;
+      }
+
+      const audioTrack = mediaStream.getAudioTracks()[0];
+      if (!audioTrack) return;
+
+      const reportError = (error: unknown) => {
+        if (peek(context.micStream) !== mediaStream) return;
+        state.publishError.set({
+          code: 'encode',
+          message: error instanceof Error ? error.message : 'Failed to read frames from a capture track.',
+          cause: error,
+        });
+      };
+
+      try {
+        const processor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
+        // No cadence: every audio frame is independently decodable and
+        // starts its own MOQT group downstream.
+        return pumpFrames(processor.readable.getReader(), audioActor, reportError);
+      } catch (error) {
+        reportError(error);
+        return;
+      }
+    });
+  }
+
+  const disposers = [
+    runVideoPump(context.cameraStream, context.cameraEncoderActor),
+    runVideoPump(context.screenStream, context.screenEncoderActor),
+    runAudioPump(),
+  ];
+
+  return () => {
+    for (const dispose of disposers) dispose();
+  };
 }
 
 export const pumpMediaFrames = defineBehavior({
   stateKeys: ['publishError'],
-  contextKeys: ['captureStream', 'videoEncoderActor', 'audioEncoderActor'],
+  contextKeys: ['cameraStream', 'screenStream', 'micStream', 'cameraEncoderActor', 'screenEncoderActor', 'audioEncoderActor'],
   setup: pumpMediaFramesSetup,
 });

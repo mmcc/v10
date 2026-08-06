@@ -5,10 +5,13 @@ import { ScreenShareButtonCore } from '../screen-share-button-core';
 
 function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): MediaCaptureSourceState {
   return {
-    captureSource: 'camera',
-    captureState: 'active',
+    cameraActive: true,
+    screenShareActive: false,
+    cameraState: 'active',
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'available',
-    selectCaptureSource: vi.fn(),
+    toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
     ...overrides,
   };
@@ -25,19 +28,25 @@ function createState(overrides: Partial<ScreenShareButtonState> = {}): ScreenSha
 
 describe('ScreenShareButtonCore', () => {
   describe('getState', () => {
-    it('reports sharing when the screen is the capture source', () => {
+    it('reports sharing when screenShareActive is true', () => {
       const core = new ScreenShareButtonCore();
-      core.setMedia(createMediaState({ captureSource: 'screen' }));
+      core.setMedia(createMediaState({ screenShareActive: true }));
       expect(core.getState().sharing).toBe(true);
     });
 
-    it('reports not sharing for camera or released capture', () => {
+    it('reports not sharing for camera-only or released capture', () => {
       const core = new ScreenShareButtonCore();
-      core.setMedia(createMediaState({ captureSource: 'camera' }));
+      core.setMedia(createMediaState({ cameraActive: true, screenShareActive: false }));
       expect(core.getState().sharing).toBe(false);
 
-      core.setMedia(createMediaState({ captureSource: null }));
+      core.setMedia(createMediaState({ cameraActive: false, screenShareActive: false }));
       expect(core.getState().sharing).toBe(false);
+    });
+
+    it('reports sharing even while the camera is also active — additive, not exclusive', () => {
+      const core = new ScreenShareButtonCore();
+      core.setMedia(createMediaState({ cameraActive: true, screenShareActive: true }));
+      expect(core.getState().sharing).toBe(true);
     });
 
     it('projects screen share availability', () => {

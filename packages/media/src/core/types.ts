@@ -583,14 +583,14 @@ export interface MediaPublishCapability {
 // Capture (publisher-only)
 // ----------------------------------------
 
-/** Which kind of media source feeds capture. */
+/** Which kind of video feeds capture. Additive — both may be active at once. */
 export type MediaCaptureSourceKind = 'camera' | 'screen';
 
 /**
- * Lifecycle of the local capture pipeline.
+ * Lifecycle of one capture pipeline.
  *
- * - `idle` — no source selected; nothing captured yet.
- * - `acquiring` — a source is being acquired (usually a permission prompt).
+ * - `idle` — not selected; nothing captured yet.
+ * - `acquiring` — being acquired (usually a permission prompt).
  * - `active` — tracks are live and previewable.
  * - `denied` — the user (or platform policy) refused access.
  * - `ended` — the source ended outside our control (device unplugged,
@@ -604,22 +604,45 @@ export interface MediaCaptureSourceEvents {
   capturestreamchange: EventLike;
 }
 
+/**
+ * Camera and screen-share acquisition — additive, not exclusive: starting
+ * a share never releases the camera, and either can be toggled
+ * independently. The microphone has no intent slot of its own: it is
+ * acquired while either video source is active (keyed for re-acquisition
+ * on {@link MediaCaptureDevicesCapability.audioInputDeviceId}), and only
+ * its lifecycle is readable here.
+ *
+ * The intent slots are consumed by the pipeline on terminal outcomes:
+ * after a permission denial or an out-of-band end (device unplugged,
+ * browser-native "Stop sharing") the slot reads `false` again while the
+ * matching state holds `denied`/`ended` — so writing `true` always means
+ * "attempt acquisition now", including retries.
+ */
 export interface MediaCaptureSourceCapability {
+  /** Camera acquisition; `true` acquires (prompting as needed), `false` releases. Fires `capturesourcechange`. */
+  cameraActive: boolean;
+  /** Screen-share acquisition; `true` opens the OS picker, `false` stops sharing. Fires `capturesourcechange`. */
+  screenShareActive: boolean;
+  /** Camera pipeline lifecycle. Fires `capturestatechange`. */
+  readonly cameraState: MediaCaptureState;
+  /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */
+  readonly screenShareState: MediaCaptureState;
   /**
-   * The selected capture source. Setting a kind acquires it (prompting for
-   * permission as needed); setting `null` releases capture entirely.
-   * Switching kinds re-acquires. Fires `capturesourcechange`.
+   * Microphone pipeline lifecycle. Fires `capturestatechange`. `idle`
+   * while video is active means capture is running without audio (no
+   * usable microphone); `denied`/`ended` surface a blocked or unplugged
+   * mic so UIs can say why a live broadcast has no sound.
    */
-  captureSource: MediaCaptureSourceKind | null;
-  /** Current capture lifecycle. Fires `capturestatechange`. */
-  readonly captureState: MediaCaptureState;
+  readonly micState: MediaCaptureState;
   /**
-   * The live capture stream while `captureState` is `active`, else `null`.
+   * Live camera stream while `cameraState` is `active`, else `null`.
    * Fires `capturestreamchange`. Exposed for consumers that must read
    * tracks directly (e.g. an audio level meter) — high-frequency data
    * should never round-trip through state.
    */
-  readonly captureStream: MediaStreamLike | null;
+  readonly cameraStream: MediaStreamLike | null;
+  /** Live screen-share stream while `screenShareState` is `active`, else `null`. Fires `capturestreamchange`. */
+  readonly screenShareStream: MediaStreamLike | null;
 }
 
 /**

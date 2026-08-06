@@ -31,7 +31,7 @@ function makePublishableMedia(connectTransport: ConnectPublishTransport = pendin
   const media = makeMedia({ engineConfig: { connectTransport } });
   media.publishEndpoint = 'https://relay.example.com/moq';
   media.publishNamespace = 'live/abc123';
-  media.engine.state.captureStatus.set('active');
+  media.engine.state.cameraState.set('active');
   return media;
 }
 
@@ -101,11 +101,28 @@ class FakeMediaStream {
 
 const asStream = (stream: FakeMediaStream) => stream as unknown as MediaStream;
 
-function makeFakeCameraStream() {
-  return new FakeMediaStream([
-    new FakeMediaStreamTrack('video', { deviceId: 'cam-1', width: 640, height: 480 }),
-    new FakeMediaStreamTrack('audio', { deviceId: 'mic-1' }),
-  ]);
+function makeFakeVideoStream(deviceId = 'cam-1') {
+  return new FakeMediaStream([new FakeMediaStreamTrack('video', { deviceId, width: 640, height: 480 })]);
+}
+
+function makeFakeAudioStream(deviceId = 'mic-1') {
+  return new FakeMediaStream([new FakeMediaStreamTrack('audio', { deviceId })]);
+}
+
+/**
+ * Camera and mic both call `getUserMedia`, distinguished only by which of
+ * `video`/`audio` is truthy in the constraints — dispatch on that so each
+ * pipeline gets its own stream instead of sharing one (which would make
+ * releasing the camera also stop the mic's track).
+ */
+function mockGetUserMedia(
+  videoStream: FakeMediaStream = makeFakeVideoStream(),
+  audioStream: FakeMediaStream = makeFakeAudioStream()
+) {
+  return vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
+    if (constraints?.audio) return asStream(audioStream);
+    return asStream(videoStream);
+  });
 }
 
 /** A real `MediaStream` (canvas capture) so DOM sinks like `srcObject` accept it. */
@@ -165,8 +182,8 @@ describe('MoqPublishMediaMixin', () => {
       { deviceId: 'cam-1', kind: 'videoinput', label: 'Fake camera', groupId: 'g1' } as MediaDeviceInfo,
       { deviceId: 'speaker-1', kind: 'audiooutput', label: 'Fake speaker', groupId: 'g1' } as MediaDeviceInfo,
     ]);
-    const stream = makeFakeCameraStream();
-    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
+    const stream = makeFakeVideoStream();
+    mockGetUserMedia(stream);
     const media = makeMedia();
 
     const events: Record<string, number> = {};
@@ -189,12 +206,12 @@ describe('MoqPublishMediaMixin', () => {
     });
     expect(media.captureDevices).toEqual([{ deviceId: 'cam-1', kind: 'videoinput', label: 'Fake camera' }]);
 
-    media.captureSource = 'camera';
+    media.cameraActive = true;
 
     await vi.waitFor(() => {
-      expect(media.captureState).toBe('active');
+      expect(media.cameraState).toBe('active');
     });
-    expect(media.captureStream).toBe(asStream(stream));
+    expect(media.cameraStream).toBe(asStream(stream));
     expect(events.capturesourcechange).toBe(1);
     // acquiring → active
     expect(events.capturestatechange).toBeGreaterThanOrEqual(2);
@@ -209,38 +226,151 @@ describe('MoqPublishMediaMixin', () => {
       expect(stream.getVideoTracks()[0]!.enabled).toBe(false);
     });
 
-    media.captureSource = null;
+    media.cameraActive = false;
     await vi.waitFor(() => {
-      expect(media.captureState).toBe('idle');
-      expect(media.captureStream).toBeNull();
+      expect(media.cameraState).toBe('idle');
+      expect(media.cameraStream).toBeNull();
     });
     expect(events.capturesourcechange).toBe(2);
     expect(events.capturestreamchange).toBe(2);
   });
 
-  it('re-acquires the camera when videoInputDeviceId changes', async () => {
-    const getUserMedia = vi
-      .spyOn(navigator.mediaDevices, 'getUserMedia')
-      .mockImplementation(async () => asStream(makeFakeCameraStream()));
+  it('re-acquires only the camera when videoInputDeviceId changes — the mic is untouched', async () => {
+    const getUserMedia = mockGetUserMedia();
     const media = makeMedia();
 
-    media.captureSource = 'camera';
+    media.cameraActive = true;
     await vi.waitFor(() => {
-      expect(media.captureState).toBe('active');
+      expect(media.cameraState).toBe('active');
+      // Camera being active is enough to gate the mic pipeline on too.
+      expect(media.engine.state.micState.get()).toBe('active');
     });
+    const cameraCallsSoFar = getUserMedia.mock.calls.filter((call) => !call[0]?.audio).length;
 
     const devicesChanged = vi.fn();
     media.addEventListener('capturedeviceschange', devicesChanged);
     media.videoInputDeviceId = 'cam-2';
 
     await vi.waitFor(() => {
-      expect(getUserMedia).toHaveBeenCalledTimes(2);
+      expect(getUserMedia.mock.calls.filter((call) => !call[0]?.audio).length).toBe(cameraCallsSoFar + 1);
     });
-    expect(getUserMedia).toHaveBeenLastCalledWith({ video: { deviceId: { exact: 'cam-2' } }, audio: true });
-    expect(media.engine.state.captureSource.get()).toEqual({ kind: 'camera', videoDeviceId: 'cam-2' });
+    expect(getUserMedia).toHaveBeenLastCalledWith({ video: { deviceId: { exact: 'cam-2' } }, audio: false });
+    expect(media.engine.state.videoInputDeviceId.get()).toBe('cam-2');
     expect(media.videoInputDeviceId).toBe('cam-2');
     // Selections travel on the devices event; store slices re-read them there.
     expect(devicesChanged).toHaveBeenCalled();
+    // The mic pipeline never re-fires for a camera device-id change — the
+    // confirmed defect this contract redesign fixes.
+    expect(getUserMedia.mock.calls.filter((call) => call[0]?.audio).length).toBe(1);
+  });
+
+  it('exposes the mic lifecycle and fires capturestatechange when it moves', async () => {
+    const audioStream = makeFakeAudioStream();
+    mockGetUserMedia(makeFakeVideoStream(), audioStream);
+    const media = makeMedia();
+
+    expect(media.micState).toBe('idle');
+    const stateChanged = vi.fn();
+    media.addEventListener('capturestatechange', stateChanged);
+
+    media.cameraActive = true;
+    await vi.waitFor(() => {
+      expect(media.micState).toBe('active');
+    });
+
+    // A mic dying mid-broadcast must be observable on the contract — the
+    // only way a UI can say why a live broadcast has no sound. The camera
+    // keeps capturing, so only the mic third of the bridge key moves.
+    const callsBefore = stateChanged.mock.calls.length;
+    audioStream.getTracks()[0]!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => {
+      expect(media.micState).toBe('ended');
+    });
+    expect(media.cameraState).toBe('active');
+    expect(stateChanged.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('drives the screen-share surface: intent, stream, preview source, and events', async () => {
+    const screenStream = new FakeMediaStream([new FakeMediaStreamTrack('video', { width: 1920 })]);
+    vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(screenStream));
+    mockGetUserMedia();
+    const media = makeMedia();
+
+    const sourceChanged = vi.fn();
+    media.addEventListener('capturesourcechange', sourceChanged);
+
+    media.screenShareActive = true;
+    await vi.waitFor(() => {
+      expect(media.screenShareState).toBe('active');
+    });
+    expect(media.screenShareActive).toBe(true);
+    expect(media.screenShareStream).toBe(asStream(screenStream));
+    expect(media.cameraStream).toBeNull();
+    expect(sourceChanged).toHaveBeenCalledTimes(1);
+
+    expect(media.previewSource).toBe('camera');
+    media.previewSource = 'screen';
+    expect(media.previewSource).toBe('screen');
+    expect(media.engine.state.previewSource.get()).toBe('screen');
+
+    media.screenShareActive = false;
+    await vi.waitFor(() => {
+      expect(media.screenShareState).toBe('idle');
+      expect(media.screenShareStream).toBeNull();
+    });
+    expect(sourceChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('fires capturestreamchange when a slot stream is replaced, not only on presence changes', async () => {
+    const first = makeFakeVideoStream('cam-1');
+    const second = makeFakeVideoStream('cam-2');
+    let currentVideo = first;
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
+      if (constraints?.audio) return asStream(makeFakeAudioStream());
+      return asStream(currentVideo);
+    });
+    const media = makeMedia();
+    const streamChanged = vi.fn();
+    media.addEventListener('capturestreamchange', streamChanged);
+
+    media.cameraActive = true;
+    await vi.waitFor(() => {
+      expect(media.cameraStream).toBe(asStream(first));
+    });
+    const callsAfterFirst = streamChanged.mock.calls.length;
+
+    // A device switch re-acquires IN PLACE: the slot stays occupied but the
+    // stream identity changes — meters holding the old tracks must be told.
+    currentVideo = second;
+    media.videoInputDeviceId = 'cam-2';
+    await vi.waitFor(() => {
+      expect(media.cameraStream).toBe(asStream(second));
+    });
+    expect(streamChanged.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it('reads cameraActive false after a denial and re-attempts on the next set — one-click retry', async () => {
+    const getUserMedia = vi
+      .spyOn(navigator.mediaDevices, 'getUserMedia')
+      .mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
+    const media = makeMedia();
+
+    media.cameraActive = true;
+    await vi.waitFor(() => {
+      expect(media.cameraState).toBe('denied');
+    });
+    // The engine consumed the intent — the adapter surface must agree, or
+    // toggles/guards reading cameraActive would block the retry.
+    await vi.waitFor(() => {
+      expect(media.cameraActive).toBe(false);
+    });
+
+    const cameraCalls = () => getUserMedia.mock.calls.filter((call) => call[0]?.video).length;
+    const callsAfterDenial = cameraCalls();
+    media.cameraActive = true;
+    await vi.waitFor(() => {
+      expect(cameraCalls()).toBe(callsAfterDenial + 1);
+    });
   });
 
   it('mirrors the capture stream into an attached preview element', async () => {
@@ -253,9 +383,9 @@ describe('MoqPublishMediaMixin', () => {
     media.attach(preview);
     expect(media.engine.context.previewElement.get()).toBe(preview);
 
-    media.captureSource = 'camera';
+    media.cameraActive = true;
     await vi.waitFor(() => {
-      expect(media.captureState).toBe('active');
+      expect(media.cameraState).toBe('active');
     });
     await vi.waitFor(() => {
       expect(preview.srcObject).toBe(realStream);
@@ -321,7 +451,7 @@ describe('MoqPublishMediaMixin', () => {
     expect(media.engine.state.publishActivated.get()).toBe(false);
 
     // Once capture is active, the same call proceeds to a session attempt.
-    media.engine.state.captureStatus.set('active');
+    media.engine.state.cameraState.set('active');
     const pending = media.publish();
     expect(media.engine.state.publishActivated.get()).toBe(true);
     await vi.waitFor(() => {

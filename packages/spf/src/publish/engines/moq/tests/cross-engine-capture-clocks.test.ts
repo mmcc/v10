@@ -148,7 +148,7 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
     disposals.push(() => void publisher.destroy());
 
     publisher.state.endpoint.set({ url: 'https://relay.test/moq', namespace: ['live'] });
-    publisher.state.captureSource.set({ kind: 'camera' });
+    publisher.state.cameraActive.set(true);
     publisher.state.publishActivated.set(true);
 
     await vi.waitFor(() => expect(publisher.state.sessionStatus.get()).toBe('live'), { timeout: 10_000 });

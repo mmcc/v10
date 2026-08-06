@@ -66,7 +66,7 @@ export class ScreenShareButtonCore {
     const media = this.#media!;
 
     this.state.patch({
-      sharing: media.captureSource === 'screen',
+      sharing: media.screenShareActive,
       availability: media.screenShareAvailability,
     });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });

@@ -31,12 +31,12 @@ type PublisherSliceState = MediaPublishState & MediaCaptureSourceState;
 
 function createPublisherStore({
   publishState = 'idle',
-  captureState = 'active',
+  cameraState = 'active',
   publish = vi.fn(() => Promise.resolve()),
   unpublish = vi.fn(),
 }: {
   publishState?: MediaPublishState['publishState'] | undefined;
-  captureState?: MediaCaptureSourceState['captureState'] | undefined;
+  cameraState?: MediaCaptureSourceState['cameraState'] | undefined;
   publish?: MediaPublishState['publish'] | undefined;
   unpublish?: MediaPublishState['unpublish'] | undefined;
 } = {}): AnyPlayerStore {
@@ -48,10 +48,13 @@ function createPublisherStore({
       publishError: null,
       publish,
       unpublish,
-      captureSource: 'camera',
-      captureState,
+      cameraActive: true,
+      screenShareActive: false,
+      cameraState,
+      screenShareState: 'idle',
+      micState: 'idle',
       screenShareAvailability: 'unavailable',
-      selectCaptureSource: vi.fn(),
+      toggleCamera: vi.fn(() => false),
       toggleScreenShare: vi.fn(() => false),
     }),
   }) as unknown as AnyPlayerStore;
@@ -135,7 +138,7 @@ describe('PublishButtonElement', () => {
 
   it('is disabled while capture is inactive', async () => {
     const publish = vi.fn(() => Promise.resolve());
-    const { button } = setup({ captureState: 'idle', publish });
+    const { button } = setup({ cameraState: 'idle', publish });
 
     await button.updateComplete;
 

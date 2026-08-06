@@ -28,7 +28,7 @@ export const selectAudioTrack = createSelector(audioTrackFeature);
 export const selectBuffer = createSelector(bufferFeature);
 /** Select the capture devices state (cameras, microphones, selections). */
 export const selectCaptureDevices = createSelector(captureDevicesFeature);
-/** Select the capture source state (captureSource, captureState, screen share availability). */
+/** Select the capture source state (camera/screen active, camera/screen state, screen share availability, toggle actions). */
 export const selectCaptureSource = createSelector(captureSourceFeature);
 /** Select the capture tracks state (cameraMuted, micMuted, set/toggle actions). */
 export const selectCaptureTracks = createSelector(captureTracksFeature);

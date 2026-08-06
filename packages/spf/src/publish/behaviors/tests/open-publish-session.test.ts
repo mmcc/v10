@@ -32,7 +32,8 @@ function setupBehavior(connectTransport: ConnectPublishTransport) {
   const state = {
     endpoint: signal<OpenPublishSessionState['endpoint']>(undefined),
     publishActivated: signal<OpenPublishSessionState['publishActivated']>(false),
-    captureStatus: signal<OpenPublishSessionState['captureStatus']>('idle'),
+    cameraState: signal<OpenPublishSessionState['cameraState']>('idle'),
+    screenShareState: signal<OpenPublishSessionState['screenShareState']>('idle'),
     sessionStatus: signal<OpenPublishSessionState['sessionStatus']>('idle'),
     publishError: signal<OpenPublishSessionState['publishError']>(undefined),
   };
@@ -47,7 +48,7 @@ function setupBehavior(connectTransport: ConnectPublishTransport) {
 function openGate(state: ReturnType<typeof setupBehavior>['state']): void {
   state.endpoint.set(ENDPOINT);
   state.publishActivated.set(true);
-  state.captureStatus.set('active');
+  state.cameraState.set('active');
 }
 
 describe('openPublishSession', () => {
@@ -130,7 +131,7 @@ describe('openPublishSession', () => {
   function makeTransportStage(pair: TransportPair) {
     const composition = createComposition([setupTrackPublishers, openPublishSession], {
       config: { connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }) },
-      initialState: { publishActivated: false, captureStatus: 'idle', sessionStatus: 'idle' },
+      initialState: { publishActivated: false, cameraState: 'idle', screenShareState: 'idle', sessionStatus: 'idle' },
     });
     disposals.push(() => void composition.destroy());
 
@@ -139,9 +140,9 @@ describe('openPublishSession', () => {
 
     const goLive = async () => {
       composition.state.endpoint.set(ENDPOINT);
-      composition.state.activeEncodings.set({ video: { codec: 'vp8', width: 640, height: 480 } });
+      composition.state.activeEncodings.set({ camera: { codec: 'vp8', width: 640, height: 480 } });
       composition.state.publishActivated.set(true);
-      composition.state.captureStatus.set('active');
+      composition.state.cameraState.set('active');
       await vi.waitFor(() => {
         expect(composition.state.sessionStatus.get()).toBe('live');
       });

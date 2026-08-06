@@ -37,10 +37,13 @@ function createCaptureSourceStore(initial: Partial<MediaCaptureSourceState> = {}
   const store = createStore<unknown>()<MediaCaptureSourceState>({
     name: 'captureSource',
     state: () => ({
-      captureSource: null,
-      captureState: 'idle',
+      cameraActive: false,
+      screenShareActive: false,
+      cameraState: 'idle',
+      screenShareState: 'idle',
+      micState: 'idle',
       screenShareAvailability: 'available',
-      selectCaptureSource: vi.fn(),
+      toggleCamera: vi.fn(() => true),
       toggleScreenShare: vi.fn(() => true),
       ...initial,
     }),
@@ -119,7 +122,7 @@ describe('CapturePlaceholderElement', () => {
     expect(placeholder.hasAttribute('aria-label')).toBe(false);
 
     // Stays suppressed across state-driven updates.
-    setState({ captureState: 'denied' });
+    setState({ cameraState: 'denied' });
     await placeholder.updateComplete;
 
     expect(placeholder.hasAttribute('aria-label')).toBe(false);

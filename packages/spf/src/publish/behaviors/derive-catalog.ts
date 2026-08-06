@@ -24,7 +24,7 @@ import { buildMsfCatalog } from '../../media/moq/build-catalog';
 import type { TrackPublisherActor } from '../actors/track-publisher';
 import type { PublishEndpoint } from '../session/publish-session';
 import type { ActiveEncodingsFacts } from './setup-track-publishers';
-import { AUDIO_TRACK_NAME, VIDEO_TRACK_NAME } from './setup-track-publishers';
+import { AUDIO_TRACK_NAME, SCREEN_TRACK_NAME, VIDEO_TRACK_NAME } from './setup-track-publishers';
 
 export interface DeriveCatalogState {
   activeEncodings?: ActiveEncodingsFacts;
@@ -47,14 +47,24 @@ const textEncoder = new TextEncoder();
 /** Project the active encoder configs onto the catalog builder's input. */
 export function catalogInputFor(endpoint: PublishEndpoint, encodings: ActiveEncodingsFacts): MsfCatalogInput {
   const input: MsfCatalogInput = { namespace: endpoint.namespace };
-  if (encodings.video) {
+  if (encodings.camera) {
     input.video = {
       name: VIDEO_TRACK_NAME,
-      codec: encodings.video.codec,
-      width: encodings.video.width,
-      height: encodings.video.height,
-      framerate: encodings.video.framerate,
-      bitrate: encodings.video.bitrate,
+      codec: encodings.camera.codec,
+      width: encodings.camera.width,
+      height: encodings.camera.height,
+      framerate: encodings.camera.framerate,
+      bitrate: encodings.camera.bitrate,
+    };
+  }
+  if (encodings.screen) {
+    input.screen = {
+      name: SCREEN_TRACK_NAME,
+      codec: encodings.screen.codec,
+      width: encodings.screen.width,
+      height: encodings.screen.height,
+      framerate: encodings.screen.framerate,
+      bitrate: encodings.screen.bitrate,
     };
   }
   if (encodings.audio) {

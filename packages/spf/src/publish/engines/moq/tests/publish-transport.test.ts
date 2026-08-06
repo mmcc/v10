@@ -81,9 +81,9 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
       })
     );
 
-    media.captureSource = 'camera';
+    media.cameraActive = true;
     await vi.waitFor(() => {
-      expect(media.captureState).toBe('active');
+      expect(media.cameraState).toBe('active');
     });
 
     media.publishEndpoint = 'https://relay.example.com/moq';

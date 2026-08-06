@@ -9,12 +9,21 @@
  * into tracks `codec-mapping.ts` can configure decoders from; that
  * round-trip is the module's acceptance test.
  *
- * Scope matches the publisher's v1: one LOC-packaged video rendition plus
- * one LOC-packaged audio track. Codec strings are WebCodecs registry
- * strings (§5.2.18), so the encoder configs' `codec` fields pass through
- * verbatim. Decoder init data is NOT carried in the catalog — LOC carries
- * codec extradata in the per-keyframe Config property instead
- * (`loc-packaging.ts`), so `initDataList` stays absent.
+ * One LOC-packaged camera video rendition, an optional second
+ * LOC-packaged screen-share video rendition (additive, not an alternate —
+ * see the multi-source design record), plus one LOC-packaged audio track.
+ * When a screen track is present, all tracks share one `renderGroup` (never
+ * `altGroup`, which marks alternates of the same content) so subscribers
+ * know camera + screen + audio compose one live view; a camera-only
+ * catalog stays exactly as it was before screen share existed. The absent
+ * `altGroup` is the load-bearing half of that pair on the parse side: it is
+ * what puts camera and screen in separate switching sets, so a subscriber's
+ * ABR never mistakes the screen share for a cheaper camera. Codec
+ * strings are WebCodecs registry strings (§5.2.18), so the encoder
+ * configs' `codec` fields pass through verbatim. Decoder init data is NOT
+ * carried in the catalog — LOC carries codec extradata in the
+ * per-keyframe Config property instead (`loc-packaging.ts`), so
+ * `initDataList` stays absent.
  */
 
 /** Version emitted — the newest version `parse-catalog.ts` accepts. */
@@ -45,6 +54,8 @@ export interface MsfCatalogInput {
   /** Track namespace tuple every track is published under. */
   namespace: readonly string[];
   video?: MsfCatalogVideoTrackInput;
+  /** Screen-share video track — additive alongside `video`, never an alternate. */
+  screen?: MsfCatalogVideoTrackInput;
   audio?: MsfCatalogAudioTrackInput;
   /** Catalog generation time (§5.2.24), epoch milliseconds. */
   generatedAt?: number;
@@ -68,12 +79,16 @@ function pruneUndefined(value: Record<string, unknown>): Record<string, unknown>
 export function buildMsfCatalog(input: MsfCatalogInput): string {
   const namespace = input.namespace.join('/');
   const shared = { namespace, packaging: 'loc', isLive: true };
+  // Only grouped once a screen track exists — a camera-only catalog stays
+  // byte-identical to before screen share existed.
+  const renderGroup = input.screen ? { renderGroup: 1 } : {};
 
   const tracks: Record<string, unknown>[] = [];
   if (input.video) {
     tracks.push(
       pruneUndefined({
         ...shared,
+        ...renderGroup,
         name: input.video.name,
         role: 'video',
         codec: input.video.codec,
@@ -84,10 +99,26 @@ export function buildMsfCatalog(input: MsfCatalogInput): string {
       })
     );
   }
+  if (input.screen) {
+    tracks.push(
+      pruneUndefined({
+        ...shared,
+        ...renderGroup,
+        name: input.screen.name,
+        role: 'video',
+        codec: input.screen.codec,
+        width: input.screen.width,
+        height: input.screen.height,
+        framerate: input.screen.framerate,
+        bitrate: input.screen.bitrate,
+      })
+    );
+  }
   if (input.audio) {
     tracks.push(
       pruneUndefined({
         ...shared,
+        ...renderGroup,
         name: input.audio.name,
         role: 'audio',
         codec: input.audio.codec,

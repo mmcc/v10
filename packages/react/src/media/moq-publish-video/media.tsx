@@ -20,8 +20,8 @@ export interface MoqPublishVideoProps
  * Publisher media component backed by the SPF MoQ publish engine. The
  * rendered `<video>` element is the local capture preview (muted, inline,
  * autoplaying); the publisher props (`publishEndpoint`, `publishNamespace`,
- * `captureSource`, device selections, and mute toggles) are forwarded to the
- * underlying `MoqPublishMedia` host.
+ * `cameraActive`/`screenShareActive`, device selections, and mute toggles)
+ * are forwarded to the underlying `MoqPublishMedia` host.
  */
 export const MoqPublishVideo = forwardRef<HTMLVideoElement, MoqPublishVideoProps>(function MoqPublishVideo(
   { children, ...props },

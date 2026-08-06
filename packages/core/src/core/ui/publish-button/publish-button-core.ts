@@ -5,6 +5,7 @@ import type { NonNullableObject } from '@videojs/utils/types';
 import { resolveText, type Text } from '../../i18n';
 import { connectingText, goLiveText, stoppingText, stopStreamText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
+import { aggregateCaptureState } from '../utils/aggregate-capture-state';
 import { resolveLabel } from '../utils/resolve-label';
 
 export interface PublishButtonProps {
@@ -19,7 +20,7 @@ export interface PublishButtonProps {
  * and React `PublishButton` adapters from the `publish` and `capture-source`
  * store slices.
  */
-export type PublishButtonMediaState = MediaPublishState & Pick<MediaCaptureSourceState, 'captureState'>;
+export type PublishButtonMediaState = MediaPublishState & Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState'>;
 
 export interface PublishButtonState extends ButtonState {
   /** Current publish session lifecycle. */
@@ -80,11 +81,11 @@ export class PublishButtonCore {
   getState(): PublishButtonState {
     const media = this.#media!;
     const session = media.publishState;
+    const captureState = aggregateCaptureState(media.cameraState, media.screenShareState);
 
     this.state.patch({
       session,
-      disabled:
-        this.#props.disabled || media.captureState !== 'active' || session === 'connecting' || session === 'stopping',
+      disabled: this.#props.disabled || captureState !== 'active' || session === 'connecting' || session === 'stopping',
     });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });
 
@@ -102,7 +103,7 @@ export class PublishButtonCore {
     }
 
     if (session === 'stopping') return;
-    if (media.captureState !== 'active') return;
+    if (aggregateCaptureState(media.cameraState, media.screenShareState) !== 'active') return;
 
     try {
       // idle/error → start (or retry) a session.

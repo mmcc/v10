@@ -5,6 +5,7 @@ import type { NonNullableObject } from '@videojs/utils/types';
 import { resolveText, type Text } from '../../i18n';
 import { enableDevicesText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
+import { aggregateCaptureState } from '../utils/aggregate-capture-state';
 import { resolveLabel } from '../utils/resolve-label';
 
 export interface EnableDevicesButtonProps {
@@ -71,8 +72,12 @@ export class EnableDevicesButtonCore {
     const media = this.#media!;
 
     this.state.patch({
-      captureState: media.captureState,
-      disabled: this.#props.disabled || media.captureState === 'acquiring',
+      captureState: aggregateCaptureState(media.cameraState, media.screenShareState),
+      // Disabled only while the CAMERA pipeline is mid-acquisition — the
+      // sources are independently acquirable, so an open screen-share
+      // picker must not grey out the camera CTA (matching activate()'s
+      // own guard).
+      disabled: this.#props.disabled || media.cameraState === 'acquiring',
     });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });
 
@@ -81,9 +86,13 @@ export class EnableDevicesButtonCore {
 
   activate(media: MediaCaptureSourceState): void {
     if (this.#props.disabled) return;
-    if (media.captureState === 'acquiring') return;
+    if (media.cameraState === 'acquiring') return;
+    // Safe because the acquire behavior consumes the intent on
+    // `denied`/`ended`: cameraActive can only read true while acquisition
+    // is genuinely being served, so this never blocks a retry.
+    if (media.cameraActive) return;
 
-    media.selectCaptureSource('camera');
+    media.toggleCamera();
   }
 }
 

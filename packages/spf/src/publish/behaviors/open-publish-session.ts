@@ -1,6 +1,7 @@
 /**
  * **Own the publish transport session.** While an `endpoint` is set,
- * `publishActivated` is true, and capture is `'active'`, connects through
+ * `publishActivated` is true, and either capture pipeline (camera or
+ * screen) is `'active'`, connects through
  * `config.connectTransport` (default: a real `WebTransport`), creates the
  * publish-session actor, publishes it on `context.publishSessionActor`,
  * and mirrors the actor's lifecycle into `state.sessionStatus`
@@ -60,7 +61,8 @@ export interface SessionPublishErrorFacts {
 export interface OpenPublishSessionState {
   endpoint?: PublishEndpoint | undefined;
   publishActivated?: boolean;
-  captureStatus?: CaptureStatusFacts;
+  cameraState?: CaptureStatusFacts;
+  screenShareState?: CaptureStatusFacts;
   sessionStatus?: PublishSessionStatus;
   publishError?: SessionPublishErrorFacts | undefined;
 }
@@ -95,7 +97,8 @@ function openPublishSessionSetup({
   state: {
     endpoint: ReadonlySignal<OpenPublishSessionState['endpoint']>;
     publishActivated: ReadonlySignal<OpenPublishSessionState['publishActivated']>;
-    captureStatus: ReadonlySignal<OpenPublishSessionState['captureStatus']>;
+    cameraState: ReadonlySignal<OpenPublishSessionState['cameraState']>;
+    screenShareState: ReadonlySignal<OpenPublishSessionState['screenShareState']>;
     sessionStatus: Signal<OpenPublishSessionState['sessionStatus']>;
     publishError: Signal<OpenPublishSessionState['publishError']>;
   };
@@ -108,16 +111,18 @@ function openPublishSessionSetup({
     initial: 'no-session',
     monitor: () => {
       if (!state.endpoint.get() || state.publishActivated.get() !== true) return 'no-session';
-      const captureStatus = state.captureStatus.get();
-      if (captureStatus === 'active') return 'session-open';
-      // A capture-source switch re-acquires through 'acquiring'. An
-      // already-open session must ride that out: closing it would send
-      // PUBLISH_DONE for every track and drop the transport — a relay
-      // treats that as the END of the broadcast, freezing every
-      // subscriber. The session only *opens* on 'active', and 'idle' /
-      // 'denied' / 'ended' still close it. `peek`: our own effect writes
-      // the actor slot.
-      return captureStatus === 'acquiring' && peek(context.publishSessionActor) ? 'session-open' : 'no-session';
+      const camera = state.cameraState.get();
+      const screen = state.screenShareState.get();
+      if (camera === 'active' || screen === 'active') return 'session-open';
+      // Either pipeline's own device-id change re-acquires through
+      // 'acquiring' independently of the other. An already-open session
+      // must ride that out: closing it would send PUBLISH_DONE for every
+      // track and drop the transport — a relay treats that as the END of
+      // the broadcast, freezing every subscriber. The session only
+      // *opens* fresh on an outright 'active', and both idle/denied/ended
+      // still close it. `peek`: our own effect writes the actor slot.
+      const reacquiring = camera === 'acquiring' || screen === 'acquiring';
+      return reacquiring && peek(context.publishSessionActor) ? 'session-open' : 'no-session';
     },
     states: {
       'no-session': {},
@@ -187,7 +192,7 @@ function openPublishSessionSetup({
 }
 
 export const openPublishSession = defineBehavior({
-  stateKeys: ['endpoint', 'publishActivated', 'captureStatus', 'sessionStatus', 'publishError'],
+  stateKeys: ['endpoint', 'publishActivated', 'cameraState', 'screenShareState', 'sessionStatus', 'publishError'],
   contextKeys: ['publishSessionActor'],
   setup: openPublishSessionSetup,
 });
