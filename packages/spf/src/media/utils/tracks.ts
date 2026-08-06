@@ -30,19 +30,43 @@ export function getTracksByType(
 }
 
 /**
+ * Get the tracks of the given type from EVERY switching set of the
+ * matching selection set — the all-sets counterpart of
+ * {@link getTracksByType}. Sibling switching sets hold *different
+ * content* (a MoQ publisher's screen share beside its camera), so this is
+ * for callers that must see or address all content items; the default
+ * candidate pool stays first-set-only. HLS presentations have one set per
+ * type, where the two are identical.
+ */
+export function getTracksAcrossSwitchingSets(
+  presentation: MaybeResolvedPresentation,
+  type: TrackType
+): readonly (PartiallyResolvedTrack | ResolvedTrack)[] {
+  // Loop rather than flatMap: `switchingSets` is a union of per-type
+  // array shapes, and a method call on the union collapses to one
+  // overload — element-wise widening is the only cast-free path.
+  const tracks: (PartiallyResolvedTrack | ResolvedTrack)[] = [];
+  for (const switchingSet of presentation.selectionSets?.find(({ type: t }) => t === type)?.switchingSets ?? []) {
+    tracks.push(...switchingSet.tracks);
+  }
+  return tracks;
+}
+
+/**
  * Find a track of the given type and id within a presentation.
  *
- * Returns the matching track from the first switching set of the matching
- * selection set, or `undefined` if either is missing. The returned track may
- * be partially resolved (URL only) or fully resolved (with segments) — callers
- * narrow as needed.
+ * Searches EVERY switching set of the matching selection set — an
+ * id-addressed lookup must be able to resolve an explicit cross-set
+ * selection (see {@link getTracksAcrossSwitchingSets}). The returned
+ * track may be partially resolved (URL only) or fully resolved (with
+ * segments) — callers narrow as needed.
  */
 export function findTrack(
   presentation: MaybeResolvedPresentation,
   type: TrackType,
   trackId: string
 ): PartiallyResolvedTrack | ResolvedTrack | undefined {
-  return getTracksByType(presentation, type).find(({ id }) => id === trackId);
+  return getTracksAcrossSwitchingSets(presentation, type).find(({ id }) => id === trackId);
 }
 
 /**
@@ -51,16 +75,20 @@ export function findTrack(
  * from a downstream consumer (e.g. `SourceBufferActor.initTrackId`) and
  * needs to locate the corresponding track in the presentation.
  *
- * Track ids are unique within a presentation per the HLS spec; the first
- * match wins.
+ * Searches every switching set — an id-addressed lookup must resolve
+ * tracks in sibling sets (distinct content items, e.g. a MoQ screen
+ * share), same as {@link findTrack}. Track ids are unique within a
+ * presentation per the HLS spec; the first match wins.
  */
 export function findTrackById(
   presentation: MaybeResolvedPresentation,
   trackId: string
 ): PartiallyResolvedTrack | ResolvedTrack | undefined {
   for (const selectionSet of presentation.selectionSets ?? []) {
-    const track = selectionSet.switchingSets[0]?.tracks.find(({ id }) => id === trackId);
-    if (track) return track;
+    for (const switchingSet of selectionSet.switchingSets) {
+      const track = switchingSet.tracks.find(({ id }) => id === trackId);
+      if (track) return track;
+    }
   }
   return undefined;
 }
