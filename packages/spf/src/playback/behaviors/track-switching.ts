@@ -79,7 +79,7 @@ import {
   type VideoTrack,
 } from '../../media/types';
 import { getCdnId as defaultGetCdnId, type GetCdnId } from '../../media/utils/cdn';
-import { getTracksByType } from '../../media/utils/tracks';
+import { getTracksAcrossSwitchingSets, getTracksByType } from '../../media/utils/tracks';
 import type { BandwidthConfig, BandwidthState } from '../../network/bandwidth-estimator';
 import { DEFAULT_BANDWIDTH_CONFIG, getBandwidthEstimate } from '../../network/bandwidth-estimator';
 
@@ -439,6 +439,33 @@ function filterByUserSelection<S extends SelectionKey, U extends UserSelectionKe
 }
 
 /**
+ * Content-identity constraint — a *hard* filter (constraints pre-pass),
+ * video only. A switching set is one content item's quality alternates;
+ * sibling sets are *different content* (a MoQ publisher's screen share
+ * beside its camera, both role video). Confines the all-sets candidate
+ * pool to the set containing the current selection — an explicit
+ * cross-set `selectedVideoTrackId` write (the API-level content choice)
+ * moves which set that is — defaulting to the first (rendered-by-default)
+ * set when nothing is selected or the selection is stale. The ranking
+ * rules downstream therefore never present a content change as a quality
+ * switch. Single-set presentations (HLS) pass through untouched.
+ */
+function confineToActiveSwitchingSet<S extends SelectionKey, T extends SwitchableTrack>(
+  tracks: readonly T[],
+  { state, config }: SelectionRuleDeps<TrackSwitchingStateMap<S>, AnySlotMap, TrackSwitchingConfig<S, T>>
+): readonly T[] {
+  const sets = state.presentation.get()?.selectionSets?.find(({ type }) => type === 'video')?.switchingSets;
+  if (!sets || sets.length <= 1) return tracks;
+  const selectedId = state[config.selectionKey].get();
+  const active =
+    (selectedId ? sets.find(({ tracks: setTracks }) => setTracks.some(({ id }) => id === selectedId)) : undefined) ??
+    sets[0];
+  if (!active) return tracks;
+  const activeIds = new Set(active.tracks.map(({ id }) => id));
+  return tracks.filter(({ id }) => activeIds.has(id));
+}
+
+/**
  * Failed-CDN constraint — a *hard* filter (constraints pre-pass), shared by
  * video and audio. Removes tracks served from a CDN currently in failover
  * cooldown (`failedCdns`, written by the failover monitor). Removed tracks are never
@@ -783,8 +810,13 @@ export const switchVideoTrack = defineBehavior({
         ...config,
         selectionKey: 'selectedVideoTrackId',
         userSelectionKey: 'userVideoTrackSelection',
-        getTracks: (presentation) => getTracksByType(presentation, 'video') as readonly VideoTrackCandidate[],
-        constraints: [excludeFailedCdns, excludeUnplayableTracks],
+        // Candidates span every switching set (sibling sets are distinct
+        // content items — MoQ camera + screen); confineToActiveSwitchingSet
+        // narrows each evaluation to one set, so an explicit cross-set
+        // selection is reachable while ranking never crosses content.
+        getTracks: (presentation) =>
+          getTracksAcrossSwitchingSets(presentation, 'video') as readonly VideoTrackCandidate[],
+        constraints: [confineToActiveSwitchingSet, excludeFailedCdns, excludeUnplayableTracks],
         rules: [filterByUserSelection, preferActiveCdn, rankByBandwidth],
       },
     }),
