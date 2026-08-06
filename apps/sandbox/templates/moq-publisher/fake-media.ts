@@ -361,8 +361,11 @@ export class FakePublishMedia
   }
 
   async #getScreenStream(): Promise<MediaStream> {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    if (stream.getAudioTracks().length > 0) return stream;
+    // System/tab audio is never requested — the real screen path doesn't
+    // either (multi-source design record, "System audio" decision), and it
+    // keeps every audio track in an owned stream mic-owned, which is what
+    // lets micState (and the mic-ended flag) derive from the streams alone.
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     try {
       const mic = await navigator.mediaDevices.getUserMedia({
         audio: this.#audioInputDeviceId ? { deviceId: this.#audioInputDeviceId } : true,
