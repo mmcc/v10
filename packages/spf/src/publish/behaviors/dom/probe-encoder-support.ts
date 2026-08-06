@@ -1,62 +1,88 @@
 /**
- * **Probe WebCodecs encoder support for the captured tracks and pick the
- * active encodings.** While `state.captureTracks` facts exist, runs
- * `VideoEncoder.isConfigSupported` / `AudioEncoder.isConfigSupported`
- * over a candidate ladder derived from `config.video` / `config.audio`
- * plus the captured track settings, publishes the supported configs as
- * `state.encoderSupport`, and resolves them into `state.activeEncodings`
+ * **Probe WebCodecs encoder support for each captured track and pick the
+ * active encodings.** Three independent probes — camera, screen, mic —
+ * each running while its own `state.*Tracks` fact exists: runs
+ * `VideoEncoder.isConfigSupported` / `AudioEncoder.isConfigSupported` over
+ * a candidate ladder derived from `config.{camera,screen,audio}` plus the
+ * captured track settings, merges the result into `state.encoderSupport`
+ * (partitioned by kind — see below), and resolves `state.activeEncodings`
  * through the `config.selectEncoderConfig` strategy seam (default: first
- * supported per kind).
+ * supported per kind), applying only that probe's own kind from the
+ * strategy's result.
  *
  * Default ladder: H.264 constrained-baseline (`avc1.42E01F`, `annexb`
  * bitstream format so keyframes are self-describing — see
  * `videoCandidates`) with a VP8 fallback, at the track
  * resolution/framerate; Opus at the track sample rate with a 48 kHz
- * fallback. A `config.video.codec` prepends itself to the ladder rather
- * than replacing it.
+ * fallback. A `config.{camera,screen}.codec` prepends itself to the
+ * ladder rather than replacing it. The screen ladder defaults to a lower
+ * framerate than the camera's (static degrade-screen-first tuning, per
+ * the multi-source design record's "Encoder budget" decision — no dynamic
+ * policy in v1).
  *
- * Single-positive-state reactor mirroring `acquireCaptureSource`: the
- * probe runs in the positive state's `effects:` so a captureTracks
- * identity change (re-acquire) re-probes through the cleanup, and an
- * in-flight probe that resolves after the tracks changed discards via the
- * per-run `stale` flag.
+ * Each probe is a single-positive-state reactor mirroring the acquire
+ * behaviors: the probe runs in the positive state's `effects:` so a
+ * tracks-identity change (re-acquire) re-probes through the cleanup, and
+ * an in-flight probe that resolves after the tracks changed discards via
+ * the per-run `stale` flag.
  *
- * Sole writer of `state.encoderSupport` + `state.activeEncodings`;
- * co-writer of `state.publishError` (nothing-encodable failures only).
+ * `state.encoderSupport` / `state.activeEncodings` are multi-writer slots
+ * partitioned by kind — the same pattern `publishError` already uses:
+ * each probe is the sole writer of its own key and never touches the
+ * others', so camera support resolving never clobbers screen's (or vice
+ * versa) and either can come and go independently through a session. The
+ * last kind leaving restores the absent state rather than an empty object
+ * — see `withoutKind`. Co-writer of `state.publishError`
+ * (nothing-encodable-for-a-kind failures only).
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
-import type { ReadonlySignal, Signal } from '../../../core/signals/primitives';
-import type { CaptureTrackFacts, CaptureTracksFacts, PublishErrorFacts } from './acquire-capture-source';
+import { peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
+import type { CaptureTrackFacts, PublishErrorFacts } from './acquire-capture-source';
 
 /** Supported encoder configs per captured track kind. */
 export interface EncoderSupportFacts {
-  video?: VideoEncoderConfig[];
+  camera?: VideoEncoderConfig[];
+  screen?: VideoEncoderConfig[];
   audio?: AudioEncoderConfig[];
 }
 
-/** The encoder configs the encode pipeline should run with. */
+/** The encoder configs the encode pipeline should run with, per kind. */
 export interface ActiveEncodingsFacts {
-  video?: VideoEncoderConfig;
+  camera?: VideoEncoderConfig;
+  screen?: VideoEncoderConfig;
   audio?: AudioEncoderConfig;
 }
 
 /**
  * Strategy seam resolving probed support into the active encodings —
- * e.g. to prefer a codec, cap resolution, or veto a kind entirely.
+ * e.g. to prefer a codec, cap resolution, or veto a kind entirely. Called
+ * with the full merged support snapshot; each probe applies only its own
+ * kind from the result.
  */
 export type SelectEncoderConfig = (support: EncoderSupportFacts) => ActiveEncodingsFacts;
 
-/** Single-rendition encode tuning (mirrors `MoqPublishEngineConfig`). */
+export interface VideoEncodeTuning {
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  bitrate?: number;
+  codec?: string;
+}
+
+/** Per-kind encode tuning (mirrors `MoqPublishEngineConfig`). */
 export interface ProbeEncoderSupportConfig {
-  video?: { width?: number; height?: number; frameRate?: number; bitrate?: number; codec?: string };
+  camera?: VideoEncodeTuning;
+  screen?: VideoEncodeTuning;
   audio?: { bitrate?: number };
   selectEncoderConfig?: SelectEncoderConfig;
 }
 
 export interface ProbeEncoderSupportState {
-  captureTracks?: CaptureTracksFacts;
+  cameraTracks?: CaptureTrackFacts;
+  screenTracks?: CaptureTrackFacts;
+  micTracks?: CaptureTrackFacts;
   encoderSupport?: EncoderSupportFacts;
   activeEncodings?: ActiveEncodingsFacts;
   publishError?: PublishErrorFacts | undefined;
@@ -65,37 +91,43 @@ export interface ProbeEncoderSupportState {
 const DEFAULT_VIDEO_CODEC = 'avc1.42E01F';
 const FALLBACK_VIDEO_CODEC = 'vp8';
 const DEFAULT_VIDEO_BITRATE = 2_500_000;
+const DEFAULT_SCREEN_FRAME_RATE = 15;
+const DEFAULT_SCREEN_BITRATE = 1_500_000;
 const DEFAULT_AUDIO_CODEC = 'opus';
 const OPUS_SAMPLE_RATE = 48_000;
 const DEFAULT_AUDIO_BITRATE = 128_000;
 
 export const defaultSelectEncoderConfig: SelectEncoderConfig = (support) => {
   const active: ActiveEncodingsFacts = {};
-  if (support.video?.[0]) active.video = support.video[0];
+  if (support.camera?.[0]) active.camera = support.camera[0];
+  if (support.screen?.[0]) active.screen = support.screen[0];
   if (support.audio?.[0]) active.audio = support.audio[0];
   return active;
 };
 
-function videoCandidates(track: CaptureTrackFacts, video: ProbeEncoderSupportConfig['video']): VideoEncoderConfig[] {
-  const codecs = [...new Set([...(video?.codec ? [video.codec] : []), DEFAULT_VIDEO_CODEC, FALLBACK_VIDEO_CODEC])];
+function videoCandidates(track: CaptureTrackFacts, tuning: VideoEncodeTuning | undefined): VideoEncoderConfig[] {
+  const codecs = [...new Set([...(tuning?.codec ? [tuning.codec] : []), DEFAULT_VIDEO_CODEC, FALLBACK_VIDEO_CODEC])];
   return codecs.map((codec) => ({
     codec,
-    width: video?.width ?? track.width ?? 1280,
-    height: video?.height ?? track.height ?? 720,
-    framerate: video?.frameRate ?? track.frameRate ?? 30,
-    bitrate: video?.bitrate ?? DEFAULT_VIDEO_BITRATE,
+    width: tuning?.width ?? track.width ?? 1280,
+    height: tuning?.height ?? track.height ?? 720,
+    framerate: tuning?.frameRate ?? track.frameRate ?? 30,
+    bitrate: tuning?.bitrate ?? DEFAULT_VIDEO_BITRATE,
     latencyMode: 'realtime',
-    // `annexb` keeps H.264 parameter sets in-band with every keyframe,
-    // so the stream decodes with no out-of-band `description` at all.
-    // The alternative (`avc` format + avcC via the LOC Config property)
-    // is undecodable through relays that do not forward unknown object
-    // extension properties — relay.mux.dev rewrites Timestamp/Timescale
-    // and drops Config, leaving subscribers no parameter sets (verified
-    // on the wire, 2026-08-01). A receiver configured without a
-    // description expects Annex B per the WebCodecs AVC registration,
-    // which is exactly what this produces.
+    // `annexb` keeps H.264 parameter sets in-band with every keyframe, so
+    // the stream decodes with no out-of-band `description` at all — see
+    // the identical note on the camera ladder this was lifted from; the
+    // relay-interop constraint applies equally to the screen track.
     ...(codec.startsWith('avc1') ? { avc: { format: 'annexb' as const } } : {}),
   }));
+}
+
+function screenCandidates(track: CaptureTrackFacts, tuning: VideoEncodeTuning | undefined): VideoEncoderConfig[] {
+  return videoCandidates(track, {
+    frameRate: DEFAULT_SCREEN_FRAME_RATE,
+    bitrate: DEFAULT_SCREEN_BITRATE,
+    ...tuning,
+  });
 }
 
 function audioCandidates(track: CaptureTrackFacts, audio: ProbeEncoderSupportConfig['audio']): AudioEncoderConfig[] {
@@ -106,6 +138,21 @@ function audioCandidates(track: CaptureTrackFacts, audio: ProbeEncoderSupportCon
     numberOfChannels: track.channelCount ?? 1,
     bitrate: audio?.bitrate ?? DEFAULT_AUDIO_BITRATE,
   }));
+}
+
+/**
+ * Drop one kind from a per-kind facts object, collapsing an emptied result
+ * back to `undefined`. `{}` is truthy and downstream gates on presence, not
+ * on content: `deriveCatalog` would sit in 'publishing-catalog' and publish
+ * a track-less catalog once the last source was released, instead of
+ * dropping to idle.
+ */
+function withoutKind<Facts extends EncoderSupportFacts | ActiveEncodingsFacts>(
+  facts: Facts | undefined,
+  kind: keyof EncoderSupportFacts
+): Facts | undefined {
+  const remaining = Object.entries(facts ?? {}).filter(([key]) => key !== kind);
+  return remaining.length === 0 ? undefined : (Object.fromEntries(remaining) as Facts);
 }
 
 async function probeVideoSupport(candidates: VideoEncoderConfig[]): Promise<VideoEncoderConfig[]> {
@@ -134,64 +181,99 @@ async function probeAudioSupport(candidates: AudioEncoderConfig[]): Promise<Audi
   return supported;
 }
 
-type ProbeEncoderSupportFsmState = 'no-tracks' | 'tracks-present';
+type ProbeFsmState = 'no-tracks' | 'tracks-present';
 
 function probeEncoderSupportSetup({
   state,
   config = {},
 }: {
   state: {
-    captureTracks: ReadonlySignal<ProbeEncoderSupportState['captureTracks']>;
+    cameraTracks: ReadonlySignal<ProbeEncoderSupportState['cameraTracks']>;
+    screenTracks: ReadonlySignal<ProbeEncoderSupportState['screenTracks']>;
+    micTracks: ReadonlySignal<ProbeEncoderSupportState['micTracks']>;
     encoderSupport: Signal<ProbeEncoderSupportState['encoderSupport']>;
     activeEncodings: Signal<ProbeEncoderSupportState['activeEncodings']>;
     publishError: Signal<ProbeEncoderSupportState['publishError']>;
   };
   config?: ProbeEncoderSupportConfig;
-}): Reactor<ProbeEncoderSupportFsmState | 'destroying' | 'destroyed'> {
-  return createMachineReactor<ProbeEncoderSupportFsmState>({
-    initial: 'no-tracks',
-    monitor: () => (state.captureTracks.get() ? 'tracks-present' : 'no-tracks'),
-    states: {
-      'no-tracks': {},
+}): () => void {
+  const select = config.selectEncoderConfig ?? defaultSelectEncoderConfig;
 
-      'tracks-present': {
-        // effects (not entry) so a captureTracks identity change
-        // (re-acquired stream, new settings) re-probes through the cleanup.
-        effects: () => {
-          // Tracked: the facts object's identity drives re-probing.
-          const tracks = state.captureTracks.get()!;
-          let stale = false;
+  function runProbe<Track extends CaptureTrackFacts, EncConfig extends VideoEncoderConfig | AudioEncoderConfig>(
+    kind: keyof EncoderSupportFacts,
+    tracks: ReadonlySignal<Track | undefined>,
+    candidatesFor: (track: Track) => EncConfig[],
+    probeSupport: (candidates: EncConfig[]) => Promise<EncConfig[]>
+  ): Reactor<ProbeFsmState | 'destroying' | 'destroyed'> {
+    return createMachineReactor<ProbeFsmState>({
+      initial: 'no-tracks',
+      monitor: () => (tracks.get() ? 'tracks-present' : 'no-tracks'),
+      states: {
+        'no-tracks': {},
+        'tracks-present': {
+          effects: () => {
+            const track = tracks.get()!;
+            let stale = false;
 
-          const probe = async () => {
-            const support: EncoderSupportFacts = {};
-            if (tracks.video) support.video = await probeVideoSupport(videoCandidates(tracks.video, config.video));
-            if (tracks.audio) support.audio = await probeAudioSupport(audioCandidates(tracks.audio, config.audio));
-            if (stale) return;
-            state.encoderSupport.set(support);
-            const active = (config.selectEncoderConfig ?? defaultSelectEncoderConfig)(support);
-            state.activeEncodings.set(active);
-            if (!active.video && !active.audio) {
-              state.publishError.set({
-                code: 'encode',
-                message: 'No supported encoder configuration for the captured tracks.',
-              });
-            }
-          };
-          void probe();
+            const probe = async () => {
+              const supported = await probeSupport(candidatesFor(track));
+              if (stale) return;
+              const merged = { ...peek(state.encoderSupport), [kind]: supported } as EncoderSupportFacts;
+              state.encoderSupport.set(merged);
+              const resolvedKindValue = select(merged)[kind];
+              state.activeEncodings.set(
+                resolvedKindValue === undefined
+                  ? withoutKind(peek(state.activeEncodings), kind)
+                  : ({ ...peek(state.activeEncodings), [kind]: resolvedKindValue } as ActiveEncodingsFacts)
+              );
+              if (resolvedKindValue === undefined) {
+                state.publishError.set({
+                  code: 'encode',
+                  message: `No supported encoder configuration for the ${kind} track.`,
+                });
+              }
+            };
+            void probe();
 
-          return () => {
-            stale = true;
-            state.encoderSupport.set(undefined);
-            state.activeEncodings.set(undefined);
-          };
+            return () => {
+              stale = true;
+              state.encoderSupport.set(withoutKind(peek(state.encoderSupport), kind));
+              state.activeEncodings.set(withoutKind(peek(state.activeEncodings), kind));
+            };
+          },
         },
       },
-    },
-  });
+    });
+  }
+
+  const cameraProbe = runProbe(
+    'camera',
+    state.cameraTracks,
+    (track) => videoCandidates(track, config.camera),
+    probeVideoSupport
+  );
+  const screenProbe = runProbe(
+    'screen',
+    state.screenTracks,
+    (track) => screenCandidates(track, config.screen),
+    probeVideoSupport
+  );
+  const audioProbe = runProbe(
+    'audio',
+    state.micTracks,
+    (track) => audioCandidates(track, config.audio),
+    probeAudioSupport
+  );
+
+  return () => {
+    cameraProbe.destroy();
+    screenProbe.destroy();
+    audioProbe.destroy();
+  };
 }
 
 export const probeEncoderSupport = defineBehavior({
-  stateKeys: ['captureTracks', 'encoderSupport', 'activeEncodings', 'publishError'],
+  stateKeys: ['cameraTracks', 'screenTracks', 'micTracks', 'encoderSupport', 'activeEncodings', 'publishError'],
   contextKeys: [],
   setup: probeEncoderSupportSetup,
 });

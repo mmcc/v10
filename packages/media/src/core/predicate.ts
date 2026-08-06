@@ -130,7 +130,9 @@ export function isMediaPublishCapable(value: unknown): value is MediaPublishCapa
 export function isMediaCaptureSourceCapable(value: unknown): value is MediaCaptureSourceCapability {
   if (!isObject(value)) return false;
   const media = value as Record<string, unknown>;
-  return !isUndefined(media.captureState) && 'captureSource' in media;
+  return (
+    !isUndefined(media.cameraState) && !isUndefined(media.screenShareState) && 'cameraActive' in media
+  );
 }
 
 export function isMediaCaptureDevicesCapable(value: unknown): value is MediaCaptureDevicesCapability {

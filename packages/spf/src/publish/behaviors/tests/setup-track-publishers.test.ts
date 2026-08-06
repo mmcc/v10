@@ -47,6 +47,7 @@ function setupBehavior() {
     publishSessionActor: signal<SetupTrackPublishersContext['publishSessionActor']>(undefined),
     catalogTrackPublisher: signal<SetupTrackPublishersContext['catalogTrackPublisher']>(undefined),
     videoTrackPublisher: signal<SetupTrackPublishersContext['videoTrackPublisher']>(undefined),
+    screenTrackPublisher: signal<SetupTrackPublishersContext['screenTrackPublisher']>(undefined),
     audioTrackPublisher: signal<SetupTrackPublishersContext['audioTrackPublisher']>(undefined),
   };
   const reactor = setupTrackPublishers.setup({ state, context, config: {} });
@@ -64,7 +65,7 @@ describe('setupTrackPublishers', () => {
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
-    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     context.publishSessionActor.set(actor);
 
     await vi.waitFor(() => {
@@ -101,12 +102,38 @@ describe('setupTrackPublishers', () => {
     });
   });
 
+  it('adds the screen publisher additively alongside camera + audio', async () => {
+    const { actor, publishes } = makeSessionActor();
+    const { state, context } = setupBehavior();
+    const SCREEN_CONFIG = { codec: 'vp8', width: 1920, height: 1080 } as VideoEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    context.publishSessionActor.set(actor);
+    await vi.waitFor(() => {
+      expect(context.videoTrackPublisher.get()).toBeDefined();
+    });
+    expect(context.screenTrackPublisher.get()).toBeUndefined();
+
+    // Screen share starts mid-session — additive, camera's publisher untouched.
+    const cameraPublisher = context.videoTrackPublisher.get()!;
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, screen: SCREEN_CONFIG });
+
+    await vi.waitFor(() => {
+      expect(context.screenTrackPublisher.get()).toBeDefined();
+    });
+    expect(context.videoTrackPublisher.get()).toBe(cameraPublisher);
+    await vi.waitFor(() => {
+      expect(publishes).toEqual(['catalog', 'video', 'screen']);
+    });
+  });
+
   it('keeps the publishers through an encodings gap and destroys them when the session goes away', async () => {
     const { actor } = makeSessionActor();
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
-    state.activeEncodings.set({ video: VIDEO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
     context.publishSessionActor.set(actor);
     await vi.waitFor(() => {
       expect(context.videoTrackPublisher.get()).toBeDefined();

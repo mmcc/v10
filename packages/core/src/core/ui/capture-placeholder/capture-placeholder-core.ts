@@ -5,6 +5,7 @@ import type { NonNullableObject } from '@videojs/utils/types';
 import { resolveText, type Text } from '../../i18n';
 import { connectingText, enableDevicesText, permissionDeniedText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
+import { aggregateCaptureState } from '../utils/aggregate-capture-state';
 import { resolveLabel } from '../utils/resolve-label';
 
 export interface CapturePlaceholderProps {
@@ -19,9 +20,9 @@ export interface CapturePlaceholderState extends ButtonState {
 
 /**
  * Core state machine for the placeholder shown over the preview area before
- * capture is active. Its label is an enable-devices CTA while `idle` or
- * `ended`, a progress hint while `acquiring`, permission guidance when
- * `denied`, and empty once capture is `active`.
+ * any capture source is active. Its label is an enable-devices CTA while
+ * `idle` or `ended`, a progress hint while `acquiring`, permission guidance
+ * when `denied`, and empty once either source is `active`.
  */
 export class CapturePlaceholderCore {
   static readonly defaultProps: NonNullableObject<CapturePlaceholderProps> = {
@@ -66,7 +67,7 @@ export class CapturePlaceholderCore {
 
   getState(): CapturePlaceholderState {
     const media = this.#media!;
-    this.state.patch({ captureState: media.captureState });
+    this.state.patch({ captureState: aggregateCaptureState(media.cameraState, media.screenShareState) });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });
 
     return this.state.current;

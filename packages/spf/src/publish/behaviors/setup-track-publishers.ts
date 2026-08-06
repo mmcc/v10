@@ -53,13 +53,17 @@ import type { SessionPublishErrorFacts } from './open-publish-session';
  * keep identical.
  */
 export interface ActiveEncodingsFacts {
-  video?: VideoEncoderConfig;
+  camera?: VideoEncoderConfig;
+  screen?: VideoEncoderConfig;
   audio?: AudioEncoderConfig;
 }
 
-/** MSF-conventional track names for the single-rendition publisher. */
+/** MSF-conventional track names. `screen` is a name convention, not a
+ * formal MSF role field — see the multi-source design record's
+ * "Subscriber labeling" decision. */
 export const CATALOG_TRACK_NAME = 'catalog';
 export const VIDEO_TRACK_NAME = 'video';
+export const SCREEN_TRACK_NAME = 'screen';
 export const AUDIO_TRACK_NAME = 'audio';
 
 export interface SetupTrackPublishersState {
@@ -72,6 +76,7 @@ export interface SetupTrackPublishersContext {
   publishSessionActor?: PublishSessionActor | undefined;
   catalogTrackPublisher?: TrackPublisherActor | undefined;
   videoTrackPublisher?: TrackPublisherActor | undefined;
+  screenTrackPublisher?: TrackPublisherActor | undefined;
   audioTrackPublisher?: TrackPublisherActor | undefined;
 }
 
@@ -83,7 +88,7 @@ export interface SetupTrackPublishersConfig {
 type SetupTrackPublishersFsmState = 'preconditions-unmet' | 'publishers-ready';
 
 function hasEncoding(encodings: ActiveEncodingsFacts | undefined): boolean {
-  return Boolean(encodings && (encodings.video || encodings.audio));
+  return Boolean(encodings && (encodings.camera || encodings.screen || encodings.audio));
 }
 
 /**
@@ -137,6 +142,7 @@ function setupTrackPublishersSetup({
     publishSessionActor: ReadonlySignal<SetupTrackPublishersContext['publishSessionActor']>;
     catalogTrackPublisher: Signal<SetupTrackPublishersContext['catalogTrackPublisher']>;
     videoTrackPublisher: Signal<SetupTrackPublishersContext['videoTrackPublisher']>;
+    screenTrackPublisher: Signal<SetupTrackPublishersContext['screenTrackPublisher']>;
     audioTrackPublisher: Signal<SetupTrackPublishersContext['audioTrackPublisher']>;
   };
   config?: SetupTrackPublishersConfig;
@@ -199,6 +205,7 @@ function setupTrackPublishersSetup({
             return () => {
               cluster.set(undefined);
               context.audioTrackPublisher.set(undefined);
+              context.screenTrackPublisher.set(undefined);
               context.videoTrackPublisher.set(undefined);
               context.catalogTrackPublisher.set(undefined);
               for (const { handle, publisher } of [...next.created].reverse()) {
@@ -221,16 +228,20 @@ function setupTrackPublishersSetup({
 
           // Encoding sync — tracked on the cluster + `activeEncodings`;
           // adds the media publishers the active encodings call for.
-          // Additive on purpose: absent encodings (a mid-switch re-probe)
-          // change nothing, and a kind that disappears keeps its publisher
-          // — ending the track mid-session would PUBLISH_DONE it for every
-          // subscriber. Media track order stays video-then-audio.
+          // Additive on purpose: absent encodings (a mid-switch re-probe,
+          // or a screen share that hasn't started yet) change nothing, and
+          // a kind that disappears keeps its publisher — ending the track
+          // mid-session would PUBLISH_DONE it for every subscriber. Media
+          // track order stays camera-video, then screen, then audio.
           () => {
             const current = cluster.get();
             const encodings = state.activeEncodings.get();
             if (!current || !encodings) return;
-            if (encodings.video && peek(context.videoTrackPublisher) === undefined) {
+            if (encodings.camera && peek(context.videoTrackPublisher) === undefined) {
               addTrackPublisher(current, VIDEO_TRACK_NAME, false, context.videoTrackPublisher);
+            }
+            if (encodings.screen && peek(context.screenTrackPublisher) === undefined) {
+              addTrackPublisher(current, SCREEN_TRACK_NAME, false, context.screenTrackPublisher);
             }
             if (encodings.audio && peek(context.audioTrackPublisher) === undefined) {
               addTrackPublisher(current, AUDIO_TRACK_NAME, true, context.audioTrackPublisher);
@@ -244,6 +255,12 @@ function setupTrackPublishersSetup({
 
 export const setupTrackPublishers = defineBehavior({
   stateKeys: ['activeEncodings', 'endpoint', 'publishError'],
-  contextKeys: ['publishSessionActor', 'catalogTrackPublisher', 'videoTrackPublisher', 'audioTrackPublisher'],
+  contextKeys: [
+    'publishSessionActor',
+    'catalogTrackPublisher',
+    'videoTrackPublisher',
+    'screenTrackPublisher',
+    'audioTrackPublisher',
+  ],
   setup: setupTrackPublishersSetup,
 });

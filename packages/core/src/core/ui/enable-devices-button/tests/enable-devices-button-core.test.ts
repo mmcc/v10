@@ -5,10 +5,13 @@ import { EnableDevicesButtonCore } from '../enable-devices-button-core';
 
 function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): MediaCaptureSourceState {
   return {
-    captureSource: null,
-    captureState: 'idle',
+    cameraActive: false,
+    screenShareActive: false,
+    cameraState: 'idle',
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'available',
-    selectCaptureSource: vi.fn(),
+    toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
     ...overrides,
   };
@@ -27,7 +30,7 @@ describe('EnableDevicesButtonCore', () => {
   describe('getState', () => {
     it('is enabled when idle', () => {
       const core = new EnableDevicesButtonCore();
-      core.setMedia(createMediaState({ captureState: 'idle' }));
+      core.setMedia(createMediaState({ cameraState: 'idle' }));
 
       const state = core.getState();
 
@@ -35,10 +38,16 @@ describe('EnableDevicesButtonCore', () => {
       expect(state.disabled).toBe(false);
     });
 
-    it('is disabled while acquiring', () => {
+    it('is disabled while the camera is acquiring', () => {
       const core = new EnableDevicesButtonCore();
-      core.setMedia(createMediaState({ captureState: 'acquiring' }));
+      core.setMedia(createMediaState({ cameraState: 'acquiring' }));
       expect(core.getState().disabled).toBe(true);
+    });
+
+    it('stays enabled while the screen share is acquiring — the pipelines are independent', () => {
+      const core = new EnableDevicesButtonCore();
+      core.setMedia(createMediaState({ screenShareState: 'acquiring' }));
+      expect(core.getState().disabled).toBe(false);
     });
 
     it('is disabled via props', () => {
@@ -78,22 +87,49 @@ describe('EnableDevicesButtonCore', () => {
   });
 
   describe('activate', () => {
-    it('selects the camera capture source', () => {
+    it('activates the camera', () => {
       const core = new EnableDevicesButtonCore();
       const media = createMediaState();
 
       core.activate(media);
 
-      expect(media.selectCaptureSource).toHaveBeenCalledWith('camera');
+      expect(media.toggleCamera).toHaveBeenCalled();
+    });
+
+    it('does nothing when the camera is already active', () => {
+      const core = new EnableDevicesButtonCore();
+      const media = createMediaState({ cameraActive: true, cameraState: 'active' });
+
+      core.activate(media);
+
+      expect(media.toggleCamera).not.toHaveBeenCalled();
     });
 
     it('does nothing while acquiring', () => {
       const core = new EnableDevicesButtonCore();
-      const media = createMediaState({ captureState: 'acquiring' });
+      const media = createMediaState({ cameraState: 'acquiring' });
 
       core.activate(media);
 
-      expect(media.selectCaptureSource).not.toHaveBeenCalled();
+      expect(media.toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it('retries after a denial — the consumed intent reads false, so the same click re-acquires', () => {
+      const core = new EnableDevicesButtonCore();
+      const media = createMediaState({ cameraActive: false, cameraState: 'denied' });
+
+      core.activate(media);
+
+      expect(media.toggleCamera).toHaveBeenCalled();
+    });
+
+    it('retries after an out-of-band end (device unplugged and replugged)', () => {
+      const core = new EnableDevicesButtonCore();
+      const media = createMediaState({ cameraActive: false, cameraState: 'ended' });
+
+      core.activate(media);
+
+      expect(media.toggleCamera).toHaveBeenCalled();
     });
 
     it('does nothing when disabled', () => {
@@ -102,7 +138,7 @@ describe('EnableDevicesButtonCore', () => {
 
       core.activate(media);
 
-      expect(media.selectCaptureSource).not.toHaveBeenCalled();
+      expect(media.toggleCamera).not.toHaveBeenCalled();
     });
   });
 });

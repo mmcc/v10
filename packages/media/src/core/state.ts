@@ -1,7 +1,6 @@
 import type {
   ErrorLike,
   MediaCaptureDeviceInfo,
-  MediaCaptureSourceKind,
   MediaCaptureState,
   MediaFeatureAvailability,
   MediaPublishSessionState,
@@ -369,18 +368,21 @@ export interface MediaPublishState {
 }
 
 export interface MediaCaptureSourceState {
-  /** The selected capture source, or `null` when capture is released. */
-  captureSource: MediaCaptureSourceKind | null;
-  /** Current capture lifecycle. */
-  captureState: MediaCaptureState;
+  /** Whether the camera is an active capture source. */
+  cameraActive: boolean;
+  /** Whether screen share is an active capture source. */
+  screenShareActive: boolean;
+  /** Camera pipeline lifecycle. */
+  cameraState: MediaCaptureState;
+  /** Screen-share pipeline lifecycle. */
+  screenShareState: MediaCaptureState;
+  /** Microphone pipeline lifecycle (read-only; the mic has no intent slot). */
+  micState: MediaCaptureState;
   /** Whether screen capture can be requested on this platform. */
   screenShareAvailability: MediaFeatureAvailability;
-  /**
-   * Select the capture source (acquiring it, prompting for permission as
-   * needed) or release capture with `null`.
-   */
-  selectCaptureSource(source: MediaCaptureSourceKind | null): void;
-  /** Toggle between screen share and camera. Returns `true` when sharing. */
+  /** Acquire or release the camera (prompting for permission as needed). */
+  toggleCamera(): boolean;
+  /** Toggle screen share on or off. Returns `true` when sharing. */
   toggleScreenShare(): boolean;
 }
 

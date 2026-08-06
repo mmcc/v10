@@ -25,6 +25,13 @@ const FAKE_AUDIO_BITRATE = 1.28e5;
  * Capture is genuine `getUserMedia`/`getDisplayMedia`; `publish()` only
  * simulates a session (connect delay, `live`, ~1 Hz plausible stats) so the
  * publisher capability contracts can be exercised without a relay.
+ *
+ * Additive, not exclusive: camera and screen are two independent pipelines,
+ * each pulling its own audio (unlike the real engine, which gives the
+ * microphone its own always-on pipeline — see
+ * `internal/design/spf/features/publisher-multi-source-capture.md`). That
+ * extra independence isn't this fake's job to demonstrate; it only needs to
+ * satisfy the additive capability contract for the sandbox's `?fake` mode.
  */
 export class FakePublishMedia
   extends HTMLVideoElementHost
@@ -39,11 +46,15 @@ export class FakePublishMedia
   publishNamespace = '';
   publishAuthToken = '';
 
-  #captureSource: MediaCaptureSourceKind | null = null;
-  #captureState: MediaCaptureState = 'idle';
-  #stream: MediaStream | null = null;
-  /** Bumped to cancel in-flight acquisitions when the source changes again. */
-  #acquireToken = 0;
+  #cameraActive = false;
+  #screenShareActive = false;
+  #cameraState: MediaCaptureState = 'idle';
+  #screenShareState: MediaCaptureState = 'idle';
+  #cameraStream: MediaStream | null = null;
+  #screenShareStream: MediaStream | null = null;
+  /** Bumped per kind to cancel in-flight acquisitions when it's re-toggled. */
+  #cameraAcquireToken = 0;
+  #screenAcquireToken = 0;
 
   #captureDevices: MediaCaptureDeviceInfo[] = [];
   #videoInputDeviceId = '';
@@ -86,45 +97,86 @@ export class FakePublishMedia
 
   override destroy(): void {
     this.#disposed.abort();
-    this.#acquireToken++;
+    this.#cameraAcquireToken++;
+    this.#screenAcquireToken++;
     this.#clearPublishTimer();
     this.#stopStats();
     this.#pendingPublish?.reject(new Error('The media host was destroyed.'));
     this.#pendingPublish = null;
-    this.#releaseStream();
+    this.#releaseStream('camera');
+    this.#releaseStream('screen');
     super.destroy();
   }
 
   // ── MediaCaptureSourceCapability ────────────────────────────────────────
 
-  get captureSource(): MediaCaptureSourceKind | null {
-    return this.#captureSource;
+  get cameraActive(): boolean {
+    return this.#cameraActive;
   }
 
-  set captureSource(value: MediaCaptureSourceKind | null) {
-    const sameKind = value === this.#captureSource;
-    // Re-setting the current kind re-acquires only after `denied`/`ended`.
-    if (sameKind && (value === null || this.#captureState === 'acquiring' || this.#captureState === 'active')) return;
+  set cameraActive(value: boolean) {
+    if (value === this.#cameraActive) return;
+    this.#cameraActive = value;
+    this.dispatchEvent(new Event('capturesourcechange'));
 
-    this.#captureSource = value;
-    if (!sameKind) this.dispatchEvent(new Event('capturesourcechange'));
-
-    if (value === null) {
-      this.#acquireToken++;
-      this.#releaseStream();
-      this.#setCaptureState('idle');
-      if (this.#publishState === 'connecting' || this.#publishState === 'live') this.unpublish();
+    if (value) {
+      void this.#acquire('camera');
     } else {
-      void this.#acquire(value);
+      this.#cameraAcquireToken++;
+      this.#releaseStream('camera');
+      this.#setCaptureState('camera', 'idle');
+      if (!this.#screenShareActive && (this.#publishState === 'connecting' || this.#publishState === 'live')) {
+        this.unpublish();
+      }
     }
   }
 
-  get captureState(): MediaCaptureState {
-    return this.#captureState;
+  get screenShareActive(): boolean {
+    return this.#screenShareActive;
   }
 
-  get captureStream(): MediaStream | null {
-    return this.#captureState === 'active' ? this.#stream : null;
+  set screenShareActive(value: boolean) {
+    if (value === this.#screenShareActive) return;
+    this.#screenShareActive = value;
+    this.dispatchEvent(new Event('capturesourcechange'));
+
+    if (value) {
+      void this.#acquire('screen');
+    } else {
+      this.#screenAcquireToken++;
+      this.#releaseStream('screen');
+      this.#setCaptureState('screen', 'idle');
+      if (!this.#cameraActive && (this.#publishState === 'connecting' || this.#publishState === 'live')) {
+        this.unpublish();
+      }
+    }
+  }
+
+  get cameraState(): MediaCaptureState {
+    return this.#cameraState;
+  }
+
+  get screenShareState(): MediaCaptureState {
+    return this.#screenShareState;
+  }
+
+  /**
+   * Derived, not owned: this fake merges mic audio into each capture
+   * stream (see the header note) instead of running an independent mic
+   * pipeline, so the mic lifecycle is whatever the live streams carry —
+   * enough to satisfy the contract and the store slice's read.
+   */
+  get micState(): MediaCaptureState {
+    const hasAudio = (stream: MediaStream | null) => (stream?.getAudioTracks().length ?? 0) > 0;
+    return hasAudio(this.#cameraStream) || hasAudio(this.#screenShareStream) ? 'active' : 'idle';
+  }
+
+  get cameraStream(): MediaStream | null {
+    return this.#cameraState === 'active' ? this.#cameraStream : null;
+  }
+
+  get screenShareStream(): MediaStream | null {
+    return this.#screenShareState === 'active' ? this.#screenShareStream : null;
   }
 
   // ── MediaCaptureDevicesCapability ───────────────────────────────────────
@@ -162,7 +214,7 @@ export class FakePublishMedia
   set cameraMuted(value: boolean) {
     if (value === this.#cameraMuted) return;
     this.#cameraMuted = value;
-    for (const track of this.#stream?.getVideoTracks() ?? []) track.enabled = !value;
+    for (const track of this.#cameraStream?.getVideoTracks() ?? []) track.enabled = !value;
     this.dispatchEvent(new Event('capturetogglechange'));
   }
 
@@ -173,7 +225,8 @@ export class FakePublishMedia
   set micMuted(value: boolean) {
     if (value === this.#micMuted) return;
     this.#micMuted = value;
-    for (const track of this.#stream?.getAudioTracks() ?? []) track.enabled = !value;
+    for (const track of this.#cameraStream?.getAudioTracks() ?? []) track.enabled = !value;
+    for (const track of this.#screenShareStream?.getAudioTracks() ?? []) track.enabled = !value;
     this.dispatchEvent(new Event('capturetogglechange'));
   }
 
@@ -195,7 +248,7 @@ export class FakePublishMedia
     if (this.#publishState === 'connecting' || this.#publishState === 'live' || this.#publishState === 'stopping') {
       return Promise.reject(new Error(`publish() is not allowed while the session is ${this.#publishState}.`));
     }
-    if (this.#captureState !== 'active') {
+    if (this.#cameraState !== 'active' && this.#screenShareState !== 'active') {
       this.#publishError = { code: 0, message: 'publish() requires an active capture source.' };
       this.#setPublishState('error');
       return Promise.reject(new Error(this.#publishError.message));
@@ -249,24 +302,40 @@ export class FakePublishMedia
   // ── Capture internals ───────────────────────────────────────────────────
 
   async #acquire(kind: MediaCaptureSourceKind): Promise<void> {
-    const token = ++this.#acquireToken;
-    this.#releaseStream();
-    this.#setCaptureState('acquiring');
+    const token = kind === 'camera' ? ++this.#cameraAcquireToken : ++this.#screenAcquireToken;
+    this.#releaseStream(kind);
+    this.#setCaptureState(kind, 'acquiring');
 
     try {
       const stream = kind === 'camera' ? await this.#getCameraStream() : await this.#getScreenStream();
-      if (token !== this.#acquireToken) {
+      const current = kind === 'camera' ? this.#cameraAcquireToken : this.#screenAcquireToken;
+      if (token !== current) {
         for (const track of stream.getTracks()) track.stop();
         return;
       }
-      this.#adoptStream(stream);
+      this.#adoptStream(kind, stream);
       // Device labels stay redacted until a grant, so refresh after acquiring.
       void this.#refreshDevices();
     } catch (error) {
-      if (token !== this.#acquireToken) return;
+      const current = kind === 'camera' ? this.#cameraAcquireToken : this.#screenAcquireToken;
+      if (token !== current) return;
       const denied = error instanceof DOMException && error.name === 'NotAllowedError';
-      this.#setCaptureState(denied ? 'denied' : 'idle');
+      this.#setCaptureState(kind, denied ? 'denied' : 'idle');
+      this.#consumeIntent(kind);
     }
+  }
+
+  /**
+   * Mirror the real capability contract: a pipeline that terminates
+   * without consumer action (denied, failed, out-of-band ended) consumes
+   * its intent flag, so toggles read false again and a retry is one
+   * click. Sets the backing field directly — the setter's release path
+   * would clobber the terminal state the UI needs.
+   */
+  #consumeIntent(kind: MediaCaptureSourceKind): void {
+    if (kind === 'camera') this.#cameraActive = false;
+    else this.#screenShareActive = false;
+    this.dispatchEvent(new Event('capturesourcechange'));
   }
 
   async #getCameraStream(): Promise<MediaStream> {
@@ -290,35 +359,42 @@ export class FakePublishMedia
     return stream;
   }
 
-  #adoptStream(stream: MediaStream): void {
-    this.#stream = stream;
+  #adoptStream(kind: MediaCaptureSourceKind, stream: MediaStream): void {
     for (const track of stream.getVideoTracks()) track.enabled = !this.#cameraMuted;
     for (const track of stream.getAudioTracks()) track.enabled = !this.#micMuted;
-    this.#watchTracks(stream);
-    this.#setCaptureState('active');
+    this.#watchTracks(kind, stream);
+    if (kind === 'camera') this.#cameraStream = stream;
+    else this.#screenShareStream = stream;
+    this.#setCaptureState(kind, 'active');
     this.dispatchEvent(new Event('capturestreamchange'));
     this.#syncPreview();
   }
 
-  #releaseStream(): void {
-    this.#clearPreview();
-    const stream = this.#stream;
+  #releaseStream(kind: MediaCaptureSourceKind): void {
+    const stream = kind === 'camera' ? this.#cameraStream : this.#screenShareStream;
     if (!stream) return;
-    this.#stream = null;
+    if (kind === 'camera') this.#cameraStream = null;
+    else this.#screenShareStream = null;
     for (const track of stream.getTracks()) track.stop();
     this.dispatchEvent(new Event('capturestreamchange'));
+    this.#syncPreview();
   }
 
   /** Ends outside our control (unplugged device, browser-UI "Stop sharing") land in `ended`. */
-  #watchTracks(stream: MediaStream): void {
+  #watchTracks(kind: MediaCaptureSourceKind, stream: MediaStream): void {
     for (const track of stream.getTracks()) {
       track.addEventListener(
         'ended',
         () => {
-          if (this.#stream !== stream) return;
-          this.#releaseStream();
-          this.#setCaptureState('ended');
-          if (this.#publishState === 'connecting' || this.#publishState === 'live') this.unpublish();
+          const owner = kind === 'camera' ? this.#cameraStream : this.#screenShareStream;
+          if (owner !== stream) return;
+          this.#releaseStream(kind);
+          this.#setCaptureState(kind, 'ended');
+          this.#consumeIntent(kind);
+          const stillActive = kind === 'camera' ? this.#screenShareActive : this.#cameraActive;
+          if (!stillActive && (this.#publishState === 'connecting' || this.#publishState === 'live')) {
+            this.unpublish();
+          }
         },
         { once: true }
       );
@@ -326,8 +402,8 @@ export class FakePublishMedia
   }
 
   #reacquireCamera(): void {
-    if (this.#captureSource !== 'camera') return;
-    if (this.#captureState !== 'active' && this.#captureState !== 'acquiring') return;
+    if (!this.#cameraActive) return;
+    if (this.#cameraState !== 'active' && this.#cameraState !== 'acquiring') return;
     void this.#acquire('camera');
   }
 
@@ -343,18 +419,29 @@ export class FakePublishMedia
     this.dispatchEvent(new Event('capturedeviceschange'));
   }
 
-  #setCaptureState(value: MediaCaptureState): void {
-    if (this.#captureState === value) return;
-    this.#captureState = value;
+  #setCaptureState(kind: MediaCaptureSourceKind, value: MediaCaptureState): void {
+    if (kind === 'camera') {
+      if (this.#cameraState === value) return;
+      this.#cameraState = value;
+    } else {
+      if (this.#screenShareState === value) return;
+      this.#screenShareState = value;
+    }
     this.dispatchEvent(new Event('capturestatechange'));
   }
 
   // ── Preview internals ───────────────────────────────────────────────────
 
+  /** Prefers the camera stream when both sources are live — no `previewSource` picker in this fake. */
   #syncPreview(): void {
     const preview = this.#preview;
-    if (!preview || !this.#stream || this.#captureState !== 'active') return;
-    preview.srcObject = this.#stream;
+    if (!preview) return;
+    const stream = this.cameraStream ?? this.screenShareStream;
+    if (!stream) {
+      this.#clearPreview();
+      return;
+    }
+    preview.srcObject = stream;
     preview.muted = true;
     preview.playsInline = true;
     preview.play().catch(() => undefined);

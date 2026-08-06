@@ -90,7 +90,9 @@ describe('createVideoEncoderActor', () => {
     expect(keyTimestamps).toContain(WALLCLOCK_US);
     expect(keyTimestamps).toContain(WALLCLOCK_US + 5 * FRAME_DURATION_US);
     for (const { packaged, meta } of sunk) {
-      expect(meta.track).toBe('video');
+      // 'camera' is createVideoEncoderActor's default sink-routing label
+      // when the caller doesn't override it — see encoder-actor.ts.
+      expect(meta.track).toBe('camera');
       expect(meta.byteLength).toBe(packaged.payload.byteLength);
       expect(packaged.payload.byteLength).toBeGreaterThan(0);
     }

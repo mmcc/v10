@@ -135,7 +135,8 @@ class LoopbackPublishMedia extends MoqPublishMedia {
   constructor() {
     const options: MoqPublishMediaOptions = {
       engineConfig: {
-        video: { codec: 'vp8' },
+        camera: { codec: 'vp8' },
+        screen: { codec: 'vp8' },
         connectTransport: (endpoint) => {
           if (!activeRelay) throw new Error('loopback relay is not running');
           return activeRelay.connectPublisher(endpoint);
@@ -154,7 +155,8 @@ class LoopbackPublishVideoElement extends LoopbackPublishVideoBase {
     ...LoopbackPublishVideoBase.properties,
     publishEndpoint: { type: String, attribute: 'publish-endpoint', empty: '' },
     publishNamespace: { type: String, attribute: 'publish-namespace', empty: '' },
-    captureSource: { type: String, attribute: 'capture-source', empty: null },
+    cameraActive: { type: Boolean, attribute: 'camera-active' },
+    screenShareActive: { type: Boolean, attribute: 'screen-share-active' },
   };
 }
 
@@ -260,7 +262,14 @@ document.getElementById('root')!.innerHTML = html`
 /** The capability surface the status panel reads; every host implements it. */
 type PublisherHostLike = Pick<
   FakePublishMedia,
-  'captureSource' | 'captureState' | 'publishState' | 'publishStartedAt' | 'publishError' | 'publishStats'
+  | 'cameraActive'
+  | 'screenShareActive'
+  | 'cameraState'
+  | 'screenShareState'
+  | 'publishState'
+  | 'publishStartedAt'
+  | 'publishError'
+  | 'publishStats'
 >;
 
 const el = document.getElementById('media') as HTMLElement & { host: PublisherHostLike };
@@ -289,14 +298,15 @@ const modeLabel = {
 }[mode];
 
 function renderStatus(): void {
-  const source = media.captureSource ? ` (${media.captureSource})` : '';
+  const sources = [media.cameraActive && 'camera', media.screenShareActive && 'screen'].filter(Boolean).join('+');
+  const source = sources ? ` (${sources})` : '';
   const since = Number.isFinite(media.publishStartedAt)
     ? ` since ${new Date(media.publishStartedAt).toLocaleTimeString()}`
     : '';
   const error = media.publishError?.message ?? '';
   const lines = [
     `mode:    ${modeLabel}${params.has('synthetic') ? ' · synthetic capture' : ''}`,
-    `capture: ${media.captureState}${source}`,
+    `capture: camera=${media.cameraState} screen=${media.screenShareState}${source}`,
     `publish: ${media.publishState}${since}`,
     `stats:   ${formatStats(media.publishStats)}`,
   ];

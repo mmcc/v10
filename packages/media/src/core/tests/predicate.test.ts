@@ -56,12 +56,18 @@ describe('isMediaPublishCapable', () => {
 });
 
 describe('isMediaCaptureSourceCapable', () => {
-  it('accepts a null captureSource (released capture is still capable)', () => {
-    expect(isMediaCaptureSourceCapable({ captureSource: null, captureState: 'idle' })).toBe(true);
+  it('accepts released capture (both sources inactive) as still capable', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: false, cameraState: 'idle', screenShareState: 'idle' })).toBe(
+      true
+    );
   });
 
-  it('rejects media without capture state', () => {
-    expect(isMediaCaptureSourceCapable({ captureSource: 'camera' })).toBe(false);
+  it('rejects media without a screenShareState', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: true, cameraState: 'active' })).toBe(false);
+  });
+
+  it('rejects media without a cameraState', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: true, screenShareState: 'idle' })).toBe(false);
   });
 });
 

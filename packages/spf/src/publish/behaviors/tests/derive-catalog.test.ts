@@ -46,7 +46,7 @@ describe('deriveCatalog', () => {
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
-    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     context.catalogTrackPublisher.set(publisher);
 
     await vi.waitFor(() => {
@@ -98,7 +98,7 @@ describe('deriveCatalog', () => {
       expect(sent).toHaveLength(1);
     });
 
-    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
@@ -106,6 +106,27 @@ describe('deriveCatalog', () => {
     if (second.type !== 'frame') return;
     const catalog = JSON.parse(new TextDecoder().decode(second.payload));
     expect(catalog.tracks.map((track: { name: string }) => track.name)).toEqual(['video', 'audio']);
+  });
+
+  it('names the screen track and groups it with camera + audio via renderGroup, not altGroup', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+    const SCREEN_CONFIG = { codec: 'vp8', width: 1920, height: 1080, framerate: 15, bitrate: 1_500_000 } as VideoEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, screen: SCREEN_CONFIG, audio: AUDIO_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    if (sent[0]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+    expect(catalog.tracks.map((track: { name: string }) => track.name)).toEqual(['video', 'screen', 'audio']);
+    for (const track of catalog.tracks) {
+      expect(track.renderGroup).toBe(1);
+      expect(track.altGroup).toBeUndefined();
+    }
   });
 
   it('routes through the buildCatalog config seam', async () => {

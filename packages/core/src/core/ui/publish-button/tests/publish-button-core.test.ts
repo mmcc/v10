@@ -9,7 +9,8 @@ function createMediaState(overrides: Partial<PublishButtonMediaState> = {}): Pub
     publishError: null,
     publish: vi.fn(async () => {}),
     unpublish: vi.fn(),
-    captureState: 'active',
+    cameraState: 'active',
+    screenShareState: 'idle',
     ...overrides,
   };
 }
@@ -40,10 +41,16 @@ describe('PublishButtonCore', () => {
       expect(core.getState().disabled).toBe(false);
     });
 
-    it('is disabled when capture is not active', () => {
+    it('is disabled when neither capture pipeline is active', () => {
       const core = new PublishButtonCore();
-      core.setMedia(createMediaState({ captureState: 'idle' }));
+      core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'idle' }));
       expect(core.getState().disabled).toBe(true);
+    });
+
+    it('is enabled when only the screen share is active', () => {
+      const core = new PublishButtonCore();
+      core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'active' }));
+      expect(core.getState().disabled).toBe(false);
     });
 
     it('is disabled while connecting', () => {
@@ -184,7 +191,7 @@ describe('PublishButtonCore', () => {
 
     it('does not publish without active capture', async () => {
       const core = new PublishButtonCore();
-      const media = createMediaState({ captureState: 'acquiring' });
+      const media = createMediaState({ cameraState: 'acquiring', screenShareState: 'idle' });
 
       await core.toggle(media);
 

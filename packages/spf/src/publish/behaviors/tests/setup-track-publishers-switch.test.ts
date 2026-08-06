@@ -12,10 +12,11 @@ import {
 /**
  * Source-switch regression coverage: the track publishers are keyed on
  * the session + track names, so encoder churn — `activeEncodings`
- * clearing transiently and returning with a fresh identity, as a
- * camera→screen switch produces — must not destroy them, re-PUBLISH the
- * tracks, or emit PUBLISH_DONE. A relay treats PUBLISH_DONE as the end of
- * the track; every subscriber would freeze.
+ * clearing transiently and returning with a fresh identity, as a camera
+ * device change (or a screen share starting/stopping mid-session)
+ * produces — must not destroy them, re-PUBLISH the tracks, or emit
+ * PUBLISH_DONE. A relay treats PUBLISH_DONE as the end of the track;
+ * every subscriber would freeze.
  */
 
 const ENDPOINT = { url: 'https://relay.example.com/moq', namespace: ['live', 'abc123'] };
@@ -56,6 +57,7 @@ function setupBehavior() {
     publishSessionActor: signal<SetupTrackPublishersContext['publishSessionActor']>(undefined),
     catalogTrackPublisher: signal<SetupTrackPublishersContext['catalogTrackPublisher']>(undefined),
     videoTrackPublisher: signal<SetupTrackPublishersContext['videoTrackPublisher']>(undefined),
+    screenTrackPublisher: signal<SetupTrackPublishersContext['screenTrackPublisher']>(undefined),
     audioTrackPublisher: signal<SetupTrackPublishersContext['audioTrackPublisher']>(undefined),
   };
   const reactor = setupTrackPublishers.setup({ state, context, config: {} });
@@ -73,7 +75,7 @@ describe('setupTrackPublishers', () => {
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
-    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     context.publishSessionActor.set(actor);
 
     await vi.waitFor(() => {
@@ -98,7 +100,7 @@ describe('setupTrackPublishers', () => {
     state.activeEncodings.set(undefined);
     await new Promise((resolve) => setTimeout(resolve, 20));
     // …and return with a fresh identity (new resolution, same kinds).
-    state.activeEncodings.set({ video: SCREEN_VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    state.activeEncodings.set({ camera: SCREEN_VIDEO_CONFIG, audio: AUDIO_CONFIG });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Same actors, same tracks, no churn on the wire.
@@ -118,7 +120,7 @@ describe('setupTrackPublishers', () => {
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
-    state.activeEncodings.set({ video: VIDEO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
     context.publishSessionActor.set(actor);
 
     await vi.waitFor(() => {
@@ -127,9 +129,9 @@ describe('setupTrackPublishers', () => {
     const videoPublisher = context.videoTrackPublisher.get()!;
     expect(context.audioTrackPublisher.get()).toBeUndefined();
 
-    // The switched-to source brings audio (e.g. a mic merged into a
-    // screen share): the audio track is offered additively.
-    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    // The mic's independent pipeline finishes acquiring after the camera's:
+    // the audio track is offered additively once it does.
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     await vi.waitFor(() => {
       expect(context.audioTrackPublisher.get()).toBeDefined();
       expect(publishes).toEqual(['catalog', 'video', 'audio']);
@@ -143,15 +145,15 @@ describe('setupTrackPublishers', () => {
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
-    state.activeEncodings.set({ video: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     context.publishSessionActor.set(actor);
     await vi.waitFor(() => {
       expect(publishes).toEqual(['catalog', 'video', 'audio']);
     });
     const audioPublisher = context.audioTrackPublisher.get()!;
 
-    // Audio-less screen share: the audio track goes quiet, not away.
-    state.activeEncodings.set({ video: SCREEN_VIDEO_CONFIG });
+    // A mic device error drops the audio encoding: the track goes quiet, not away.
+    state.activeEncodings.set({ camera: SCREEN_VIDEO_CONFIG });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(context.audioTrackPublisher.get()).toBe(audioPublisher);
     expect(audioPublisher.snapshot.get().value).toBe('publishing');

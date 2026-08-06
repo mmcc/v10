@@ -84,13 +84,16 @@ function setupBehavior() {
     publishError: signal<PumpMediaFramesState['publishError']>(undefined),
   };
   const context = {
-    captureStream: signal<PumpMediaFramesContext['captureStream']>(undefined),
-    videoEncoderActor: signal<PumpMediaFramesContext['videoEncoderActor']>(undefined),
+    cameraStream: signal<PumpMediaFramesContext['cameraStream']>(undefined),
+    screenStream: signal<PumpMediaFramesContext['screenStream']>(undefined),
+    micStream: signal<PumpMediaFramesContext['micStream']>(undefined),
+    cameraEncoderActor: signal<PumpMediaFramesContext['cameraEncoderActor']>(undefined),
+    screenEncoderActor: signal<PumpMediaFramesContext['screenEncoderActor']>(undefined),
     audioEncoderActor: signal<PumpMediaFramesContext['audioEncoderActor']>(undefined),
   };
-  const reactor = pumpMediaFrames.setup({ state, context, config: {} });
-  disposals.push(() => reactor.destroy());
-  return { state, context, reactor };
+  const cleanup = pumpMediaFrames.setup({ state, context, config: {} });
+  disposals.push(cleanup);
+  return { state, context, cleanup };
 }
 
 describe('pumpMediaFrames', () => {
@@ -104,7 +107,7 @@ describe('pumpMediaFrames', () => {
     context.audioEncoderActor.set(actor);
 
     const firstStream = await makeAudioStream();
-    context.captureStream.set(firstStream);
+    context.micStream.set(firstStream);
     await new Promise<void>((resolve) => {
       const poll = setInterval(() => {
         if (receivedFrames() > 0) {
@@ -119,7 +122,7 @@ describe('pumpMediaFrames', () => {
     // `acquireCaptureSource`'s release → re-acquire sequence.
     for (const track of firstStream.getTracks()) track.stop();
     const secondStream = await makeAudioStream();
-    context.captureStream.set(secondStream);
+    context.micStream.set(secondStream);
     // Let the swap settle, then measure fresh: the old track is stopped,
     // so any further frames can only come from the new stream's track.
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -152,7 +155,7 @@ describe('pumpMediaFrames', () => {
       globals.MediaStreamTrackProcessor = original;
     });
 
-    context.captureStream.set(await makeAudioStream());
+    context.micStream.set(await makeAudioStream());
 
     await vi.waitFor(() => {
       expect(state.publishError.get()).toMatchObject({ code: 'encode', cause: failure });
@@ -182,7 +185,7 @@ describe('pumpMediaFrames', () => {
       globals.MediaStreamTrackProcessor = original;
     });
 
-    context.captureStream.set(await makeAudioStream());
+    context.micStream.set(await makeAudioStream());
     await vi.waitFor(() => {
       expect(rejectRead).toBeDefined();
     });
@@ -191,7 +194,7 @@ describe('pumpMediaFrames', () => {
     // the same beat — whichever microtask wins, the old pump's failure
     // must not pin an error on the healthy replacement.
     rejectRead!(new Error('old track died late'));
-    context.captureStream.set(await makeAudioStream());
+    context.micStream.set(await makeAudioStream());
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(state.publishError.get()).toBeUndefined();
   }, 15_000);

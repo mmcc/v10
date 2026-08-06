@@ -36,35 +36,44 @@ function setupToggles(initialState: ApplyTrackTogglesState = {}, initialContext:
     micMuted: signal(initialState.micMuted ?? false),
   };
   const context: ContextSignals<ApplyTrackTogglesContext> = {
-    captureStream: signal(initialContext.captureStream),
+    cameraStream: signal(initialContext.cameraStream),
+    micStream: signal(initialContext.micStream),
   };
   const cleanup = applyTrackToggles.setup({ state, context });
   return { state, context, cleanup };
 }
 
 describe('applyTrackToggles', () => {
-  it('flips track.enabled when the mute flags change', async () => {
+  it('flips the camera stream video track on cameraMuted', async () => {
     const video = new FakeMediaStreamTrack('video');
-    const audio = new FakeMediaStreamTrack('audio');
     const { state, context, cleanup } = setupToggles();
-    context.captureStream.set(asStream(new FakeMediaStream([video, audio])));
+    context.cameraStream.set(asStream(new FakeMediaStream([video])));
 
     state.cameraMuted.set(true);
     await vi.waitFor(() => {
       expect(video.enabled).toBe(false);
-    });
-    expect(audio.enabled).toBe(true);
-
-    state.micMuted.set(true);
-    await vi.waitFor(() => {
-      expect(audio.enabled).toBe(false);
     });
 
     state.cameraMuted.set(false);
     await vi.waitFor(() => {
       expect(video.enabled).toBe(true);
     });
-    expect(audio.enabled).toBe(false);
+
+    cleanup();
+  });
+
+  it('flips the mic stream audio track on micMuted, independently of the camera stream', async () => {
+    const video = new FakeMediaStreamTrack('video');
+    const audio = new FakeMediaStreamTrack('audio');
+    const { state, context, cleanup } = setupToggles();
+    context.cameraStream.set(asStream(new FakeMediaStream([video])));
+    context.micStream.set(asStream(new FakeMediaStream([audio])));
+
+    state.micMuted.set(true);
+    await vi.waitFor(() => {
+      expect(audio.enabled).toBe(false);
+    });
+    expect(video.enabled).toBe(true);
 
     cleanup();
   });
@@ -74,7 +83,8 @@ describe('applyTrackToggles', () => {
     const audio = new FakeMediaStreamTrack('audio');
     const { context, cleanup } = setupToggles({ cameraMuted: true, micMuted: false });
 
-    context.captureStream.set(asStream(new FakeMediaStream([video, audio])));
+    context.cameraStream.set(asStream(new FakeMediaStream([video])));
+    context.micStream.set(asStream(new FakeMediaStream([audio])));
 
     await vi.waitFor(() => {
       expect(video.enabled).toBe(false);

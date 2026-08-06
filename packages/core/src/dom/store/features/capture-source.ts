@@ -7,22 +7,27 @@ import { definePlayerFeature } from '../../feature';
 export const captureSourceFeature = definePlayerFeature({
   name: 'captureSource',
   state: ({ target }): MediaCaptureSourceState => ({
-    captureSource: null,
-    captureState: 'idle',
+    cameraActive: false,
+    screenShareActive: false,
+    cameraState: 'idle',
+    screenShareState: 'idle',
+    micState: 'idle',
     screenShareAvailability: 'unavailable',
 
-    selectCaptureSource(source) {
+    toggleCamera() {
       const { media } = target();
-      if (!isMediaCaptureSourceCapable(media)) return;
-      media.captureSource = source;
+      if (!isMediaCaptureSourceCapable(media)) return false;
+      const next = !media.cameraActive;
+      media.cameraActive = next;
+      return next;
     },
 
     toggleScreenShare() {
       const { media } = target();
       if (!isMediaCaptureSourceCapable(media)) return false;
-      const sharing = media.captureSource === 'screen';
-      media.captureSource = sharing ? 'camera' : 'screen';
-      return !sharing;
+      const next = !media.screenShareActive;
+      media.screenShareActive = next;
+      return next;
     },
   }),
 
@@ -37,8 +42,11 @@ export const captureSourceFeature = definePlayerFeature({
 
     const sync = () =>
       set({
-        captureSource: media.captureSource,
-        captureState: media.captureState,
+        cameraActive: media.cameraActive,
+        screenShareActive: media.screenShareActive,
+        cameraState: media.cameraState,
+        screenShareState: media.screenShareState,
+        micState: media.micState,
       });
 
     sync();

@@ -1,16 +1,19 @@
 /**
- * **Sample the publish pipeline into `state.publishStats`.** While encoder
- * actors exist, an interval owned by this behavior (~1 Hz) diffs their
+ * **Sample the publish pipeline into `state.publishStats`.** While an
+ * encoder actor exists, an interval owned by this behavior (~1 Hz) diffs
  * snapshot counters into rates — `encodedFps` from frame-count deltas,
  * `videoBitrate` / `audioBitrate` from byte deltas ×8 — alongside the
- * cumulative encode total (`droppedFrames`). The transport-side facts come
- * from the track publishers and the session actor when those exist:
- * `droppedGroups` and `bytesSent` sum the per-track publisher counters
- * (bytes actually handed to the transport — 0 while no session publishes),
- * and `subscriberCount` reads the session actor's live subscription count
- * (`NaN` while no session exists — genuinely unknown). The interval is
- * cleared and the stats slot reset on state exit / teardown; nothing
- * samples while no encoder exists.
+ * cumulative encode total (`droppedFrames`). Camera and screen are
+ * aggregated into one `videoBitrate` / `encodedFps` reading (their
+ * counters are summed before the rate diff) per the multi-source design
+ * record's "Surface" decision — v1 has no per-track stats breakout. The
+ * transport-side facts come from the track publishers and the session
+ * actor when those exist: `droppedGroups` and `bytesSent` sum the
+ * per-track publisher counters (bytes actually handed to the transport —
+ * 0 while no session publishes), and `subscriberCount` reads the session
+ * actor's live subscription count (`NaN` while no session exists —
+ * genuinely unknown). The interval is cleared and the stats slot reset on
+ * state exit / teardown; nothing samples while no encoder exists.
  *
  * DOM-free: the encoder actors are DOM-bound (WebCodecs), so this
  * behavior reads them through the structural `EncoderStatsSource` view
@@ -75,10 +78,12 @@ export interface TrackPublishStatsState {
 }
 
 export interface TrackPublishStatsContext {
-  videoEncoderActor?: EncoderStatsSource | undefined;
+  cameraEncoderActor?: EncoderStatsSource | undefined;
+  screenEncoderActor?: EncoderStatsSource | undefined;
   audioEncoderActor?: EncoderStatsSource | undefined;
   catalogTrackPublisher?: TrackPublisherActor | undefined;
   videoTrackPublisher?: TrackPublisherActor | undefined;
+  screenTrackPublisher?: TrackPublisherActor | undefined;
   audioTrackPublisher?: TrackPublisherActor | undefined;
   publishSessionActor?: PublishSessionActor | undefined;
 }
@@ -111,6 +116,35 @@ function perSecond(
   return (now[field] - last[field]) / dtSec;
 }
 
+/**
+ * Merge two `lastTimestampUs` readings. NaN means "present but hasn't
+ * emitted yet" (per the counters contract), not "unknown" — `Math.max`
+ * alone would let one spinning-up encoder's NaN poison the other side's
+ * real value. Treat NaN the same as absent, and only fall through to NaN
+ * when neither side has ever emitted.
+ */
+function mergeLastTimestampUs(camera: number | undefined, screen: number | undefined): number {
+  const cameraReal = camera !== undefined && !Number.isNaN(camera) ? camera : undefined;
+  const screenReal = screen !== undefined && !Number.isNaN(screen) ? screen : undefined;
+  if (cameraReal === undefined && screenReal === undefined) return Number.NaN;
+  return Math.max(cameraReal ?? -Infinity, screenReal ?? -Infinity);
+}
+
+/** Sum camera + screen counters into one video reading; `undefined` if neither exists. */
+export function mergeVideoCounters(
+  camera: EncoderActorCounters | undefined,
+  screen: EncoderActorCounters | undefined
+): EncoderActorCounters | undefined {
+  if (camera === undefined && screen === undefined) return undefined;
+  return {
+    encodedFrames: (camera?.encodedFrames ?? 0) + (screen?.encodedFrames ?? 0),
+    encodedBytes: (camera?.encodedBytes ?? 0) + (screen?.encodedBytes ?? 0),
+    droppedFrames: (camera?.droppedFrames ?? 0) + (screen?.droppedFrames ?? 0),
+    keyframes: (camera?.keyframes ?? 0) + (screen?.keyframes ?? 0),
+    lastTimestampUs: mergeLastTimestampUs(camera?.lastTimestampUs, screen?.lastTimestampUs),
+  };
+}
+
 function trackPublishStatsSetup({
   state,
   context,
@@ -120,10 +154,12 @@ function trackPublishStatsSetup({
     publishStats: Signal<TrackPublishStatsState['publishStats']>;
   };
   context: {
-    videoEncoderActor: ReadonlySignal<TrackPublishStatsContext['videoEncoderActor']>;
+    cameraEncoderActor: ReadonlySignal<TrackPublishStatsContext['cameraEncoderActor']>;
+    screenEncoderActor: ReadonlySignal<TrackPublishStatsContext['screenEncoderActor']>;
     audioEncoderActor: ReadonlySignal<TrackPublishStatsContext['audioEncoderActor']>;
     catalogTrackPublisher: ReadonlySignal<TrackPublishStatsContext['catalogTrackPublisher']>;
     videoTrackPublisher: ReadonlySignal<TrackPublishStatsContext['videoTrackPublisher']>;
+    screenTrackPublisher: ReadonlySignal<TrackPublishStatsContext['screenTrackPublisher']>;
     audioTrackPublisher: ReadonlySignal<TrackPublishStatsContext['audioTrackPublisher']>;
     publishSessionActor: ReadonlySignal<TrackPublishStatsContext['publishSessionActor']>;
   };
@@ -131,7 +167,10 @@ function trackPublishStatsSetup({
 }): Reactor<TrackPublishStatsFsmState | 'destroying' | 'destroyed'> {
   return createMachineReactor<TrackPublishStatsFsmState>({
     initial: 'no-encoders',
-    monitor: () => (context.videoEncoderActor.get() || context.audioEncoderActor.get() ? 'sampling' : 'no-encoders'),
+    monitor: () =>
+      context.cameraEncoderActor.get() || context.screenEncoderActor.get() || context.audioEncoderActor.get()
+        ? 'sampling'
+        : 'no-encoders',
     states: {
       'no-encoders': {},
 
@@ -143,21 +182,23 @@ function trackPublishStatsSetup({
           // The transport-side slots below are re-peeked lazily per sample
           // instead — publishers come and go with the session, and their
           // churn must not restart the interval.
-          const video = context.videoEncoderActor.get();
+          const camera = context.cameraEncoderActor.get();
+          const screen = context.screenEncoderActor.get();
           const audio = context.audioEncoderActor.get();
 
           let lastAtMs = Date.now();
-          let lastVideo = readCounters(video);
+          let lastVideo = mergeVideoCounters(readCounters(camera), readCounters(screen));
           let lastAudio = readCounters(audio);
 
           const sample = () => {
             const nowMs = Date.now();
             const dtSec = (nowMs - lastAtMs) / 1000;
-            const videoNow = readCounters(video);
+            const videoNow = mergeVideoCounters(readCounters(camera), readCounters(screen));
             const audioNow = readCounters(audio);
             const publishers = [
               peek(context.catalogTrackPublisher),
               peek(context.videoTrackPublisher),
+              peek(context.screenTrackPublisher),
               peek(context.audioTrackPublisher),
             ].filter((publisher) => publisher !== undefined);
             const sum = (read: (counters: TrackPublisherCounters) => number): number =>
@@ -196,10 +237,12 @@ function trackPublishStatsSetup({
 export const trackPublishStats = defineBehavior({
   stateKeys: ['publishStats'],
   contextKeys: [
-    'videoEncoderActor',
+    'cameraEncoderActor',
+    'screenEncoderActor',
     'audioEncoderActor',
     'catalogTrackPublisher',
     'videoTrackPublisher',
+    'screenTrackPublisher',
     'audioTrackPublisher',
     'publishSessionActor',
   ],

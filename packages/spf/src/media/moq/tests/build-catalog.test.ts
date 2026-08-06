@@ -87,6 +87,32 @@ describe('buildMsfCatalog', () => {
     expect(toVideoDecoderConfig(video[0]!)).toEqual({ codec: 'vp8', codedWidth: 640, codedHeight: 480 });
   });
 
+  it('round-trips camera + screen into separate, non-alternate video switching sets', () => {
+    const text = buildMsfCatalog({
+      ...AV_INPUT,
+      // Screen tuning: bigger frame, lower framerate, cheaper than the camera
+      // — exactly the shape that made the bandwidth ranker treat it as the
+      // camera's downgrade while both shared one switching set.
+      screen: { name: 'screen', codec: 'avc1.42E01F', width: 1920, height: 1080, framerate: 5, bitrate: 800_000 },
+    });
+
+    const raw = JSON.parse(text);
+    // The pair the parse side reads: rendered together, never alternates.
+    expect(raw.tracks.every((track: Record<string, unknown>) => track.renderGroup === 1)).toBe(true);
+    expect(raw.tracks.some((track: Record<string, unknown>) => 'altGroup' in track)).toBe(false);
+
+    const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+    const videoSet = presentation.selectionSets.find((set) => set.type === 'video')!;
+    expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
+      'moq-video-main',
+      'moq-video-screen',
+    ]);
+    // The camera is the rendered set, and the only one selection enumerates —
+    // no throughput movement can put the screen share on screen.
+    expect(getTracksByType(presentation, 'video').map((track) => track.id)).toEqual(['live/abc123/video']);
+    expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual(['live/abc123/screen']);
+  });
+
   it('emits the supported version, completeness, and no absent fields', () => {
     const raw = JSON.parse(
       buildMsfCatalog({ namespace: NAMESPACE, audio: { name: 'audio', codec: 'opus' }, generatedAt: 1746104606044 })

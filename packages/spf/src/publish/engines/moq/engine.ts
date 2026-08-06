@@ -12,15 +12,8 @@ import type { EncodedChunkSink, EncodedChunkSinkMeta } from '../../actors/dom/en
 import type { VideoEncoderActor } from '../../actors/dom/video-encoder';
 import type { TrackPublisherActor } from '../../actors/track-publisher';
 import { deriveCatalog } from '../../behaviors/derive-catalog';
-import type {
-  CaptureSourceKind,
-  CaptureSourceSelection,
-  CaptureStatus,
-  CaptureTrackFacts,
-  CaptureTracksFacts,
-  PublishErrorFacts,
-} from '../../behaviors/dom/acquire-capture-source';
-import { acquireCaptureSource } from '../../behaviors/dom/acquire-capture-source';
+import type { CaptureSourceKind, CaptureStatus, CaptureTrackFacts, PublishErrorFacts } from '../../behaviors/dom/acquire-capture-source';
+import { acquireCameraSource, acquireMicrophone, acquireScreenShare } from '../../behaviors/dom/acquire-capture-source';
 import { applyTrackToggles } from '../../behaviors/dom/apply-track-toggles';
 import type { CaptureDeviceFacts } from '../../behaviors/dom/enumerate-capture-devices';
 import { enumerateCaptureDevices } from '../../behaviors/dom/enumerate-capture-devices';
@@ -28,10 +21,12 @@ import type {
   ActiveEncodingsFacts,
   EncoderSupportFacts,
   SelectEncoderConfig,
+  VideoEncodeTuning,
 } from '../../behaviors/dom/probe-encoder-support';
 import { probeEncoderSupport } from '../../behaviors/dom/probe-encoder-support';
 import { pumpMediaFrames } from '../../behaviors/dom/pump-media-frames';
 import { setupEncoderActors } from '../../behaviors/dom/setup-encoder-actors';
+import type { PreviewSource } from '../../behaviors/dom/sync-preview';
 import { syncPreview } from '../../behaviors/dom/sync-preview';
 import type { PublishSessionStatus } from '../../behaviors/open-publish-session';
 import { openPublishSession } from '../../behaviors/open-publish-session';
@@ -48,14 +43,13 @@ export type {
   AudioEncoderActor,
   CaptureDeviceFacts,
   CaptureSourceKind,
-  CaptureSourceSelection,
   CaptureStatus,
   CaptureTrackFacts,
-  CaptureTracksFacts,
   ConnectPublishTransport,
   EncodedChunkSink,
   EncodedChunkSinkMeta,
   EncoderSupportFacts,
+  PreviewSource,
   PublishEndpoint,
   PublishErrorFacts,
   PublishSessionActor,
@@ -63,6 +57,7 @@ export type {
   PublishStatsFacts,
   SelectEncoderConfig,
   TrackPublisherActor,
+  VideoEncodeTuning,
   VideoEncoderActor,
 };
 
@@ -77,16 +72,28 @@ export interface MoqPublishEngineState {
   endpoint?: PublishEndpoint | undefined;
   /** `publish()`/`unpublish()` — gates the transport session. */
   publishActivated?: boolean;
-  /** Selected capture source; `undefined` releases capture. */
-  captureSource?: CaptureSourceSelection | undefined;
-  /** Mute outgoing video (track disabled, capture keeps running). */
+  /** Camera acquisition; additive with `screenShareActive`, not exclusive. */
+  cameraActive?: boolean;
+  /** Screen-share acquisition; additive with `cameraActive`, not exclusive. */
+  screenShareActive?: boolean;
+  /** Selected camera; empty string defers to the platform default. */
+  videoInputDeviceId?: string;
+  /** Selected microphone; empty string defers to the platform default. */
+  audioInputDeviceId?: string;
+  /** Which capture stream the preview element mirrors. */
+  previewSource?: PreviewSource;
+  /** Mute outgoing camera video (track disabled, capture keeps running). */
   cameraMuted?: boolean;
-  /** Mute outgoing audio (track disabled, capture keeps running). */
+  /** Mute outgoing microphone audio (track disabled, capture keeps running). */
   micMuted?: boolean;
   // -- facts (behaviors write) --
   captureDevices?: CaptureDeviceFacts[];
-  captureStatus?: CaptureStatus;
-  captureTracks?: CaptureTracksFacts;
+  cameraState?: CaptureStatus;
+  screenShareState?: CaptureStatus;
+  micState?: CaptureStatus;
+  cameraTracks?: CaptureTrackFacts;
+  screenTracks?: CaptureTrackFacts;
+  micTracks?: CaptureTrackFacts;
   encoderSupport?: EncoderSupportFacts;
   activeEncodings?: ActiveEncodingsFacts;
   sessionStatus?: PublishSessionStatus;
@@ -101,16 +108,20 @@ export interface MoqPublishEngineState {
 export interface MoqPublishEngineContext {
   /** Preview surface the capture stream is mirrored into (adapter writes). */
   previewElement?: HTMLVideoElement | undefined;
-  /** The acquired capture stream (owned by the acquire behavior). */
-  captureStream?: MediaStream | undefined;
+  /** Acquired capture streams (each owned by its acquire behavior). */
+  cameraStream?: MediaStream | undefined;
+  screenStream?: MediaStream | undefined;
+  micStream?: MediaStream | undefined;
   /** Encoder actors (owned by `setupEncoderActors`). */
-  videoEncoderActor?: VideoEncoderActor | undefined;
+  cameraEncoderActor?: VideoEncoderActor | undefined;
+  screenEncoderActor?: VideoEncoderActor | undefined;
   audioEncoderActor?: AudioEncoderActor | undefined;
   /** Publish transport session (owned by `openPublishSession`). */
   publishSessionActor?: PublishSessionActor | undefined;
   /** Per-track MOQT publishers (owned by `setupTrackPublishers`). */
   catalogTrackPublisher?: TrackPublisherActor | undefined;
   videoTrackPublisher?: TrackPublisherActor | undefined;
+  screenTrackPublisher?: TrackPublisherActor | undefined;
   audioTrackPublisher?: TrackPublisherActor | undefined;
 }
 
@@ -127,8 +138,10 @@ export interface MoqPublishEngineSignals {
 export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEngineState, MoqPublishEngineContext> {
   /** Forced-keyframe cadence; each GoP becomes one MoQ group. */
   groupDurationSec?: number;
-  /** Single-rendition video tuning (an array is the simulcast seam, later). */
-  video?: { width?: number; height?: number; frameRate?: number; bitrate?: number; codec?: string };
+  /** Camera video tuning (an array per kind is the simulcast seam, later). */
+  camera?: VideoEncodeTuning;
+  /** Screen-share video tuning; defaults to a lower framerate/bitrate than `camera` (static degrade-screen-first). */
+  screen?: VideoEncodeTuning;
   audio?: { bitrate?: number };
   /** Resolve probed encoder support into the active encodings. */
   selectEncoderConfig?: SelectEncoderConfig;
@@ -156,7 +169,17 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
  * hand the composition signal refs to `onSignalsReady`.
  */
 const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineContext>(
-  ['endpoint', 'publishActivated', 'captureSource', 'cameraMuted', 'micMuted'],
+  [
+    'endpoint',
+    'publishActivated',
+    'cameraActive',
+    'screenShareActive',
+    'videoInputDeviceId',
+    'audioInputDeviceId',
+    'previewSource',
+    'cameraMuted',
+    'micMuted',
+  ],
   ['previewElement']
 );
 
@@ -185,8 +208,13 @@ export function createMoqPublishEngine(
   // The context ref lands right after creation; `peek` keeps the sink
   // untracked wherever it is called from.
   let contextRef: ContextSignals<MoqPublishEngineContext> | undefined;
+  const trackPublisherSlot = {
+    camera: () => contextRef?.videoTrackPublisher,
+    screen: () => contextRef?.screenTrackPublisher,
+    audio: () => contextRef?.audioTrackPublisher,
+  };
   const routeToTrackPublishers: EncodedChunkSink = (packaged, meta) => {
-    const slot = meta.track === 'video' ? contextRef?.videoTrackPublisher : contextRef?.audioTrackPublisher;
+    const slot = trackPublisherSlot[meta.track]();
     const publisher = slot === undefined ? undefined : peek(slot);
     publisher?.send({
       type: 'frame',
@@ -204,7 +232,9 @@ export function createMoqPublishEngine(
   const composition = createComposition(
     [
       enumerateCaptureDevices,
-      acquireCaptureSource,
+      acquireCameraSource,
+      acquireScreenShare,
+      acquireMicrophone,
       syncPreview,
       applyTrackToggles,
       probeEncoderSupport,
@@ -226,9 +256,16 @@ export function createMoqPublishEngine(
       config: engineConfig,
       initialState: {
         publishActivated: false,
+        cameraActive: false,
+        screenShareActive: false,
+        videoInputDeviceId: '',
+        audioInputDeviceId: '',
+        previewSource: 'camera',
         cameraMuted: false,
         micMuted: false,
-        captureStatus: 'idle',
+        cameraState: 'idle',
+        screenShareState: 'idle',
+        micState: 'idle',
         sessionStatus: 'idle',
       },
     }
