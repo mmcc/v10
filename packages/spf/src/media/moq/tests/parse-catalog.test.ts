@@ -541,7 +541,9 @@ describe('moqCatalogToPresentation', () => {
 
     expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
       'moq-video-main',
-      'moq-video-screen',
+      // Derived from the presentation-unique track id (namespace + name),
+      // so same-named tracks in sibling namespaces can never share a set.
+      'moq-video-conference-example-com-conference123-alice-screen',
     ]);
     expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'video')]);
     expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'screen')]);
@@ -580,7 +582,9 @@ describe('moqCatalogToPresentation', () => {
 
     expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
       'moq-video-main',
-      'moq-video-screen',
+      // Derived from the presentation-unique track id (namespace + name),
+      // so same-named tracks in sibling namespaces can never share a set.
+      'moq-video-conference-example-com-conference123-alice-screen',
     ]);
     // Group order follows first appearance; a track joining an existing group
     // does not reorder the sets.
@@ -588,6 +592,35 @@ describe('moqCatalogToPresentation', () => {
       moqTrackId(ALICE, 'hd'),
       moqTrackId(ALICE, 'sd'),
     ]);
+  });
+
+  it('keeps same-named tracks from sibling namespaces apart — names are only unique within a namespace', () => {
+    const BOB = ['conference.example.com', 'conference123', 'bob'];
+    const text = catalogOf(
+      videoTrack({ name: 'video', bitrate: 2_500_000 }),
+      videoTrack({ name: 'video', bitrate: 800_000, namespace: BOB.join('/') })
+    );
+    const videoSet = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL }));
+
+    // Two feeds, not one content item with two renditions: keyed on the
+    // full track id, the leaf-name coincidence can never merge them.
+    expect(videoSet.switchingSets).toHaveLength(2);
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'video')]);
+    expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual([moqTrackId(BOB, 'video')]);
+  });
+
+  it('never merges an ungrouped track into an altGroup by name coincidence', () => {
+    // The keys are discriminated: `altGroup: 1` and a track literally
+    // named `alt:1` must stay two content items.
+    const text = catalogOf(
+      videoTrack({ name: 'hd', altGroup: 1, bitrate: 4_800_000 }),
+      videoTrack({ name: 'alt:1', bitrate: 800_000 })
+    );
+    const videoSet = videoSetOf(parseMoqCatalog(text, { url: SOURCE_URL }));
+
+    expect(videoSet.switchingSets).toHaveLength(2);
+    expect(videoSet.switchingSets[0]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'hd')]);
+    expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual([moqTrackId(ALICE, 'alt:1')]);
   });
 
   it('keeps a delta-added non-alternate video track out of the rendered set', () => {

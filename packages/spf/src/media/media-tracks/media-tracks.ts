@@ -44,10 +44,17 @@ export interface AudioDedupeKey {
 export function dedupedVideoTracks(presentation: MaybeResolvedPresentation | undefined): VideoTrack[] {
   if (!presentation) return [];
 
-  return dedupe({
-    tracks: getTracksByType(presentation, 'video') as readonly VideoTrack[],
-    keyFn: toUserVideoTrackSelection,
-  });
+  // Dedupe within each switching set, never across: sibling sets are
+  // distinct content items (a MoQ publisher's camera and screen share),
+  // and a screen track that happens to match a camera rendition's
+  // dimensions/bitrate is not the same track. Set order (rendered set
+  // first) is preserved so consumers see the default content first.
+  const switchingSets = presentation.selectionSets?.find(({ type }) => type === 'video')?.switchingSets ?? [];
+  const tracks: VideoTrack[] = [];
+  for (const switchingSet of switchingSets) {
+    tracks.push(...dedupe({ tracks: switchingSet.tracks as readonly VideoTrack[], keyFn: toUserVideoTrackSelection }));
+  }
+  return tracks;
 }
 
 /**

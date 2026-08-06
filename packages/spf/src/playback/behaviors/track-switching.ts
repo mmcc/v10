@@ -443,21 +443,36 @@ function filterByUserSelection<S extends SelectionKey, U extends UserSelectionKe
  * video only. A switching set is one content item's quality alternates;
  * sibling sets are *different content* (a MoQ publisher's screen share
  * beside its camera, both role video). Confines the all-sets candidate
- * pool to the set containing the current selection — an explicit
- * cross-set `selectedVideoTrackId` write (the API-level content choice)
- * moves which set that is — defaulting to the first (rendered-by-default)
- * set when nothing is selected or the selection is stale. The ranking
- * rules downstream therefore never present a content change as a quality
- * switch. Single-set presentations (HLS) pass through untouched.
+ * pool to one active set so the ranking rules downstream never present a
+ * content change as a quality switch. Which set is active, in order:
+ *
+ * 1. a set containing a `user*TrackSelection` match — the durable
+ *    consumer-intent slot, which survives selection clears (constraint
+ *    prunes, source hiccups), so an explicit content choice is never
+ *    silently reverted to the default;
+ * 2. the set containing the current selection — an engine-level
+ *    cross-set `selectedVideoTrackId` write moves the active set;
+ * 3. the first (rendered-by-default) set.
+ *
+ * Single-set presentations (HLS) pass through untouched.
  */
-function confineToActiveSwitchingSet<S extends SelectionKey, T extends SwitchableTrack>(
+function confineToActiveSwitchingSet<S extends SelectionKey, U extends UserSelectionKey, T extends SwitchableTrack>(
   tracks: readonly T[],
-  { state, config }: SelectionRuleDeps<TrackSwitchingStateMap<S>, AnySlotMap, TrackSwitchingConfig<S, T>>
+  { state, config }: SelectionRuleDeps<UserSelectionStateMap<S, U, T>, AnySlotMap, UserSelectionConfig<S, U, T>>
 ): readonly T[] {
   const sets = state.presentation.get()?.selectionSets?.find(({ type }) => type === 'video')?.switchingSets;
   if (!sets || sets.length <= 1) return tracks;
+  const userKey = config.userSelectionKey;
+  const userFilter = userKey ? state[userKey]?.get() : undefined;
   const selectedId = state[config.selectionKey].get();
   const active =
+    (userFilter
+      ? // The set carries the presentation's track union; the filter came
+        // from the same presentation's video tracks, so the match is safe.
+        sets.find(({ tracks: setTracks }) =>
+          setTracks.some((track) => matchesPartialTrack(track as unknown as T, userFilter))
+        )
+      : undefined) ??
     (selectedId ? sets.find(({ tracks: setTracks }) => setTracks.some(({ id }) => id === selectedId)) : undefined) ??
     sets[0];
   if (!active) return tracks;

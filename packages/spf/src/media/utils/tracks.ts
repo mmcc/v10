@@ -75,16 +75,20 @@ export function findTrack(
  * from a downstream consumer (e.g. `SourceBufferActor.initTrackId`) and
  * needs to locate the corresponding track in the presentation.
  *
- * Track ids are unique within a presentation per the HLS spec; the first
- * match wins.
+ * Searches every switching set — an id-addressed lookup must resolve
+ * tracks in sibling sets (distinct content items, e.g. a MoQ screen
+ * share), same as {@link findTrack}. Track ids are unique within a
+ * presentation per the HLS spec; the first match wins.
  */
 export function findTrackById(
   presentation: MaybeResolvedPresentation,
   trackId: string
 ): PartiallyResolvedTrack | ResolvedTrack | undefined {
   for (const selectionSet of presentation.selectionSets ?? []) {
-    const track = selectionSet.switchingSets[0]?.tracks.find(({ id }) => id === trackId);
-    if (track) return track;
+    for (const switchingSet of selectionSet.switchingSets) {
+      const track = switchingSet.tracks.find(({ id }) => id === trackId);
+      if (track) return track;
+    }
   }
   return undefined;
 }
