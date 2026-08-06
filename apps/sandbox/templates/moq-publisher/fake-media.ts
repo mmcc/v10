@@ -55,6 +55,8 @@ export class FakePublishMedia
   /** Bumped per kind to cancel in-flight acquisitions when it's re-toggled. */
   #cameraAcquireToken = 0;
   #screenAcquireToken = 0;
+  /** Owned: losing the merged audio track doesn't end its stream, so `micState` has nothing live to read 'ended' off. */
+  #micEnded = false;
 
   #captureDevices: MediaCaptureDeviceInfo[] = [];
   #videoInputDeviceId = '';
@@ -161,14 +163,17 @@ export class FakePublishMedia
   }
 
   /**
-   * Derived, not owned: this fake merges mic audio into each capture
-   * stream (see the header note) instead of running an independent mic
-   * pipeline, so the mic lifecycle is whatever the live streams carry —
-   * enough to satisfy the contract and the store slice's read.
+   * Mostly derived: this fake merges mic audio into each capture stream
+   * (see the header note) instead of running an independent mic pipeline,
+   * so 'active' reads straight off the live streams. 'ended' needs the
+   * owned `#micEnded` flag — losing the audio track removes it from its
+   * stream without ending the stream itself, so there's nothing live to
+   * derive 'ended' from.
    */
   get micState(): MediaCaptureState {
     const hasAudio = (stream: MediaStream | null) => (stream?.getAudioTracks().length ?? 0) > 0;
-    return hasAudio(this.#cameraStream) || hasAudio(this.#screenShareStream) ? 'active' : 'idle';
+    if (hasAudio(this.#cameraStream) || hasAudio(this.#screenShareStream)) return 'active';
+    return this.#micEnded ? 'ended' : 'idle';
   }
 
   get cameraStream(): MediaStream | null {
@@ -372,6 +377,8 @@ export class FakePublishMedia
   #adoptStream(kind: MediaCaptureSourceKind, stream: MediaStream): void {
     for (const track of stream.getVideoTracks()) track.enabled = !this.#cameraMuted;
     for (const track of stream.getAudioTracks()) track.enabled = !this.#micMuted;
+    // A fresh acquisition that carries audio re-merges the mic — the prior 'ended' no longer applies.
+    if (stream.getAudioTracks().length > 0) this.#micEnded = false;
     this.#watchTracks(kind, stream);
     if (kind === 'camera') this.#cameraStream = stream;
     else this.#screenShareStream = stream;
@@ -386,6 +393,8 @@ export class FakePublishMedia
     if (kind === 'camera') this.#cameraStream = null;
     else this.#screenShareStream = null;
     for (const track of stream.getTracks()) track.stop();
+    // The last source is gone — clean slate, back to 'idle' rather than a stale 'ended' outliving the capture that produced it.
+    if (!this.#cameraStream && !this.#screenShareStream) this.#micEnded = false;
     this.dispatchEvent(new Event('capturestreamchange'));
     this.#syncPreview();
   }
@@ -402,10 +411,12 @@ export class FakePublishMedia
             // The merged mic track is not the video pipeline — the real
             // engine runs the mic as its own independent pipeline (see
             // acquire-capture-source's module doc), so losing it must not
-            // release camera/screen. Drop just this track; `micState`'s
-            // live-audio-track check then reads 'idle' on its own.
+            // release camera/screen. Drop just this track and flag
+            // `#micEnded`; `micState` reports 'ended' until a fresh
+            // acquisition re-merges audio or the last source releases.
             stream.removeTrack(track);
             track.stop();
+            this.#micEnded = true;
             this.dispatchEvent(new Event('capturestatechange'));
             return;
           }

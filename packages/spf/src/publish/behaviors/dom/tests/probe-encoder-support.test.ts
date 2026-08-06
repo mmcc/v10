@@ -259,6 +259,49 @@ describe('probeEncoderSupport', () => {
     expect(state.publishError.get()).toBeUndefined();
   });
 
+  it('reasserts its encode error when another writer frees the slot', async () => {
+    mockVideoEncoderSupport(() => false);
+    const { state } = setupProbe();
+
+    state.cameraTracks.set(CAMERA_TRACK);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()?.code).toBe('encode');
+    });
+
+    // A capture failure takes the slot, then its own writer clears it — the
+    // next acquisition attempt does exactly this. Nothing about that fixes
+    // an unsupported encoder ladder, so the verdict has to come back.
+    state.publishError.set({ code: 'capture', message: 'device exploded' });
+    state.publishError.set(undefined);
+
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toMatchObject({
+        code: 'encode',
+        message: 'No supported encoder configuration for the camera track.',
+      });
+    });
+    // ...and stays put rather than oscillating.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.publishError.get()?.code).toBe('encode');
+  });
+
+  it('stops reasserting once the kind is released', async () => {
+    mockVideoEncoderSupport(() => false);
+    const { state } = setupProbe();
+
+    state.cameraTracks.set(CAMERA_TRACK);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()?.code).toBe('encode');
+    });
+
+    state.cameraTracks.set(undefined);
+    await vi.waitFor(() => {
+      expect(state.publishError.get()).toBeUndefined();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.publishError.get()).toBeUndefined();
+  });
+
   it('leaves an error another writer put in the slot alone when its kind recovers', async () => {
     mockVideoEncoderSupport(() => false);
     const { state } = setupProbe();

@@ -36,14 +36,15 @@
  *
  * Co-writer of `state.publishError`, for one condition only: a kind whose
  * candidate ladder probed entirely unsupported. A `selectEncoderConfig`
- * omitting a kind is a policy veto, not a failure. The error is retracted
- * when that kind re-probes successfully or its source is released —
- * `retractError` compares object identity first, so a capture or transport
- * failure written after ours survives our recovery.
+ * omitting a kind is a policy veto, not a failure. Such a verdict stands
+ * until the kind recovers or its source is released — including across
+ * another writer taking the slot and later clearing it — see the
+ * arbitration rule on `authoredErrors`.
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
+import { effect } from '../../../core/signals/effect';
 import { peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import type { CaptureTrackFacts, PublishErrorFacts } from './acquire-capture-source';
 
@@ -209,12 +210,25 @@ function probeEncoderSupportSetup({
   const select = config.selectEncoderConfig ?? defaultSelectEncoderConfig;
 
   /**
-   * The encode errors THIS behavior instance wrote, per kind. `publishError`
-   * is a single-value multi-writer slot, so retracting requires knowing
-   * which object we put there: a capture or transport failure another
-   * subsystem wrote after ours must survive our kind recovering.
+   * The encode verdicts THIS behavior instance wrote, per kind, in authoring
+   * order. `publishError` is one slot with several writers, so the
+   * arbitration rule is:
+   *
+   * - **Any writer may take the slot** — last write wins, including over
+   *   ours. Membership here is what we believe, not what is displayed.
+   * - **We retract only the object we put there** (identity-compared), so a
+   *   capture or transport failure written after ours survives our recovery;
+   *   the slot passes to our next outstanding kind, if any.
+   * - **We retake the slot whenever it falls empty** while a kind is still
+   *   un-encodable (`reassertOutstandingError`). Other writers retract their
+   *   own errors on their own schedule — a fresh acquisition clears a stale
+   *   capture failure — and an unsupported encoder ladder is not fixed by
+   *   that; without this the UI would show nothing for a broken source.
    */
   const authoredErrors = new Map<keyof EncoderSupportFacts, PublishErrorFacts>();
+
+  /** The outstanding verdict with the strongest claim to the slot: the first authored. */
+  const outstandingError = (): PublishErrorFacts | undefined => [...authoredErrors.values()][0];
 
   /** Retract this kind's encode error — its source is gone, or it encodes now. */
   function retractError(kind: keyof EncoderSupportFacts): void {
@@ -222,10 +236,19 @@ function probeEncoderSupportSetup({
     if (authored === undefined) return;
     authoredErrors.delete(kind);
     if (peek(state.publishError) !== authored) return;
-    // Another kind may still be un-encodable; hand it the slot back rather
-    // than let its failure vanish with ours.
-    state.publishError.set([...authoredErrors.values()][0]);
+    // Hand the slot straight to the next outstanding kind (the effect below
+    // would too, a microtask later — this keeps the UI from flickering
+    // through 'no error' on the way).
+    state.publishError.set(outstandingError());
   }
+
+  // Terminates: the sole write is a non-`undefined` value, so the re-run it
+  // triggers takes the early return.
+  const reassertOutstandingError = effect(() => {
+    if (state.publishError.get() !== undefined) return;
+    const outstanding = outstandingError();
+    if (outstanding !== undefined) state.publishError.set(outstanding);
+  });
 
   function runProbe<Track extends CaptureTrackFacts, EncConfig extends VideoEncoderConfig | AudioEncoderConfig>(
     kind: keyof EncoderSupportFacts,
@@ -304,6 +327,9 @@ function probeEncoderSupportSetup({
   );
 
   return () => {
+    // Stop reasserting before the probes retract, so teardown leaves the
+    // slot as the last real writer left it.
+    reassertOutstandingError();
     cameraProbe.destroy();
     screenProbe.destroy();
     audioProbe.destroy();

@@ -25,7 +25,7 @@ import '@app/styles.css';
 import '@videojs/html/publisher/skin';
 // Registers moq-publish-video for the `?real` path.
 import '@videojs/html/media/moq-publish-video';
-import { MediaAttachMixin } from '@videojs/html';
+import { installCaptureAttributeReflection, MediaAttachMixin } from '@videojs/html';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import type { MediaPublishStats } from '@videojs/media';
 import { CustomMediaElement } from '@videojs/media/dom/custom-media-element';
@@ -161,18 +161,7 @@ class LoopbackPublishVideoElement extends LoopbackPublishVideoBase {
 
   constructor() {
     super();
-    // The engine consumes the intent slots on terminal outcomes (denied,
-    // failed, out-of-band ended — see acquire-capture-source's
-    // multi-writer contract), and these Boolean attributes must follow:
-    // the element property setter routes through `toggleAttribute`, so a
-    // stale attribute would swallow the next `cameraActive = true` (no
-    // attribute mutation → no attributeChangedCallback → no retry).
-    // Writing the host's own value back dedupes at the signal layer, so
-    // this cannot loop.
-    this.addEventListener('capturesourcechange', () => {
-      this.toggleAttribute('camera-active', this.host.cameraActive);
-      this.toggleAttribute('screen-share-active', this.host.screenShareActive);
-    });
+    installCaptureAttributeReflection(this);
   }
 }
 
