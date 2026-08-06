@@ -105,7 +105,8 @@ describe('buildMsfCatalog', () => {
     const videoSet = presentation.selectionSets.find((set) => set.type === 'video')!;
     expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
       'moq-video-main',
-      'moq-video-screen',
+      // Derived from the presentation-unique track id (namespace + name).
+      'moq-video-live-abc123-screen',
     ]);
     // The camera is the rendered set, and the only one selection enumerates —
     // no throughput movement can put the screen share on screen.
