@@ -45,8 +45,12 @@ export const DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG: RetryBackoffConfig = {
 
 /**
  * Delay before retry number `attempt` (0-based count of failures so far),
- * jittered ±25%, or `undefined` once `attempt` exhausts
- * `config.maxAttempts` — the caller's give-up signal.
+ * jittered ±25% and clamped to `maxDelayMs`, or `undefined` once `attempt`
+ * exhausts `config.maxAttempts` — the caller's give-up signal.
+ *
+ * `maxDelayMs` is a hard ceiling: once the exponential base reaches it,
+ * the jitter spreads downward only (0.75–1×). A caller stating a maximum
+ * recovery cadence gets exactly that, never 125% of it.
  *
  * `random` is a seam for deterministic tests; production callers omit it.
  *
@@ -64,5 +68,5 @@ export function retryDelayMs(
   // 2 ** attempt saturates to Infinity for pathological attempt counts;
   // the min() clamps that back to the ceiling.
   const base = Math.min(config.maxDelayMs, config.initialDelayMs * 2 ** attempt);
-  return base * (0.75 + random() * 0.5);
+  return Math.min(config.maxDelayMs, base * (0.75 + random() * 0.5));
 }

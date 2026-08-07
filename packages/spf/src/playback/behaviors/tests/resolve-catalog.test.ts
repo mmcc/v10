@@ -359,6 +359,51 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
+  // An outage can outlive the auth token: EXPIRED → refresh → the track is
+  // gone (non-auth retries) → the token expires again once the broadcaster
+  // returns. Each non-auth failure re-arms the one-shot refresh, so the
+  // second expiry refreshes again instead of reading as a rejected refresh.
+  it('re-arms the auth refresh across a non-auth retry cycle', async () => {
+    vi.useFakeTimers();
+    const { actor, subscriptions, refreshAuthToken } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    await flush();
+    expect(subscriptions).toHaveLength(1);
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await flush();
+    expect(subscriptions).toHaveLength(2);
+    expect(refreshAuthToken).toHaveBeenCalledOnce();
+
+    // The broadcaster is gone: the refreshed attempt fails non-auth and
+    // enters the generic backoff cycle.
+    subscriptions[1]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.DOES_NOT_EXIST,
+      retryInterval: 0,
+      reason: 'no such track',
+    });
+    await vi.advanceTimersByTimeAsync(PAST_FIRST_BACKOFF_MS);
+    expect(subscriptions).toHaveLength(3);
+
+    // The broadcaster returned after the token expired again: refresh a
+    // second time rather than stopping as a rejected refresh.
+    subscriptions[2]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired again',
+    });
+    await flush();
+    expect(refreshAuthToken).toHaveBeenCalledTimes(2);
+    expect(subscriptions).toHaveLength(4);
+
+    reactor.destroy();
+  });
+
   // PUBLISH_DONE means the broadcaster ended or dropped the catalog track,
   // not that the session is unhealthy — poll the track back into existence.
   it('re-subscribes when the publisher ends the catalog track', async () => {

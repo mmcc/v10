@@ -338,6 +338,14 @@ function setupResolveCatalog({
                   // is mid-reconnect. Retry with backoff until the track
                   // appears (the session's own loss/recovery cycles this
                   // whole state, so a dead session never loops here).
+                  //
+                  // A non-auth failure also re-arms the auth refresh: an
+                  // outage can outlive the token, and a retry cycle that
+                  // entered on DOES_NOT_EXIST would otherwise read the
+                  // eventual EXPIRED_AUTH_TOKEN as "the refreshed token
+                  // was rejected" and stop for good. Consecutive expiries
+                  // with nothing in between still hit the stop above.
+                  authRetried = false;
                   if (!scheduleRestart(error.retryInterval)) {
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog subscribe failed (retry budget spent):', error);

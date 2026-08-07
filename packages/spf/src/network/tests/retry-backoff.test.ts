@@ -19,6 +19,11 @@ describe('retryDelayMs', () => {
     expect(retryDelayMs(0, config, () => 1)).toBe(625);
   });
 
+  it('never jitters past the ceiling — maxDelayMs is a hard contract', () => {
+    expect(retryDelayMs(3, config, () => 1)).toBe(4000);
+    expect(retryDelayMs(4, config, () => 1)).toBe(4000);
+  });
+
   it('returns undefined once attempts are exhausted', () => {
     expect(retryDelayMs(5, config)).toBeUndefined();
     expect(retryDelayMs(6, config)).toBeUndefined();
