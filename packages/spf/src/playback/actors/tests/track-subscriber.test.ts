@@ -275,6 +275,8 @@ describe('createTrackSubscriberActor', () => {
     const second = createTrackSubscriberActor({ session, track: TRACK });
     subscriptions[1]!.handlers.onError?.({ errorCode: 0x10, retryInterval: 0, reason: 'gone' });
     expect(second.snapshot.get().context.status).toBe('error');
+    // A non-auth death is recoverable — no exhaustion mark.
+    expect(second.snapshot.get().context.authExhausted).toBeUndefined();
     second.destroy();
   });
 
@@ -293,7 +295,8 @@ describe('createTrackSubscriberActor', () => {
     expect(refreshAuth).toHaveBeenCalledOnce();
     expect(subscriber.snapshot.get().context.status).not.toBe('error');
 
-    // A second expiry is terminal (no retry storm).
+    // A second expiry is terminal (no retry storm) — and marked exhausted,
+    // so the recovery behavior refuses to rebuild the same failure.
     subscriptions[1]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 1,
@@ -301,8 +304,39 @@ describe('createTrackSubscriberActor', () => {
     });
     await vi.waitFor(() => expect(subscriber.snapshot.get().context.status).toBe('error'));
     expect(subscriptions).toHaveLength(2);
+    expect(subscriber.snapshot.get().context.authExhausted).toBe(true);
 
     subscriber.destroy();
+  });
+
+  it('marks auth failures it cannot refresh past as exhausted', async () => {
+    // No refresh seam: the very first expiry is already unrecoverable.
+    const bare = createFakeSession();
+    const noSeam = createTrackSubscriberActor({ session: bare.session, track: TRACK });
+    bare.subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    expect(noSeam.snapshot.get().context.status).toBe('error');
+    expect(noSeam.snapshot.get().context.authExhausted).toBe(true);
+    noSeam.destroy();
+
+    // The provider gave up: same exhaustion, carrying the refresh error.
+    const giveUp = createFakeSession();
+    const refreshAuth = vi.fn(async () => {
+      throw new Error('no fresh token');
+    });
+    const refused = createTrackSubscriberActor({ session: giveUp.session, track: TRACK, refreshAuth });
+    giveUp.subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await vi.waitFor(() => expect(refused.snapshot.get().context.status).toBe('error'));
+    expect(refused.snapshot.get().context.authExhausted).toBe(true);
+    expect(String(refused.snapshot.get().context.error)).toMatch(/no fresh token/);
+    refused.destroy();
   });
 
   // The outage between the two subscriptions is not delivery time, and both

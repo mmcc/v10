@@ -72,6 +72,8 @@ interface FakeSubscriber extends TrackSubscriberActor {
   activate(): void;
   /** Simulate the jitter buffer holding `frameCount` frames. */
   buffer(frameCount: number): void;
+  /** Simulate a terminal auth failure (see `TrackSubscriberContext.authExhausted`). */
+  dieAuthExhausted(): void;
   /**
    * Simulate the subscription dying: the publisher ended it (`'ended'`) or
    * the request failed / the stall watchdog gave up (`'error'`, optionally
@@ -113,6 +115,13 @@ function createFakeSubscriberFactory({
       },
       die(status: 'ended' | 'error', error?: unknown) {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status, error } });
+      },
+      /** Simulate a terminal auth failure (see `TrackSubscriberContext.authExhausted`). */
+      dieAuthExhausted() {
+        snapshot.set({
+          value: 'active',
+          context: { ...snapshot.get().context, status: 'error', authExhausted: true },
+        });
       },
       destroy() {
         subscriber.destroyed = true;
@@ -603,6 +612,31 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(1);
       expect(created[0]!.destroyed).toBe(false);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+
+    it('does not loop on a terminal auth failure, but a new selection still recovers', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      created[0]!.dieAuthExhausted();
+
+      // A replacement would die on the same credentials — even the default
+      // infinite budget must not cycle token refreshes forever.
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS * 10);
+      expect(created).toHaveLength(1);
+      expect(created[0]!.destroyed).toBe(false);
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      // A different selection is a different subscription — it proceeds.
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({ track: { id: SD.id } });
 
       reactor.destroy();
     });

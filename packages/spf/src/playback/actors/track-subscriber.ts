@@ -88,6 +88,16 @@ export interface TrackSubscriberContext {
    */
   arrivalJitter?: { minOffsetMs: number; maxOffsetMs: number; sampleCount: number; epoch: number };
   error?: RequestError | unknown;
+  /**
+   * Set with `status: 'error'` when the death was an auth failure the
+   * actor cannot refresh past: the one-shot refresh was already spent (or
+   * no refresh seam exists), so a replacement subscription built from the
+   * same credentials will die the same way. `subscribe-selected-tracks`
+   * reads this to keep terminal auth failures out of its rejoin loop —
+   * without it, every replacement actor gets a fresh one-shot and invalid
+   * credentials refresh + resubscribe forever at the backoff cadence.
+   */
+  authExhausted?: boolean;
   done?: PublishDone;
 }
 
@@ -123,7 +133,7 @@ type SubscriberMessage =
     }
   | { type: 'buffer-drained'; frameCount: number; oldestTimestampUs?: number; newestTimestampUs?: number }
   | { type: 'done'; done: PublishDone }
-  | { type: 'error'; error: RequestError | unknown };
+  | { type: 'error'; error: RequestError | unknown; authExhausted?: boolean };
 
 export interface TrackSubscriberActor
   extends Pick<TransitionActor<TrackSubscriberContext, SubscriberMessage>, 'snapshot'> {
@@ -291,7 +301,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
         case 'done':
           return { ...context, status: 'ended', done: message.done };
         case 'error':
-          return { ...context, status: 'error', error: message.error };
+          return { ...context, status: 'error', error: message.error, authExhausted: message.authExhausted };
       }
     }
   );
@@ -415,16 +425,26 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
         },
         onError: (error) => {
           disarmStallTimer();
-          if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN && options.refreshAuth && !authRetried) {
-            authRetried = true;
-            void options
-              .refreshAuth()
-              .then((refreshed) => {
-                if (destroyed) return;
-                resetArrivalBaseline();
-                subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
-              })
-              .catch((refreshError) => inner.send({ type: 'error', error: refreshError }));
+          if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN) {
+            if (options.refreshAuth && !authRetried) {
+              authRetried = true;
+              void options
+                .refreshAuth()
+                .then((refreshed) => {
+                  if (destroyed) return;
+                  resetArrivalBaseline();
+                  subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
+                })
+                .catch((refreshError) =>
+                  // The provider could not supply a fresh token — as
+                  // exhausted as a rejected refresh (see `authExhausted`).
+                  inner.send({ type: 'error', error: refreshError, authExhausted: true })
+                );
+              return;
+            }
+            // No refresh seam, or the refreshed token was rejected too —
+            // credentials this actor cannot fix (see `authExhausted`).
+            inner.send({ type: 'error', error, authExhausted: true });
             return;
           }
           inner.send({ type: 'error', error });

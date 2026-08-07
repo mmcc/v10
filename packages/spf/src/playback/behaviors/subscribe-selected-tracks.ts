@@ -272,6 +272,15 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
   };
 
   /**
+   * Died on credentials the actor already failed to refresh past. A
+   * replacement built from the same auth state dies identically, so
+   * recovery must not loop on it — with the default infinite budget it
+   * would refresh + resubscribe forever. The corpse stays in its slot
+   * (the spent-budget shape); a selection change still moves past it.
+   */
+  const authExhausted = (actor: TrackSubscriberActor): boolean => peek(actor.snapshot).context.authExhausted === true;
+
+  /**
    * Arm the rejoin backoff for `trackId`, honoring a server-stated Retry
    * Interval above the local delay. Returns false when the retry budget is
    * spent.
@@ -384,6 +393,14 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               if (currentStatus === 'ended' && current.snapshot.get().context.frameCount > 0) {
                 return;
               }
+              // NOTE(tail-completeness): frameCount === 0 approximates "the
+              // tail played out" — subgroup streams still in flight after
+              // PUBLISH_DONE and frames the renderers already own are not
+              // counted, so up to a few hundred ms can still be cut. Exact
+              // accounting needs the subscriber to reconcile subgroup FINs
+              // against PublishDone.streamCount and the renderers to report
+              // drained pipelines; not worth that machinery yet.
+              if (authExhausted(current)) return;
               // The subscription is dead and drained; whatever it buffered
               // has played. Drop it (and any in-flight handoff — promotion
               // gates on a playout clock this dead track would stall) and
@@ -418,6 +435,10 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             }
 
             if (pending && isDead(pendingStatus)) {
+              // Terminal credentials: a replacement dies identically, so
+              // the corpse holds the slot (spent-budget shape) instead of
+              // cycling refreshes forever.
+              if (authExhausted(pending)) return;
               // A handoff target died before promoting (e.g. the relay
               // refused the new track). Keep playing the current track,
               // drop the dead pending, and let the backoff pace the retry.
