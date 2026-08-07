@@ -67,6 +67,8 @@ interface FakeSubscriber extends TrackSubscriberActor {
   destroyed: boolean;
   /** Simulate a buffered keyframe-led group (optionally at a timestamp). */
   becomeDecodable(oldestTimestampUs?: number): void;
+  /** Simulate SUBSCRIBE_OK — the subscription reached the relay. */
+  activate(): void;
   /**
    * Simulate the subscription dying: the publisher ended it (`'ended'`) or
    * the request failed / the stall watchdog gave up (`'error'`).
@@ -74,12 +76,16 @@ interface FakeSubscriber extends TrackSubscriberActor {
   die(status: 'ended' | 'error'): void;
 }
 
-function createFakeSubscriberFactory() {
+function createFakeSubscriberFactory({
+  initialStatus = 'active',
+}: {
+  initialStatus?: TrackSubscriberContext['status'];
+} = {}) {
   const created: FakeSubscriber[] = [];
   const factory = ((options: CreateTrackSubscriberOptions) => {
     const snapshot = signal({
       value: 'active' as const,
-      context: { status: 'active', hasDecodableFrame: false, frameCount: 0 } as TrackSubscriberContext,
+      context: { status: initialStatus, hasDecodableFrame: false, frameCount: 0 } as TrackSubscriberContext,
     });
     const subscriber: FakeSubscriber = {
       options,
@@ -94,6 +100,9 @@ function createFakeSubscriberFactory() {
           value: 'active',
           context: { ...snapshot.get().context, hasDecodableFrame: true, oldestTimestampUs },
         });
+      },
+      activate() {
+        snapshot.set({ value: 'active', context: { ...snapshot.get().context, status: 'active' } });
       },
       die(status: 'ended' | 'error') {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status } });
@@ -525,6 +534,45 @@ describe('subscribeSelectedVideoTrack', () => {
       });
       expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[2]);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+
+    it('escalates the handoff retry backoff until the replacement proves healthy', async () => {
+      const deps = makeDeps();
+      // Real subscribers start 'pending' and only turn 'active' on
+      // SUBSCRIBE_OK — a relay that keeps refusing the switch target never
+      // activates it, which is what lets the backoff escalate.
+      const { factory, created } = createFakeSubscriberFactory({ initialStatus: 'pending' });
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(2);
+
+      // First failure retries within the initial-delay window (375–625ms).
+      created[1]!.die('error');
+      await vi.advanceTimersByTimeAsync(700);
+      expect(created).toHaveLength(3);
+
+      // The replacement never reached the relay, so the second failure's
+      // delay doubles (750–1250ms): the 700ms that satisfied attempt 0
+      // must not be enough for attempt 1.
+      created[2]!.die('error');
+      await vi.advanceTimersByTimeAsync(700);
+      expect(created).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(created).toHaveLength(4);
+
+      // A replacement that reaches the relay resets the backoff: the next
+      // failure retries within the initial-delay window again.
+      created[3]!.activate();
+      await vi.advanceTimersByTimeAsync(0);
+      created[3]!.die('error');
+      await vi.advanceTimersByTimeAsync(700);
+      expect(created).toHaveLength(5);
 
       reactor.destroy();
     });

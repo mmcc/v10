@@ -229,9 +229,18 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
   // the timer's bump is what re-runs it to build the fresh subscription.
   const rejoinTick = signal(0);
   // Closure-held on purpose (entry and effects need to share them);
-  // `entry` resets both so no retry state leaks across state cycles.
+  // `entry` resets them so no retry state leaks across state cycles.
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempts = 0;
+  /**
+   * The subscriber the last recovery created, until it proves healthy.
+   * The backoff may only reset on *that* actor going `'active'` — a
+   * healthy current is exactly what keeps playing while a handoff retry
+   * fails over and over, so any reset keyed on the steady state (rather
+   * than on the replacement itself) re-runs every handoff retry at
+   * attempt 0 and never spends a finite budget.
+   */
+  let recoveryTarget: TrackSubscriberActor | undefined;
 
   const clearRetryTimer = (): void => {
     if (retryTimer === undefined) return;
@@ -261,6 +270,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
         // (session loss, source change, destroy) cancels both actors.
         entry: () => {
           retryAttempts = 0;
+          recoveryTarget = undefined;
           return () => {
             clearRetryTimer();
             clearSlots();
@@ -284,13 +294,20 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             }
 
             const currentStatus = currentStatusSignal.get();
-            // Steady healthy state — an active subscription with no
-            // recovery in flight — proves the outage (if any) is over, so
-            // later failures back off from the start again. The `!pending`
-            // and timer guards matter: a dead handoff target re-runs this
-            // effect with a perfectly healthy current, and resetting there
-            // would hold every handoff retry at the initial delay forever.
-            if (currentStatus === 'active' && !pending && retryTimer === undefined) retryAttempts = 0;
+            const pendingStatus = pendingStatusSignal.get();
+            // The outage is over only when the recovery's own replacement
+            // reaches the relay (SUBSCRIBE_OK / a first frame) — see
+            // `recoveryTarget`. It may sit in either slot: a live-edge
+            // rejoin recreates the current, a handoff retry recreates the
+            // pending (and promotion moves it across).
+            if (recoveryTarget !== undefined) {
+              const recoveredStatus =
+                recoveryTarget === current ? currentStatus : recoveryTarget === pending ? pendingStatus : undefined;
+              if (recoveredStatus === 'active') {
+                recoveryTarget = undefined;
+                retryAttempts = 0;
+              }
+            }
 
             if (current && isDead(currentStatus)) {
               // The current subscription is dead; its buffer tail is all it
@@ -316,7 +333,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               return;
             }
 
-            if (pending && isDead(pendingStatusSignal.get())) {
+            if (pending && isDead(pendingStatus)) {
               // A handoff target died before promoting (e.g. the relay
               // refused the new track). Keep playing the current track,
               // drop the dead pending, and let the backoff pace the retry.
@@ -376,6 +393,9 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             // Tracked read: subscribing this effect to the new actor's
             // snapshot is what re-fires the handoff check as frames land.
             subscriber.snapshot.get();
+            // A creation while attempts are outstanding IS the recovery's
+            // replacement — the one whose health resets the backoff.
+            if (retryAttempts > 0) recoveryTarget = subscriber;
 
             if (!current) {
               subscriberSlot.set(subscriber);
