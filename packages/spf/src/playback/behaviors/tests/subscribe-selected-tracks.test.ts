@@ -601,6 +601,33 @@ describe('subscribeSelectedVideoTrack', () => {
       reactor.destroy();
     });
 
+    it('a selection change mid-backoff cancels the dead track’s rejoin timer', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      created[0]!.die('error');
+      await vi.advanceTimersByTimeAsync(0);
+      // Slots cleared, rejoin timer armed for HD.
+      expect(created[0]!.destroyed).toBe(true);
+      expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+
+      // The new selection subscribes now — it must not wait out a backoff
+      // that belongs to the dead track.
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({
+        track: { id: SD.id },
+        locationFilter: { type: 'next-group-start' },
+      });
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
+
+      reactor.destroy();
+    });
+
     it('a new selection overrides a dead subscription whose retry budget is spent', async () => {
       const deps = makeDeps();
       const { factory, created } = createFakeSubscriberFactory();

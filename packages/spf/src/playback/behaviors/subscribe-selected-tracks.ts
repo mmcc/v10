@@ -242,19 +242,30 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
    */
   let recoveryTarget: TrackSubscriberActor | undefined;
 
+  /**
+   * The selection an armed rejoin timer is recovering. A retry belongs to
+   * the track that died — a selection that changes mid-backoff must not
+   * wait it out, and by then the slots are empty, so the timer itself has
+   * to carry the identity the corpse no longer can.
+   */
+  let retryTrackId: string | undefined;
+
   const clearRetryTimer = (): void => {
     if (retryTimer === undefined) return;
     clearTimeout(retryTimer);
     retryTimer = undefined;
+    retryTrackId = undefined;
   };
 
-  /** Arm the rejoin backoff. Returns false when the retry budget is spent. */
-  const armRejoinTimer = (): boolean => {
+  /** Arm the rejoin backoff for `trackId`. Returns false when the retry budget is spent. */
+  const armRejoinTimer = (trackId: string): boolean => {
     const delay = retryDelayMs(retryAttempts, retryConfig);
     if (delay === undefined) return false;
     retryAttempts++;
+    retryTrackId = trackId;
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
+      retryTrackId = undefined;
       rejoinTick.set(peek(rejoinTick) + 1);
     }, delay);
     return true;
@@ -339,8 +350,16 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // stall) and rejoin the selection at the live edge once the
               // backoff elapses. No fresh subscriber is created before the
               // timer fires: the guard below holds creation while it runs.
-              if (retryTimer === undefined && armRejoinTimer()) clearSlots();
+              if (retryTimer === undefined && armRejoinTimer(selectedId)) clearSlots();
               return;
+            }
+            // A backoff armed for a selection that no longer stands is the
+            // dead track's, not the new one's — cancel it with the rest of
+            // the retry state and let this pass subscribe the new track.
+            if (retryTimer !== undefined && retryTrackId !== selectedId) {
+              clearRetryTimer();
+              retryAttempts = 0;
+              recoveryTarget = undefined;
             }
             // While a rejoin backoff runs, nothing may (re)subscribe — the
             // timer's tick re-runs this effect and the normal creation path
@@ -365,7 +384,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // dead pending stays in its slot on purpose: clearing it
               // would let the creation path below re-subscribe the same
               // dead track with no delay at all.
-              if (!armRejoinTimer()) return;
+              if (!armRejoinTimer(selectedId)) return;
               pending.destroy();
               pendingSlot.set(undefined);
               return;
