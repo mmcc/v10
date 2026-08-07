@@ -188,9 +188,10 @@ describe('createMoqtPublishSession', () => {
       expect(solicitation.received).toHaveLength(2);
     });
 
-    // The peer withdrawing the namespace subscription takes the announce
-    // with it — the ingest path is gone.
-    void solicitation.fin();
+    // The peer withdrawing the namespace subscription (a reset — a clean
+    // FIN is only half-closure) takes the announce with it — the ingest
+    // path is gone.
+    void solicitation.reset();
     await vi.waitFor(() => {
       expect(endings).toHaveLength(1);
     });
@@ -199,7 +200,7 @@ describe('createMoqtPublishSession', () => {
     subscriber.destroy();
   });
 
-  it('keeps the announce alive while another solicitation still carries it', async () => {
+  it('keeps the carrier alive across the requester half-closing its side', async () => {
     const endings: unknown[] = [];
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
@@ -208,25 +209,52 @@ describe('createMoqtPublishSession', () => {
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
-    // Two covering prefixes — a token may grant several.
-    const broad = await solicitNamespace(pair.server, [], 1);
-    const narrow = await solicitNamespace(pair.server, ['live'], 3);
+    const solicitation = await solicitNamespace(pair.server, []);
     await vi.waitFor(() => {
-      expect(broad.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
-      expect(narrow.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
+      expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
 
-    // One carrier ends: the other still carries the announce, so the
-    // ingest path is intact and no loss is reported.
-    void broad.fin();
+    // §3.3.2: a clean requester FIN only commits to sending no updates —
+    // it is not a withdrawal, and the response side keeps carrying the
+    // announce.
+    void solicitation.fin();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(endings).toEqual([]);
 
-    // The last carrier ending is the real loss.
-    void narrow.fin();
+    // The carrier is still the retraction path at close().
+    session.close();
     await vi.waitFor(() => {
-      expect(endings).toHaveLength(1);
+      expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace', 'namespace-done']);
     });
+    subscriber.destroy();
+  });
+
+  it('rejects an overlapping namespace solicitation with PREFIX_OVERLAP', async () => {
+    const endings: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onAnnounceEnded: ({ error }) => endings.push(error),
+    });
+    await session.ready;
+    session.announce(NAMESPACE);
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
+
+    const broad = await solicitNamespace(pair.server, [], 1);
+    await vi.waitFor(() => {
+      expect(broad.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
+    });
+
+    // §10.18: a second solicitation whose prefix nests with an
+    // established one would produce duplicate namespace state — refused,
+    // and the established carrier is untouched.
+    const narrow = await solicitNamespace(pair.server, ['live'], 3);
+    await vi.waitFor(() => {
+      expect(narrow.received.map((m) => m.kind)).toEqual(['request-error']);
+      expect(narrow.ended()).toBe(true);
+    });
+    expect(narrow.received[0]).toMatchObject({ errorCode: REQUEST_ERROR_CODE.PREFIX_OVERLAP });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broad.ended()).toBe(false);
+    expect(endings).toEqual([]);
     session.destroy();
     subscriber.destroy();
   });
@@ -593,12 +621,14 @@ describe('createMoqtPublishSession', () => {
     subscriber.destroy();
   });
 
-  it('tolerates a REQUEST_UPDATE on the namespace solicitation stream', async () => {
+  it('rejects a namespace REQUEST_UPDATE and closes the carrier, never the session', async () => {
     const updates: number[] = [];
     const closes: unknown[] = [];
+    const endings: unknown[] = [];
     const { pair, session, subscriber } = makePublishHarness({
       onRequestUpdate: ({ requestId }) => updates.push(requestId),
       onClosed: (info) => closes.push(info),
+      onAnnounceEnded: ({ error }) => endings.push(error),
     });
     await session.ready;
     session.announce(NAMESPACE);
@@ -609,16 +639,18 @@ describe('createMoqtPublishSession', () => {
       expect(solicitation.received).toHaveLength(2);
     });
 
-    // A legal §10.9 update must never be session-fatal, even though v1
-    // applies no prefix changes — the update is answered REQUEST_ERROR
-    // rather than left outstanding, and the carrier stays open.
+    // A legal §10.9 update must never be session-fatal; v1 applies no
+    // prefix changes, so per §10.9.1 the update is answered with an
+    // error and the request stream closes — which costs the announce
+    // carrier, surfaced as announce loss.
     await solicitation.send(encodeRequestUpdate(1, { subscriberPriority: 5 }));
     await vi.waitFor(() => {
       expect(updates).toEqual([1]);
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace', 'request-error']);
+      expect(solicitation.ended()).toBe(true);
+      expect(endings).toHaveLength(1);
     });
     expect(closes).toEqual([]);
-    expect(solicitation.ended()).toBe(false);
     session.destroy();
     subscriber.destroy();
   });
@@ -725,7 +757,7 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(goaways).toEqual([1500]);
     });
-    void solicitation.fin();
+    void solicitation.reset();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(endings).toEqual([]);
     session.destroy();
@@ -1045,7 +1077,7 @@ describe('createPublishSessionActor', () => {
       expect(actor.snapshot.get().context.status).toBe('live');
     });
 
-    void solicitation.fin();
+    void solicitation.reset();
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.status).toBe('failed');
     });

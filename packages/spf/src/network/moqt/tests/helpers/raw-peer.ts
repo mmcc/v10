@@ -36,8 +36,10 @@ export interface RawRequest {
    * failure test needs.
    */
   abandonReads: () => Promise<void>;
-  /** FIN the peer's side (a relay withdrawing the request). */
+  /** FIN the peer's side — half-closure, NOT a withdrawal (§3.3.2). */
   fin: () => Promise<void>;
+  /** Reset the peer's side — the actual withdrawal signal. */
+  reset: () => Promise<void>;
 }
 
 export async function openRawRequest(server: MoqtTransport, message: Uint8Array): Promise<RawRequest> {
@@ -71,6 +73,7 @@ export async function openRawRequest(server: MoqtTransport, message: Uint8Array)
     send: (bytes) => writer.write(bytes).catch(() => {}),
     abandonReads: () => reader.cancel().catch(() => {}),
     fin: () => writer.close().catch(() => {}),
+    reset: () => writer.abort().catch(() => {}),
   };
 }
 

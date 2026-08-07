@@ -680,8 +680,10 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
    * A peer's namespace solicitation — the announce carrier. Accepted with
    * REQUEST_OK, then held open for the session's lifetime: NAMESPACE /
    * NAMESPACE_DONE entries for every announced namespace under the
-   * prefix ride this stream, and its loss while the announce is live
-   * means the peer refused or withdrew the ingest path.
+   * prefix ride this stream. A clean requester-side FIN is half-closure,
+   * not withdrawal (§3.3.2); only a reset (or a rejected update, §10.9.1)
+   * ends the carrier, and its loss while the announce is live means the
+   * peer refused or withdrew the ingest path.
    */
   async #handleSubscribeNamespace(
     stream: BidirectionalStreamLike,
@@ -689,6 +691,26 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     subscribeNamespace: Extract<ControlMessage, { kind: 'subscribe-namespace' }>
   ): Promise<void> {
     const writer = stream.writable.getWriter();
+    const prefix = subscribeNamespace.trackNamespacePrefix;
+
+    // §10.18: a solicitation overlapping an established one (either
+    // prefix containing the other) is refused with PREFIX_OVERLAP —
+    // announcing on both would hand the peer duplicate namespace state
+    // with inconsistent withdrawals.
+    const overlaps = [...this.#namespaceStreams].some(
+      (existing) => isNamespacePrefix(existing.prefix, prefix) || isNamespacePrefix(prefix, existing.prefix)
+    );
+    if (overlaps) {
+      try {
+        await writer.write(encodeRequestError(REQUEST_ERROR_CODE.PREFIX_OVERLAP, 'overlapping namespace prefix'));
+        await writer.close();
+      } catch {
+        // Peer cancelled.
+      }
+      await reader.cancel();
+      return;
+    }
+
     try {
       await writer.write(encodeRequestOk());
     } catch {
@@ -698,15 +720,15 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     }
 
     const record: NamespaceStream = {
-      prefix: subscribeNamespace.trackNamespacePrefix,
+      prefix,
       writer,
       announced: [],
     };
     this.#namespaceStreams.add(record);
     this.#reconcileAnnounce(record);
 
-    // Hold the stream. The known peers write nothing further on it; a
-    // FIN or reset is the subscription ending.
+    // Hold the stream. The known peers write nothing further on it.
+    let failedUpdate = false;
     try {
       while (!(await reader.atEnd())) {
         const type = await reader.readVarint();
@@ -717,30 +739,36 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         } else if (message.kind === 'request-update') {
           // Namespace subscriptions may legally be updated (§10.9). v1
           // applies none of it (a prefix change would re-base every
-          // entry), so the update is rejected rather than left
-          // outstanding or falsely acknowledged — but never
-          // session-fatal, and our side of the carrier stays open: the
-          // peer decides whether a refused optional update ends its
-          // solicitation, and the existing loss handling covers that.
+          // entry), so per §10.9.1 the update is answered with an error
+          // and the request stream closes below — never session-fatal.
           this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
           void writer
             .write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'namespace update not supported'))
             .catch(() => {});
+          failedUpdate = true;
+          break;
         } else {
           throw new MoqtProtocolError(`unexpected ${message.kind} on an incoming subscribe-namespace stream`);
         }
       }
+      if (!failedUpdate) {
+        // A clean requester-side FIN is NOT a cancellation (§3.3.2 — the
+        // peer merely commits to sending no updates): the response side
+        // keeps carrying NAMESPACE entries until a reset or the
+        // transport ends, so the carrier stays registered and open.
+        return;
+      }
     } catch (error) {
+      // A protocol violation is session-fatal; #handleClosed sweeps the
+      // carrier state with everything else.
       if (isMoqtProtocolError(error)) throw error;
       // Reset — the peer withdrew the namespace subscription.
-    } finally {
-      this.#namespaceStreams.delete(record);
-      // The subscription is over both ways: the peer ended its side, and
-      // `close()` only visits records still in the set — an unclosed
-      // response direction would leak the stream until transport teardown.
-      void writer.close().catch(() => {});
-      if (record.announced.length > 0) this.#reportAnnounceLoss();
     }
+
+    // Withdrawal (reset) or a failed update: the carrier is over.
+    this.#namespaceStreams.delete(record);
+    void writer.close().catch(() => {});
+    if (record.announced.length > 0) this.#reportAnnounceLoss();
   }
 
   async #handleIncomingSubscribe(
