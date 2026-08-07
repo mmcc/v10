@@ -47,13 +47,14 @@ function moqAudioTrack(name: string, bandwidth: number): MoqAudioTrack {
 
 const HD = moqVideoTrack('hd', 5_000_000);
 const SD = moqVideoTrack('sd', 1_000_000);
+const LD = moqVideoTrack('ld', 300_000);
 const MAIN_AUDIO = moqAudioTrack('main', 128_000);
 
 const PRESENTATION: MaybeResolvedPresentation = {
   id: 'moq:test',
   url: 'moqt://relay/live#msf:live--catalog',
   selectionSets: [
-    { id: 'v', type: 'video', switchingSets: [{ id: 'v-main', type: 'video', tracks: [HD, SD] }] },
+    { id: 'v', type: 'video', switchingSets: [{ id: 'v-main', type: 'video', tracks: [HD, SD, LD] }] },
     { id: 'a', type: 'audio', switchingSets: [{ id: 'a-main', type: 'audio', tracks: [MAIN_AUDIO] }] },
   ],
 };
@@ -595,6 +596,69 @@ describe('subscribeSelectedVideoTrack', () => {
       // engine's failover path owns the outcome.
       expect(created).toHaveLength(1);
       expect(created[0]!.destroyed).toBe(false);
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+
+    it('a new selection overrides a dead subscription whose retry budget is spent', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({
+        ...deps,
+        config: { createTrackSubscriber: factory, subscribeRetry: { maxAttempts: 0 } },
+      });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      created[0]!.die('error');
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(1);
+
+      // The budget only pins recovery of the *same* track — a different
+      // selection must not stay wedged behind the corpse.
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[0]!.destroyed).toBe(true);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({
+        track: { id: SD.id },
+        locationFilter: { type: 'next-group-start' },
+      });
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
+
+      reactor.destroy();
+    });
+
+    it('a new selection replaces a dead handoff target whose retry budget is spent', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({
+        ...deps,
+        config: { createTrackSubscriber: factory, subscribeRetry: { maxAttempts: 0 } },
+      });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(2);
+
+      created[1]!.die('error');
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      // Budget spent: the dead handoff target holds the pending slot.
+      expect(created).toHaveLength(2);
+      expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[1]);
+
+      deps.state.selectedVideoTrackId.set(LD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[1]!.destroyed).toBe(true);
+      expect(created).toHaveLength(3);
+      expect(created[2]!.options).toMatchObject({
+        track: { id: LD.id },
+        locationFilter: { type: 'next-group-start' },
+      });
+      expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[2]);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
 
       reactor.destroy();

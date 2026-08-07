@@ -285,8 +285,8 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             const selectedId = selectionSignal.get();
             const presentation = state.presentation.get();
 
-            const current = peek(subscriberSlot);
-            const pending = peek(pendingSlot);
+            let current = peek(subscriberSlot);
+            let pending = peek(pendingSlot);
 
             if (!selectedId || !session || !presentation) {
               if (current || pending) clearSlots();
@@ -307,6 +307,29 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
                 recoveryTarget = undefined;
                 retryAttempts = 0;
               }
+            }
+
+            // A selection that moved past a dead actor makes its recovery
+            // moot — and under a spent retry budget, waiting on it would
+            // wedge every later selection. Drop the corpse and the retry
+            // state, and let this same pass subscribe the new selection:
+            // the effect does not re-fire on its own slot writes, so the
+            // locals are cleared to match and control falls through to the
+            // normal creation path below.
+            if (current && isDead(currentStatus) && current.track.id !== selectedId) {
+              clearRetryTimer();
+              retryAttempts = 0;
+              recoveryTarget = undefined;
+              clearSlots();
+              current = undefined;
+              pending = undefined;
+            } else if (pending && isDead(pendingStatus) && pending.track.id !== selectedId) {
+              clearRetryTimer();
+              retryAttempts = 0;
+              recoveryTarget = undefined;
+              pending.destroy();
+              pendingSlot.set(undefined);
+              pending = undefined;
             }
 
             if (current && isDead(currentStatus)) {
@@ -340,8 +363,8 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // Arming cannot clobber a live timer — this branch sits below
               // the retryTimer bail above. When the budget is spent, the
               // dead pending stays in its slot on purpose: clearing it
-              // would let the creation path below re-subscribe with no
-              // delay at all.
+              // would let the creation path below re-subscribe the same
+              // dead track with no delay at all.
               if (!armRejoinTimer()) return;
               pending.destroy();
               pendingSlot.set(undefined);

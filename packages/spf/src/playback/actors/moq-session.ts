@@ -177,6 +177,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       return;
     }
     let transport: MoqtTransport | undefined;
+    let attemptSession: MoqtSession | undefined;
     try {
       if (authProvider) {
         authToken = toTokenBytes(await authProvider.getToken()) ?? authToken;
@@ -190,7 +191,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
         transport.close();
         return;
       }
-      session = createMoqtSession(transport, {
+      attemptSession = createMoqtSession(transport, {
         unknownAliasTimeoutMs: options.unknownAliasTimeoutMs,
         callbacks: {
           onGoaway: (goaway) => inner.send({ type: 'goaway', goaway }),
@@ -201,15 +202,25 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
           onClosed: ({ error }) => scheduleReconnect(error),
         },
       });
-      await session.ready;
-      if (destroyed) return;
+      session = attemptSession;
+      await attemptSession.ready;
+      // The transport can drop in the gap between `ready` resolving and
+      // this continuation running. `scheduleReconnect` has then already
+      // published 'reconnecting' and cleared `session` — a late
+      // 'connected' here would advertise a ready state whose session is
+      // already gone, and downstream behaviors treat 'ready' as a
+      // guarantee that a session exists.
+      if (destroyed || session !== attemptSession) return;
       readySinceMs = performance.now();
-      inner.send({ type: 'connected', session });
+      inner.send({ type: 'connected', session: attemptSession });
     } catch (error) {
       // A transport opened before the failure must not leak the relay
       // connection — a rejected `ready` does not close it on its own.
-      if (session) {
-        session.destroy();
+      // The per-attempt handle, not the shared `session`: a reconnect
+      // scheduled mid-attempt clears the shared slot, and the attempt's
+      // own session still has to be torn down.
+      if (attemptSession) {
+        attemptSession.destroy();
       } else {
         try {
           transport?.close();
