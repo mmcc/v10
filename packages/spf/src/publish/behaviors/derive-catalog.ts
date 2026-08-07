@@ -1,11 +1,41 @@
 /**
- * **Publish the MSF catalog for the active encodings.** While a catalog
- * track publisher exists and `state.activeEncodings` + `state.endpoint`
- * describe what is being published, builds the catalog JSON through
- * `config.buildCatalog` (default `buildMsfCatalog`) and sends it as
- * object 0 of a new group on the catalog publisher — re-sending whenever
- * the inputs change identity, so subscribers always have a current,
- * independently parseable catalog at every group boundary.
+ * **Publish the MSF catalog for the tracks being published.** While a
+ * catalog track publisher exists and `state.activeEncodings` +
+ * `state.endpoint` describe what is being published, builds the catalog
+ * JSON through `config.buildCatalog` (default `buildMsfCatalog`) and sends
+ * it as object 0 of a new group on the catalog publisher — re-deriving
+ * whenever the inputs change identity, so subscribers always have a
+ * current, independently parseable catalog at every group boundary.
+ *
+ * **The advertisement is latched across a source switch, mirroring
+ * `setupTrackPublishers`.** A device switch re-acquires through a
+ * cleanup-first release, so the kind's probe verdict — and with it
+ * `activeEncodings[kind]` — vanishes for the length of the re-probe,
+ * while the kind's MOQT track publisher deliberately survives
+ * (`setupTrackPublishers` latches it: ending the track mid-session would
+ * PUBLISH_DONE it for every subscriber). A catalog derived from the
+ * encodings alone re-published without the track and then re-added it,
+ * and subscribers obey catalogs: every mic switch tore down the viewer's
+ * audio subscription and re-joined it at the live edge, where the audio
+ * master clock re-anchored at ~zero latency and dragged the whole
+ * presentation with it. So a kind whose encoding is absent stays
+ * advertised with its last-known config while its capture status says
+ * the source is live or coming back (`'active'` / `'acquiring'`), and
+ * leaves the catalog only when the source truly leaves (`'idle'`,
+ * `'denied'`, `'ended'`, or no status at all). A switch that resolves to
+ * a different config (a mono mic replacing a stereo one) still
+ * republishes, because a present encoding always beats the held copy.
+ * The follow-up that trade creates — a viewer keeping its subscription
+ * across a config change on the same track name — is recorded in the
+ * multi-source design record.
+ *
+ * Sends are deduplicated by content, per publisher: the latch makes
+ * several input changes re-derive byte-identical catalogs (each
+ * capture-status hop, a re-probe resolving to the same config), and each
+ * send opens a new group every subscriber must parse. Keyed on the
+ * publisher so a rebuilt session's fresh catalog track always receives
+ * the current catalog, however recently the previous track carried the
+ * same bytes.
  *
  * DOM-free pure dispatcher per the setup-actor convention: it reads the
  * publisher slot `setupTrackPublishers` owns and sends frames — it never
@@ -13,7 +43,7 @@
  * their `codec` fields are already WebCodecs registry strings, which is
  * exactly what MSF §5.2.18 mandates for LOC tracks.
  *
- * Writes no state; context reader only.
+ * Writes no state; state/context reader only.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -26,9 +56,19 @@ import type { PublishEndpoint } from '../session/publish-session';
 import type { ActiveEncodingsFacts } from './setup-track-publishers';
 import { AUDIO_TRACK_NAME, SCREEN_TRACK_NAME, VIDEO_TRACK_NAME } from './setup-track-publishers';
 
+/**
+ * Structural mirror of `behaviors/dom/acquire-capture-source.ts`'s
+ * `CaptureStatus` (DOM-bound behavior, so not importable here) — keep
+ * identical.
+ */
+export type CaptureSourceStatus = 'idle' | 'acquiring' | 'active' | 'denied' | 'ended';
+
 export interface DeriveCatalogState {
   activeEncodings?: ActiveEncodingsFacts;
   endpoint?: PublishEndpoint | undefined;
+  cameraState?: CaptureSourceStatus;
+  screenShareState?: CaptureSourceStatus;
+  micState?: CaptureSourceStatus;
 }
 
 export interface DeriveCatalogContext {
@@ -43,6 +83,14 @@ export interface DeriveCatalogConfig {
 type DeriveCatalogFsmState = 'idle' | 'publishing-catalog';
 
 const textEncoder = new TextEncoder();
+
+/**
+ * Whether the kind's source is live or mid-switch — the states in which a
+ * missing encoding is a re-probe transient rather than a removal.
+ */
+function sourceHolds(status: CaptureSourceStatus | undefined): boolean {
+  return status === 'active' || status === 'acquiring';
+}
 
 /** Project the active encoder configs onto the catalog builder's input. */
 export function catalogInputFor(endpoint: PublishEndpoint, encodings: ActiveEncodingsFacts): MsfCatalogInput {
@@ -87,12 +135,24 @@ function deriveCatalogSetup({
   state: {
     activeEncodings: ReadonlySignal<DeriveCatalogState['activeEncodings']>;
     endpoint: ReadonlySignal<DeriveCatalogState['endpoint']>;
+    cameraState: ReadonlySignal<DeriveCatalogState['cameraState']>;
+    screenShareState: ReadonlySignal<DeriveCatalogState['screenShareState']>;
+    micState: ReadonlySignal<DeriveCatalogState['micState']>;
   };
   context: {
     catalogTrackPublisher: ReadonlySignal<DeriveCatalogContext['catalogTrackPublisher']>;
   };
   config?: DeriveCatalogConfig;
 }): Reactor<DeriveCatalogFsmState | 'destroying' | 'destroyed'> {
+  // The latch memory: the encoding each kind was last advertised with.
+  // Setup-scoped rather than effect-scoped so it survives the reactor
+  // passing through 'idle' (a sole-source device switch collapses
+  // `activeEncodings` to undefined for the length of the re-probe).
+  const advertised: ActiveEncodingsFacts = {};
+
+  /** Last catalog put on the wire, and the publisher it was sent to. */
+  let lastSent: { publisher: TrackPublisherActor; text: string } | undefined;
+
   return createMachineReactor<DeriveCatalogFsmState>({
     initial: 'idle',
     monitor: () =>
@@ -103,14 +163,45 @@ function deriveCatalogSetup({
       idle: {},
 
       'publishing-catalog': {
-        // effects (not entry) so an encodings/endpoint/publisher identity
-        // change re-sends a current catalog.
+        // effects (not entry) so an encodings/status/endpoint/publisher
+        // identity change re-derives a current catalog.
         effects: () => {
           const publisher = context.catalogTrackPublisher.get()!;
           const encodings = state.activeEncodings.get()!;
           const endpoint = state.endpoint.get()!;
+          // All three statuses are read unconditionally so the effect's
+          // tracked dependency set stays stable — a status only consulted
+          // once its kind's encoding is missing would not re-fire this
+          // effect when a failed switch parks on 'denied' with the
+          // encodings unchanged. The redundant re-runs each status hop
+          // costs are absorbed by the content dedupe below.
+          const statuses = {
+            camera: state.cameraState.get(),
+            screen: state.screenShareState.get(),
+            audio: state.micState.get(),
+          };
 
-          const text = (config.buildCatalog ?? buildMsfCatalog)(catalogInputFor(endpoint, encodings));
+          const resolve = <Kind extends keyof ActiveEncodingsFacts>(kind: Kind): ActiveEncodingsFacts[Kind] => {
+            const current = encodings[kind];
+            if (current !== undefined) {
+              advertised[kind] = current;
+              return current;
+            }
+            if (sourceHolds(statuses[kind])) return advertised[kind];
+            delete advertised[kind];
+            return undefined;
+          };
+          const resolved: ActiveEncodingsFacts = {};
+          const camera = resolve('camera');
+          const screen = resolve('screen');
+          const audio = resolve('audio');
+          if (camera) resolved.camera = camera;
+          if (screen) resolved.screen = screen;
+          if (audio) resolved.audio = audio;
+
+          const text = (config.buildCatalog ?? buildMsfCatalog)(catalogInputFor(endpoint, resolved));
+          if (lastSent && lastSent.publisher === publisher && lastSent.text === text) return;
+          lastSent = { publisher, text };
           // The catalog publisher runs groupPerFrame: each send is object 0
           // of a fresh group — every update is a random-access point.
           publisher.send({
@@ -127,7 +218,7 @@ function deriveCatalogSetup({
 }
 
 export const deriveCatalog = defineBehavior({
-  stateKeys: ['activeEncodings', 'endpoint'],
+  stateKeys: ['activeEncodings', 'endpoint', 'cameraState', 'screenShareState', 'micState'],
   contextKeys: ['catalogTrackPublisher'],
   setup: deriveCatalogSetup,
 });
