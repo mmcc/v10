@@ -143,6 +143,10 @@ const PERMANENT_REQUEST_ERROR_CODES: ReadonlySet<number> = new Set([
   REQUEST_ERROR_CODE.NOT_SUPPORTED,
   REQUEST_ERROR_CODE.MALFORMED_AUTH_TOKEN,
   REQUEST_ERROR_CODE.INVALID_RANGE,
+  // The track cannot be served as requested; an identical resubscribe
+  // re-earns the rejection. A publisher fixing the track surfaces as a
+  // catalog update, which re-selects and re-subscribes through fresh state.
+  REQUEST_ERROR_CODE.MALFORMED_TRACK,
   REQUEST_ERROR_CODE.UNINTERESTED,
   REQUEST_ERROR_CODE.PREFIX_OVERLAP,
   REQUEST_ERROR_CODE.NAMESPACE_TOO_LARGE,
@@ -167,9 +171,11 @@ export function isRetryableRequestErrorCode(errorCode: number): boolean {
 }
 
 /**
- * PUBLISH_DONE statuses after which re-subscribing can never succeed with
- * the same credentials. Auth-shaped ends are the only members: every other
- * status describes publisher/relay state a broadcaster restart or live-edge
+ * PUBLISH_DONE statuses after which an identical re-subscribe can never
+ * succeed: auth-shaped ends (same credentials the relay just rejected) and
+ * a malformed track (same request re-earns the same end; a publisher fix
+ * arrives as a catalog update through fresh state). Every other status
+ * describes publisher/relay state a broadcaster restart or live-edge
  * rejoin legitimately recovers from (`TRACK_ENDED`, `GOING_AWAY`,
  * `TOO_FAR_BEHIND`, overload, …), and unknown statuses degrade to paced
  * retries for the same reason as {@link isRetryableRequestErrorCode}.
@@ -177,6 +183,7 @@ export function isRetryableRequestErrorCode(errorCode: number): boolean {
 const PERMANENT_PUBLISH_DONE_STATUSES: ReadonlySet<number> = new Set([
   PUBLISH_DONE_STATUS.UNAUTHORIZED,
   PUBLISH_DONE_STATUS.EXPIRED,
+  PUBLISH_DONE_STATUS.MALFORMED_TRACK,
 ]);
 
 /** Whether a PUBLISH_DONE'd subscription is worth re-subscribing. */

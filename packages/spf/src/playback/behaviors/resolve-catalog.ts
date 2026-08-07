@@ -295,6 +295,12 @@ function setupResolveCatalog({
                   // just rejected, so retrying loops forever.
                   if (!isCurrent()) return;
                   if (!isRetryablePublishDoneStatus(done.statusCode)) {
+                    // Terminal: freeze the state — a subscription left open
+                    // keeps delivering late objects (and the joining fetch
+                    // its replay) into a presentation we just declared done
+                    // updating.
+                    fetchHandle?.cancel();
+                    subscription?.cancel();
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog track ended with a non-retryable status:', done);
                     return;
@@ -343,8 +349,11 @@ function setupResolveCatalog({
                   }
                   // A permanent rejection — wrong credentials, malformed
                   // request, unsupported feature — answers an identical
-                  // retry identically: stop instead of looping forever.
+                  // retry identically: stop instead of looping forever, and
+                  // stop the joining fetch with it (its replay must not
+                  // keep writing into a presentation declared terminal).
                   if (!isRetryableRequestErrorCode(error.errorCode)) {
+                    fetchHandle?.cancel();
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog subscribe failed (non-retryable):', error);
                     return;

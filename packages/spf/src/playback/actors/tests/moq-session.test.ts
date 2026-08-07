@@ -356,6 +356,31 @@ describe('createMoqSessionActor', () => {
     expect(fake.getCloseInfo()).toBeDefined();
   });
 
+  it('does not close the transport a second time when the handshake settles after destroy', async () => {
+    // destroy() already closed the pending transport; the late `ready`
+    // fulfillment must not close again — a custom MoqtTransport's close()
+    // need not be idempotent.
+    const fake = createFakeTransport();
+    const close = vi.spyOn(fake.transport, 'close');
+    let resolveReady!: () => void;
+    const actor = createMoqSessionActor({
+      source: makeSource(),
+      createTransport: () => ({
+        transport: fake.transport,
+        ready: new Promise<void>((resolve) => {
+          resolveReady = resolve;
+        }),
+      }),
+    });
+
+    actor.destroy();
+    expect(close).toHaveBeenCalledTimes(1);
+
+    resolveReady();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   describe('reconnect', () => {
     // Backoff delays are jittered ±25%, so these tests advance well past a
     // delay rather than by its exact value.

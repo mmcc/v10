@@ -316,10 +316,10 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       pendingTransport = transport;
       await created.ready;
       pendingTransport = undefined;
-      if (destroyed) {
-        transport.close();
-        return;
-      }
+      // No close here: a destroy() that ran while the handshake was in
+      // flight already closed the pending transport, and a second close
+      // may throw on custom MoqtTransport implementations.
+      if (destroyed) return;
       attemptSession = createMoqtSession(transport, {
         unknownAliasTimeoutMs: options.unknownAliasTimeoutMs,
         callbacks: {

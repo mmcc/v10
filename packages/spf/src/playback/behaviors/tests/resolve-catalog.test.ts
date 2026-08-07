@@ -459,7 +459,7 @@ describe('resolveCatalog', () => {
 
   it('does not re-subscribe after an auth-shaped PUBLISH_DONE', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions } = createFakeSessionActor();
+    const { actor, subscriptions, fetches } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -475,6 +475,11 @@ describe('resolveCatalog', () => {
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(subscriptions).toHaveLength(1);
+    // Terminal freezes the state: the dead subscription and its joining
+    // fetch are cancelled so late objects cannot keep updating the
+    // presentation.
+    expect(subscriptions[0]!.cancelled).toBe(true);
+    expect(fetches[0]!.cancelled).toBe(true);
     consoleError.mockRestore();
 
     reactor.destroy();
