@@ -814,6 +814,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     } finally {
       subscriber.finished = true;
       track.subscribers = track.subscribers.filter((s) => s !== subscriber);
+      // The subscription is over both ways — mirror of the namespace
+      // stream's cleanup: when the peer FINed first, an unclosed response
+      // direction would leak a half-open stream per unsubscribe until the
+      // transport closes. Already-FINed/aborted writers reject harmlessly.
+      void writer.close().catch(() => {});
       if (!this.#destroyed && subscriber.reported) {
         this.#callbacks.onSubscribeEnd?.({ requestId: subscribe.requestId });
         // Only accepted, forwarding subscriptions may carry the binding:

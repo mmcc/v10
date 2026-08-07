@@ -594,6 +594,9 @@ describe('createMoqtPublishSession', () => {
     void subscribe.fin();
     await vi.waitFor(() => {
       expect(bindings).toEqual([41, undefined]);
+      // The response direction closes too — a peer-initiated unsubscribe
+      // must not leak a half-open stream.
+      expect(subscribe.ended()).toBe(true);
     });
     session.destroy();
     subscriber.destroy();
