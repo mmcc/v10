@@ -50,9 +50,9 @@ Default three-phase framing per
 
 | Phase | What | Status |
 |---|---|---|
-| **1 — Basic functionality** | Capture → encode → publish end-to-end: camera or screen source, single H.264/VP8 rendition + Opus, MSF catalog track, GoP = MoQ group, PUBLISH-per-track flow against a relay | **Implemented** |
-| **2 — Features relevant to the use case** | Device enumeration + selection, screen share with microphone merge, camera/mic mute toggles (capture keeps running), local preview, publish stats (~1 Hz), error surfacing per pipeline stage, orderly shutdown (GOAWAY → draining, PUBLISH_DONE) | **Implemented** |
-| **3 — Optimizations** | Simulcast (per-rendition encoder + publisher pairs), automatic reconnect, datagram delivery for loss-tolerant traffic, congestion-aware encode tuning, subscriber-aware publishing (idle when nobody is subscribed) | Not implemented — tracked as [moq-publish](../features/moq-publish.md)'s extension boundary |
+| **1 — Basic functionality** | Capture → encode → publish end-to-end: camera or screen source, single H.264/VP8 rendition + Opus, MSF catalog track, GoP = MoQ group, announce-and-serve flow against a relay (solicited NAMESPACE announce, relay-pulled per-track SUBSCRIBEs) | **Implemented** |
+| **2 — Features relevant to the use case** | Device enumeration + selection, screen share with microphone merge, camera/mic mute toggles (capture keeps running), local preview, publish stats (~1 Hz), error surfacing per pipeline stage, orderly shutdown (inbound GOAWAY → draining; clean per-subscription FINs + NAMESPACE_DONE retraction) | **Implemented** |
+| **3 — Optimizations** | Simulcast (per-rendition encoder + publisher pairs), automatic reconnect, datagram delivery for loss-tolerant traffic, congestion-aware encode tuning, demand-aware encoding (the transport is already demand-gated per subscription; the encoders still run unwatched) | Not implemented — tracked as [moq-publish](../features/moq-publish.md)'s extension boundary |
 
 ## Composition specifics
 
@@ -86,8 +86,7 @@ inject in-memory transports), `buildCatalog` (MSF default), `chunkSink`
 ### Alternative default configurations
 
 Engine config tuning: `groupDurationSec`, `video` / `audio` rendition
-tuning, `maxEncodeQueueSize`, `maxQueuedGroups`, `statsIntervalMs`,
-`requestTimeoutMs` — see
+tuning, `maxEncodeQueueSize`, `maxQueuedGroups`, `statsIntervalMs` — see
 [moq-publish § Config surface](../features/moq-publish.md#config-surface).
 The adapter forwards `engineConfig` through unchanged.
 

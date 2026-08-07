@@ -3,11 +3,20 @@
  * one side, real playback engine(s) on the other, draft-19 bytes in the
  * middle over `createTransportPair` transports.
  *
- * Publisher side (`connectPublisher`): answers the SETUP exchange, accepts
- * PUBLISH_NAMESPACE and per-track PUBLISH with REQUEST_OK, parses subgroup
- * data streams into per-track group buffers, and records every
- * PUBLISH_DONE it observes — the churn signal the source-switch
- * regression tests assert on.
+ * Publisher side (`connectPublisher`) mirrors moq-relay 0.14.7's
+ * announce-and-serve ingest. After the SETUP exchange the hub opens a
+ * bidi stream and solicits announces (SUBSCRIBE_NAMESPACE, empty prefix,
+ * odd server-side request ids) and reads NAMESPACE / NAMESPACE_DONE
+ * entries off that stream for the session's lifetime. Tracks are pulled
+ * on demand: one upstream SUBSCRIBE per track (downstream demand dedupes
+ * onto it), with the publisher's SUBSCRIBE_OK assigning the alias its
+ * subgroup data streams carry. A proactive PUBLISH is answered with
+ * REQUEST_ERROR 400 "PUBLISH is not supported" exactly like the real
+ * relay, so a regression to the old ingest model fails loudly. The
+ * publisher ends a track by FINing the hub's SUBSCRIBE stream — no
+ * PUBLISH_DONE ever arrives — and retracts a namespace with
+ * NAMESPACE_DONE; both land in `trackEnds`, the churn signal the
+ * source-switch regression tests assert on.
  *
  * Subscriber side (`connectSubscriber`): answers SUBSCRIBE with
  * SUBSCRIBE_OK and forwards objects one-per-subgroup-stream, honoring the
@@ -16,12 +25,15 @@
  * (catalog/audio joins), `next-group-start` forwards only groups that
  * start after the subscribe (video joins). FETCH is answered with
  * REQUEST_ERROR so the catalog resolution falls back to its live
- * subscription. A publisher PUBLISH_DONE is forwarded to the track's
- * subscribers, ending their subscriptions like a real relay would.
+ * subscription. A downstream subscribe registers standing upstream demand
+ * for its track; an upstream FIN ends the track's downstream
+ * subscriptions with PUBLISH_DONE, the way a real relay ends the track
+ * for every viewer.
  *
- * Tracks persist across publisher sessions (a reconnecting publisher may
- * re-PUBLISH the same names), so the hub can also observe the pre-fix
- * teardown/reconnect churn instead of crashing on it.
+ * Tracks and demand persist across publisher sessions (a reconnecting
+ * publisher is re-solicited and its demanded tracks re-subscribed), so
+ * the hub can also observe teardown/reconnect churn instead of crashing
+ * on it.
  */
 import { StreamReader } from '../../../network/moqt/bytes';
 import {
@@ -29,11 +41,14 @@ import {
   decodeControlMessage,
   encodePublishDone,
   encodeRequestError,
-  encodeRequestOk,
   encodeSetup,
+  encodeSubscribe,
+  encodeSubscribeNamespace,
   encodeSubscribeOk,
   type KeyValuePair,
+  PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
+  type TrackNamespace,
 } from '../../../network/moqt/control-messages';
 import {
   isSubgroupHeaderType,
@@ -75,21 +90,33 @@ interface TrackRecord {
   subscribers: Set<Subscription>;
 }
 
-export interface ObservedPublishDone {
-  trackName: string;
-  statusCode: number;
-  streamCount: number;
-}
+/**
+ * One upstream end observed from the publisher. Under announce-and-serve
+ * there is no PUBLISH_DONE: a bare FIN on the hub's SUBSCRIBE stream is
+ * the clean track end, and NAMESPACE_DONE retracts an announce. These
+ * replace the old `publishDones` as the source-switch churn signal.
+ */
+export type ObservedTrackEnd =
+  | { kind: 'subscribe-fin'; trackName: string }
+  | { kind: 'namespace-done'; namespace: TrackNamespace };
 
 export interface RelayHub {
   /** Transport seam for the publish engine's `connectTransport`. */
   connectPublisher: ConnectPublishTransport;
   /** Transport seam for the playback engine's `createMoqTransport`. */
   connectSubscriber: () => { transport: MoqtTransport; ready: Promise<void> };
-  /** Track names PUBLISHed, in arrival order (re-publishes append again). */
-  readonly publishes: string[];
-  /** Every PUBLISH_DONE observed from the publisher, in arrival order. */
-  readonly publishDones: ObservedPublishDone[];
+  /** Upstream track SUBSCRIBEs sent to the publisher, in order (a retry appends again). */
+  readonly subscribes: string[];
+  /** Every upstream end observed — subscribe-stream FINs and NAMESPACE_DONE retractions. */
+  readonly trackEnds: ObservedTrackEnd[];
+  /**
+   * Register standing upstream demand for a track without a downstream
+   * viewer — the stand-in for other viewers' pull in late-join scenarios,
+   * since an announce-and-serve publisher writes nothing until the relay
+   * subscribes. Dedupes onto the single live upstream subscription and
+   * carries across publisher reconnects.
+   */
+  subscribeUpstream(trackName: string): void;
   /** Publisher transports accepted so far (a reconnect increments this). */
   publisherConnections(): number;
   /** Total objects received from the publisher for one track. */
@@ -98,6 +125,16 @@ export interface RelayHub {
 }
 
 const MAX_BUFFERED_GROUPS = 3;
+
+/**
+ * moq-relay 0.14.7 answers every proactive PUBLISH with this literal
+ * code — the draft-19 REQUEST_ERROR_CODE table has no exact entry for it.
+ */
+const PUBLISH_REMOVED_ERROR_CODE = 400;
+
+/** How long the hub waits between retries when a SUBSCRIBE races the
+ * publisher's `registerTrack` and comes back DOES_NOT_EXIST. */
+const SUBSCRIBE_RETRY_DELAY_MS = 25;
 
 // =============================================================================
 // Implementation
@@ -116,10 +153,14 @@ export function createRelayHub(): RelayHub {
   let nextSubscriberAlias = 1;
   let publisherConnections = 0;
 
-  const publishes: string[] = [];
-  const publishDones: ObservedPublishDone[] = [];
+  const subscribes: string[] = [];
+  const trackEnds: ObservedTrackEnd[] = [];
   const tracks = new Map<string, TrackRecord>();
   const closers = new Set<() => void>();
+  /** Tracks with standing upstream demand (downstream viewers or test priming). */
+  const demand = new Set<string>();
+  /** The live publisher connection's per-track pull, when one is connected. */
+  let pullUpstream: ((trackName: string) => void) | undefined;
 
   const trackFor = (name: string): TrackRecord => {
     let track = tracks.get(name);
@@ -148,17 +189,136 @@ export function createRelayHub(): RelayHub {
     }
   };
 
+  /** Standing demand: dedupe onto one live upstream subscription per track. */
+  const ensureUpstream = (trackName: string): void => {
+    demand.add(trackName);
+    pullUpstream?.(trackName);
+  };
+
   // ---------------------------------------------------------------------------
-  // Publisher side
+  // Publisher side — announce-and-serve, mirroring moq-relay 0.14.7
   // ---------------------------------------------------------------------------
 
   const connectPublisher: ConnectPublishTransport = () => {
     publisherConnections++;
     const pair = createTransportPair();
     const server = pair.server;
-    // Track aliases are scoped to one publisher session.
+    // Aliases are publisher-assigned in SUBSCRIBE_OK and scoped to one session.
     const aliasToTrack = new Map<number, TrackRecord>();
-    /** Data streams can race their PUBLISH; wait briefly for the alias. */
+    /** Odd server-side request ids; 1 goes to the namespace solicitation. */
+    let nextRequestId = 3;
+    const announced: TrackNamespace[] = [];
+    const announceWaiters: ((namespace: TrackNamespace) => void)[] = [];
+    /** Tracks with a live (or in-flight) upstream subscription on this session. */
+    const upstreamTracks = new Set<string>();
+    let connectionClosed = false;
+
+    const announcedNamespace = (): Promise<TrackNamespace> => {
+      const first = announced[0];
+      if (first) return Promise.resolve(first);
+      return new Promise((resolve) => announceWaiters.push(resolve));
+    };
+
+    /**
+     * The relay's opening move: one SUBSCRIBE_NAMESPACE (empty prefix
+     * covers every namespace) right after SETUP. The publisher accepts
+     * with REQUEST_OK and announces by writing NAMESPACE entries; the
+     * stream stays open for the session's lifetime, carrying
+     * NAMESPACE_DONE retractions at the end.
+     */
+    const solicitNamespaces = async (): Promise<void> => {
+      const stream = await server.createBidirectionalStream();
+      const writer = stream.writable.getWriter();
+      const reader = new StreamReader(stream.readable);
+      try {
+        await writer.write(encodeSubscribeNamespace({ requestId: 1, trackNamespacePrefix: [], parameters: {} }));
+        while (!(await reader.atEnd())) {
+          const type = await reader.readVarint();
+          const message = await readControlFrame(reader, type);
+          if (message.kind === 'namespace') {
+            // Empty solicited prefix ⇒ the suffix IS the full namespace.
+            announced.push(message.trackNamespaceSuffix);
+            for (const resolve of announceWaiters.splice(0)) resolve(message.trackNamespaceSuffix);
+          } else if (message.kind === 'namespace-done') {
+            trackEnds.push({ kind: 'namespace-done', namespace: message.trackNamespaceSuffix });
+          }
+          // 'request-ok' — the publisher accepting the solicitation.
+        }
+      } catch {
+        // Reset or transport teardown.
+      }
+    };
+
+    /**
+     * Pull one announced track: a fresh bidi stream per SUBSCRIBE, alias
+     * recorded from the publisher's SUBSCRIBE_OK, held open until one side
+     * ends it. A bare FIN from the publisher is the draft-19 clean track
+     * end — recorded as churn, and forwarded to the track's downstream
+     * subscribers as PUBLISH_DONE the way a real relay ends the track.
+     */
+    const subscribeUpstream = (trackName: string): void => {
+      if (destroyed || connectionClosed || upstreamTracks.has(trackName)) return;
+      upstreamTracks.add(trackName);
+      void (async () => {
+        const trackNamespace = await announcedNamespace();
+        const stream = await server.createBidirectionalStream();
+        const writer = stream.writable.getWriter();
+        const reader = new StreamReader(stream.readable);
+        const requestId = nextRequestId;
+        nextRequestId += 2;
+        const track = trackFor(trackName);
+        let accepted = false;
+        try {
+          await writer.write(
+            encodeSubscribe({
+              requestId,
+              trackNamespace,
+              trackName,
+              // The exact parameter set moq-relay 0.14.7 sends upstream.
+              parameters: {
+                forward: 1,
+                subscriberPriority: 0,
+                locationFilter: { type: 'largest-object' },
+                groupOrder: 'descending',
+              },
+            })
+          );
+          subscribes.push(trackName);
+          while (!(await reader.atEnd())) {
+            const type = await reader.readVarint();
+            const message = await readControlFrame(reader, type);
+            if (message.kind === 'subscribe-ok') {
+              accepted = true;
+              aliasToTrack.set(message.trackAlias, track);
+            } else if (message.kind === 'request-error') {
+              // DOES_NOT_EXIST usually means the demand raced the
+              // publisher's registerTrack — retry while the demand stands
+              // (the `finally` below frees the dedupe slot first).
+              if (demand.has(trackName) && !destroyed && !connectionClosed) {
+                setTimeout(() => subscribeUpstream(trackName), SUBSCRIBE_RETRY_DELAY_MS);
+              }
+              return;
+            }
+          }
+          if (accepted) {
+            trackEnds.push({ kind: 'subscribe-fin', trackName });
+            for (const subscriber of [...track.subscribers]) subscriber.end(PUBLISH_DONE_STATUS.TRACK_ENDED);
+            track.subscribers.clear();
+          }
+        } catch {
+          // Reset or transport teardown — not a clean track end.
+        } finally {
+          // The stream ended one way or another — free the dedupe slot,
+          // so `has()` only ever guards a live (or in-flight) upstream
+          // subscription and later demand can re-pull a track the
+          // publisher ended and re-registered in the same session.
+          upstreamTracks.delete(trackName);
+          writer.close().catch(() => {});
+        }
+      })();
+    };
+
+    /** Data streams can race our SUBSCRIBE_OK read; wait briefly for the alias. */
     const resolveTrack = async (alias: number): Promise<TrackRecord | undefined> => {
       for (let i = 0; i < 200; i++) {
         const track = aliasToTrack.get(alias);
@@ -179,7 +339,8 @@ export function createRelayHub(): RelayHub {
             try {
               const streamType = await reader.readVarint();
               if (streamType === STREAM_TYPE.SETUP) {
-                // The publisher's control stream: SETUP now, GOAWAY at close.
+                // The publisher's control stream: SETUP and nothing else
+                // (a client GOAWAY closes a moq-lite-rs session).
                 while (!(await reader.atEnd())) await reader.readUint8();
                 return;
               }
@@ -212,39 +373,28 @@ export function createRelayHub(): RelayHub {
       }
     };
 
-    const serveRequestStream = async (stream: BidirectionalStreamLike): Promise<void> => {
+    /**
+     * The publisher initiates no request streams under announce-and-serve.
+     * Anything arriving here is a regression to the old proactive model —
+     * answer it the way moq-relay 0.14.7 does, so the regression fails
+     * loudly instead of being silently ingested.
+     */
+    const rejectRequestStream = async (stream: BidirectionalStreamLike): Promise<void> => {
       const writer = stream.writable.getWriter();
       const reader = new StreamReader(stream.readable);
-      let streamTrack: TrackRecord | undefined;
       try {
-        while (!(await reader.atEnd())) {
-          const type = await reader.readVarint();
-          const message = await readControlFrame(reader, type);
-          if (message.kind === 'publish') {
-            streamTrack = trackFor(message.trackName);
-            aliasToTrack.set(message.trackAlias, streamTrack);
-            publishes.push(message.trackName);
-            await writer.write(encodeRequestOk());
-          } else if (message.kind === 'publish-namespace') {
-            await writer.write(encodeRequestOk());
-          } else if (message.kind === 'publish-done') {
-            publishDones.push({
-              trackName: streamTrack?.name ?? '(unknown)',
-              statusCode: message.statusCode,
-              streamCount: message.streamCount,
-            });
-            if (streamTrack) {
-              // A real relay ends downstream subscriptions with the track.
-              for (const subscriber of [...streamTrack.subscribers]) subscriber.end(message.statusCode);
-              streamTrack.subscribers.clear();
-            }
-          }
-          // REQUEST_UPDATE / GOAWAY: nothing to do for the hub.
-        }
+        const type = await reader.readVarint();
+        const message = await readControlFrame(reader, type);
+        await writer.write(
+          message.kind === 'publish'
+            ? encodeRequestError(PUBLISH_REMOVED_ERROR_CODE, 'PUBLISH is not supported')
+            : encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'unexpected request stream')
+        );
       } catch {
         // Reset or teardown.
       } finally {
         writer.close().catch(() => {});
+        void reader.cancel().catch(() => {});
       }
     };
 
@@ -254,7 +404,7 @@ export function createRelayHub(): RelayHub {
         while (true) {
           const { done, value } = await streams.read();
           if (done) break;
-          void serveRequestStream(value);
+          void rejectRequestStream(value);
         }
       } catch {
         // Transport went away.
@@ -263,15 +413,27 @@ export function createRelayHub(): RelayHub {
 
     void acceptUniStreams();
     void acceptBidiStreams();
-    // Server SETUP arrives on its own control stream right after connect.
     void (async () => {
       try {
+        // Server SETUP rides its own control stream right after connect.
         const control = await server.createUnidirectionalStream();
         await control.getWriter().write(encodeSetup());
       } catch {
-        // Closed before SETUP could land.
+        return; // Closed before SETUP could land.
       }
+      await solicitNamespaces();
     })();
+
+    // Standing demand carries across publisher sessions: a reconnecting
+    // publisher gets its still-wanted tracks re-subscribed once it
+    // announces again.
+    pullUpstream = subscribeUpstream;
+    for (const trackName of demand) subscribeUpstream(trackName);
+    const markClosed = (): void => {
+      connectionClosed = true;
+      if (pullUpstream === subscribeUpstream) pullUpstream = undefined;
+    };
+    void server.closed.then(markClosed, markClosed);
 
     closers.add(() => pair.client.close());
     return { transport: pair.client, ready: Promise.resolve() };
@@ -320,6 +482,9 @@ export function createRelayHub(): RelayHub {
           const type = await reader.readVarint();
           const message = await readControlFrame(reader, type);
           if (message.kind === 'subscribe') {
+            // Downstream demand is what makes the hub pull the track from
+            // the publisher (announce-and-serve is pull-through).
+            ensureUpstream(message.trackName);
             const track = trackFor(message.trackName);
             const trackAlias = nextSubscriberAlias++;
             await writer.write(encodeSubscribeOk(trackAlias));
@@ -405,8 +570,9 @@ export function createRelayHub(): RelayHub {
   return {
     connectPublisher,
     connectSubscriber,
-    publishes,
-    publishDones,
+    subscribes,
+    trackEnds,
+    subscribeUpstream: ensureUpstream,
     publisherConnections: () => publisherConnections,
     objectCount: (trackName) => tracks.get(trackName)?.objectsReceived ?? 0,
     destroy() {

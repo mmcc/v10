@@ -16,13 +16,19 @@ import { createMoqPublishEngine } from '../engine';
  * - a LATE-joining subscriber (after ≥1 group boundary) must reach decoded
  *   video with the default codec config;
  * - screen share starting ADDITIVELY mid-session — the whole point of the
- *   multi-source redesign — must keep the session and the camera's
- *   PUBLISHed tracks alive (no PUBLISH_DONE, no reconnect) while the new
- *   `screen` track arrives on the subscriber as its own content: a second
- *   video switching set, never a quality alternate the ABR ranker may swap
- *   the camera for;
+ *   multi-source redesign — must keep the session and the camera's served
+ *   tracks alive (no track-ending subscribe-stream FIN, no reconnect)
+ *   while the new `screen` track arrives on the subscriber as its own
+ *   content: a second video switching set, never a quality alternate the
+ *   ABR ranker may swap the camera for;
  * - audio (the mic's own always-on pipeline) must keep flowing to the
  *   subscriber throughout, unaffected by screen starting or stopping.
+ *
+ * Ingest is announce-and-serve (moq-relay 0.14.7): the session goes live
+ * on the ANNOUNCE, and a track publisher writes nothing until the hub
+ * subscribes to that track — so the wire-level flow assertions prime
+ * standing upstream demand on the hub first, standing in for the other
+ * viewers a real relay would be pulling for.
  */
 
 const disposals: (() => void)[] = [];
@@ -128,7 +134,12 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
       expect(publisher.state.activeEncodings.get()?.camera?.codec).toMatch(/^avc1/);
     });
 
-    // ── Let ≥1 group boundary pass before anyone subscribes ──────────────
+    // ── Let ≥1 group boundary pass before the PLAYER subscribes ──────────
+    // Pull-through ingest writes nothing unsubscribed: prime standing
+    // upstream demand (other viewers, in the field) so a backlog exists
+    // for the late joiner to land into.
+    hub.subscribeUpstream('video');
+    hub.subscribeUpstream('audio');
     await vi.waitFor(
       () => {
         expect(hub.objectCount('video')).toBeGreaterThan(35); // > one full 1s group at 30fps
@@ -165,10 +176,13 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     // ── Regression: screen share starts ADDITIVELY while subscribed ──────
     const audioObjectsBeforeScreen = hub.objectCount('audio');
     const cameraObjectsBeforeScreen = hub.objectCount('video');
-    const publishDonesBeforeScreen = hub.publishDones.length;
+    const trackEndsBeforeScreen = hub.trackEnds.length;
     const connectionsBeforeScreen = hub.publisherConnections();
 
     publisher.state.screenShareActive.set(true);
+    // Demand for the new track (the hub retries until the publisher
+    // registers it) — the viewer below only pulls screen when selected.
+    hub.subscribeUpstream('screen');
 
     // The screen track is its own independent, non-alternate video track in
     // the catalog — it flows on the wire while the camera keeps flowing
@@ -250,21 +264,23 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     );
 
     // No track ended and no session churn from adding the screen track: a
-    // real relay treats PUBLISH_DONE as the end of the track, freezing
-    // every subscriber.
-    expect(hub.publishDones.length).toBe(publishDonesBeforeScreen);
+    // relay treats a subscribe-stream FIN as the end of the track,
+    // freezing every subscriber.
+    expect(hub.trackEnds.length).toBe(trackEndsBeforeScreen);
     expect(hub.publisherConnections()).toBe(connectionsBeforeScreen);
     expect(publisher.state.sessionStatus.get()).toBe('live');
 
-    // Orderly unpublish ends every track — now including screen — with PUBLISH_DONE.
+    // Orderly unpublish ends every track — now including screen — by
+    // FINing the hub's subscribe streams (a bare FIN is the draft-19
+    // clean track end; PUBLISH_DONE never appears under announce-and-serve).
     publisher.state.publishActivated.set(false);
     await vi.waitFor(
       () => {
-        const doneTracks = hub.publishDones.map((done) => done.trackName);
-        expect(doneTracks).toContain('video');
-        expect(doneTracks).toContain('screen');
-        expect(doneTracks).toContain('audio');
-        expect(doneTracks).toContain('catalog');
+        const endedTracks = hub.trackEnds.filter((end) => end.kind === 'subscribe-fin').map((end) => end.trackName);
+        expect(endedTracks).toContain('video');
+        expect(endedTracks).toContain('screen');
+        expect(endedTracks).toContain('audio');
+        expect(endedTracks).toContain('catalog');
       },
       { timeout: 10_000 }
     );

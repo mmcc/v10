@@ -154,7 +154,12 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
     await vi.waitFor(() => expect(publisher.state.sessionStatus.get()).toBe('live'), { timeout: 10_000 });
 
     // Late join: let ≥1 full video group land at the relay first, the way
-    // the field viewer joined ~5s after publish start.
+    // the field viewer joined ~5s after publish start. Announce-and-serve
+    // ingest is pull-through — nothing flows until the relay subscribes —
+    // so prime standing upstream demand (the field viewer's predecessors)
+    // before measuring the pre-join backlog.
+    hub.subscribeUpstream('video');
+    hub.subscribeUpstream('audio');
     await vi.waitFor(
       () => {
         expect(hub.objectCount('video')).toBeGreaterThan(35);

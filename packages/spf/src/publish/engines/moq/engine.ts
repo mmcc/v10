@@ -171,8 +171,6 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   connectTransport?: ConnectPublishTransport;
   /** MSF catalog-JSON builder seam; default `buildMsfCatalog`. */
   buildCatalog?: BuildMsfCatalog;
-  /** Control-request response bound for the publish session. */
-  requestTimeoutMs?: number;
 }
 
 /**
@@ -258,10 +256,11 @@ export function createMoqPublishEngine(
       trackPublishStats,
       // Teardown-order constraint: composition cleanups run in array
       // order, so `setupTrackPublishers` must precede `openPublishSession`
-      // — on destroy the track publishers quiesce and queue each track's
-      // PUBLISH_DONE while the session (and its transport) is still alive;
-      // the session's bounded close-drain then flushes those writes before
-      // the transport closes.
+      // — on destroy the track publishers quiesce and FIN each track's
+      // live subscription streams while the session (and its transport)
+      // is still alive; the session's bounded close-drain then flushes
+      // those FINs (and the NAMESPACE_DONE retraction) before the
+      // transport closes.
       setupTrackPublishers,
       openPublishSession,
       deriveCatalog,

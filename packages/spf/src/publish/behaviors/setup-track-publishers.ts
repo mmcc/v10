@@ -1,50 +1,58 @@
 /**
  * **Own the per-track publisher actors for the publish session.** While
- * the publish session is `ready`/`live`, offers the tracks to the peer
- * (PUBLISH via the session driver — catalog first, then camera/screen/audio
- * as `state.activeEncodings` names them) and creates one
- * `TrackPublisherActor` per track bound to the session's `openUniStream`,
- * publishing the `catalogTrackPublisher` / `videoTrackPublisher` /
- * `screenTrackPublisher` / `audioTrackPublisher` context slots. The
- * catalog and audio publishers run in `groupPerFrame` mode (every object
- * is a random-access point per LOC/MSF); video groups follow keyframes.
+ * the publish session is `ready`/`live`, registers the tracks the peer
+ * may subscribe to (catalog first, then camera/screen/audio as
+ * `state.activeEncodings` names them) on the session driver's serve
+ * registry, and creates one `TrackPublisherActor` per track bound to the
+ * session's `openUniStream`, publishing the `catalogTrackPublisher` /
+ * `videoTrackPublisher` / `screenTrackPublisher` / `audioTrackPublisher`
+ * context slots. The catalog and audio publishers run in `groupPerFrame`
+ * mode (every object is a random-access point per LOC/MSF); video groups
+ * follow keyframes. Ingest is announce-and-serve (pull-through): a
+ * publisher writes no data until the session binds it to an inbound
+ * subscription, so the binding-sync effect mirrors the session actor's
+ * `trackBindings` into `bind`/`unbind` messages per kind — and the
+ * catalog publisher replays its latest frame on every bind, because
+ * catalog frames flow on change and a fresh subscription must not wait
+ * for the next one.
  *
- * Publishers are keyed on **session identity + track names, not encoder
- * identity**: they come up with the first active encoding and then live
- * as long as the session does. A source switch re-probes the encoders —
- * `activeEncodings` clears transiently and returns with a fresh identity —
- * and the PUBLISHed tracks must ride that out: destroying a publisher
- * sends PUBLISH_DONE, which a relay treats as the END of the track,
- * freezing every downstream subscriber. Encoder churn therefore never
- * touches the publishers; a kind that appears later (e.g. audio joining a
- * video-only session) is added additively, and a kind that disappears
- * simply stops receiving frames.
+ * Registered tracks are keyed on **session identity + track names, not
+ * encoder identity**: they come up with the first active encoding and
+ * then live as long as the session does. A source switch re-probes the
+ * encoders — `activeEncodings` clears transiently and returns with a
+ * fresh identity — and the served tracks must ride that out: ending a
+ * track mid-session FINs every live subscription, which a relay treats
+ * as the END of the track, freezing every downstream subscriber. Encoder
+ * churn therefore never touches the publishers; a kind that appears
+ * later (e.g. audio joining a video-only session) is added additively,
+ * and a kind that disappears simply stops receiving frames.
  *
  * Cluster-owner reactor per the per-type setup-actor convention: the
  * encoder chunk router (the engine's default `chunkSink`) and
  * `deriveCatalog` only read the slots — they never create the actors. On
  * session loss, endpoint change, or teardown the actors are destroyed in
- * reverse creation order, each track gets its PUBLISH_DONE
- * (`handle.done()`), and the slots are cleared.
+ * reverse creation order, each track's live subscriptions get their
+ * clean FIN (`handle.end()`), and the slots are cleared.
  *
- * Sole writer of the four track-publisher context slots; co-writer of
- * `state.publishError` (track stream failures only).
+ * Sole writer of the four track-publisher context slots. Per-stream
+ * failures are deliberately not surfaced as `publishError` anymore:
+ * under pull-through ingest the peer resets in-flight subgroup streams
+ * on every unsubscribe, so a stream failure is ordinary lifecycle — the
+ * publishers count it (`droppedGroups`) and genuine transport death
+ * surfaces through the session's own `closed`/`failed` path.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { peek, type ReadonlySignal, type Signal, signal } from '../../core/signals/primitives';
-import type { MessageParameters } from '../../network/moqt/control-messages';
-import { PUBLISH_DONE_STATUS } from '../../network/moqt/control-messages';
 import type { TrackPublisherActor } from '../actors/track-publisher';
 import { createTrackPublisherActor } from '../actors/track-publisher';
 import type {
   MoqtPublishSession,
   PublishEndpoint,
-  PublishedTrack,
   PublishSessionActor,
+  RegisteredTrack,
 } from '../session/publish-session';
-import type { SessionPublishErrorFacts } from './open-publish-session';
 
 /**
  * Structural mirror of `behaviors/dom/probe-encoder-support.ts`'s
@@ -69,7 +77,6 @@ export const AUDIO_TRACK_NAME = 'audio';
 export interface SetupTrackPublishersState {
   activeEncodings?: ActiveEncodingsFacts;
   endpoint?: PublishEndpoint | undefined;
-  publishError?: SessionPublishErrorFacts | undefined;
 }
 
 export interface SetupTrackPublishersContext {
@@ -93,17 +100,21 @@ function hasEncoding(encodings: ActiveEncodingsFacts | undefined): boolean {
 
 /**
  * One session's publisher cluster — the shared plumbing between the owner
- * effect (creates and tears it down with the session) and the
- * encoding-sync effect (adds media publishers as kinds appear).
+ * effect (creates and tears it down with the session), the encoding-sync
+ * effect (adds media publishers as kinds appear), and the binding-sync
+ * effect (mirrors subscription bindings into the actors).
  */
 interface PublisherCluster {
   session: MoqtPublishSession;
   namespace: string[];
-  parameters: MessageParameters;
   maxQueuedGroups?: number | undefined;
-  onError: (error: unknown) => void;
   /** Creation order; teardown quiesces in reverse. */
-  created: { handle: PublishedTrack; publisher: TrackPublisherActor }[];
+  created: {
+    handle: RegisteredTrack;
+    publisher: TrackPublisherActor;
+    /** Last binding sent to the publisher — dedupes the snapshot churn. */
+    boundAlias: number | undefined;
+  }[];
 }
 
 function addTrackPublisher(
@@ -112,19 +123,17 @@ function addTrackPublisher(
   groupPerFrame: boolean,
   slot: Signal<TrackPublisherActor | undefined>
 ): void {
-  const handle = cluster.session.publishTrack({
+  const handle = cluster.session.registerTrack({
     trackNamespace: cluster.namespace,
     trackName,
-    parameters: cluster.parameters,
   });
   const publisher = createTrackPublisherActor({
     openUniStream: () => cluster.session.openUniStream(),
-    trackAlias: handle.trackAlias,
     groupPerFrame,
+    replayLastGroupOnBind: trackName === CATALOG_TRACK_NAME,
     maxQueuedGroups: cluster.maxQueuedGroups,
-    onError: cluster.onError,
   });
-  cluster.created.push({ handle, publisher });
+  cluster.created.push({ handle, publisher, boundAlias: undefined });
   slot.set(publisher);
 }
 
@@ -136,7 +145,6 @@ function setupTrackPublishersSetup({
   state: {
     activeEncodings: ReadonlySignal<SetupTrackPublishersState['activeEncodings']>;
     endpoint: ReadonlySignal<SetupTrackPublishersState['endpoint']>;
-    publishError: Signal<SetupTrackPublishersState['publishError']>;
   };
   context: {
     publishSessionActor: ReadonlySignal<SetupTrackPublishersContext['publishSessionActor']>;
@@ -147,8 +155,9 @@ function setupTrackPublishersSetup({
   };
   config?: SetupTrackPublishersConfig;
 }): Reactor<SetupTrackPublishersFsmState | 'destroying' | 'destroyed'> {
-  // Written by the owner effect, tracked by the encoding-sync effect, so
-  // a session rebuild re-adds the media publishers the encodings call for.
+  // Written by the owner effect, tracked by the encoding-sync and
+  // binding-sync effects, so a session rebuild re-adds the media
+  // publishers the encodings call for and re-syncs their bindings.
   const cluster = signal<PublisherCluster | undefined>(undefined);
 
   return createMachineReactor<SetupTrackPublishersFsmState>({
@@ -159,7 +168,7 @@ function setupTrackPublishersSetup({
       if (!((status === 'ready' || status === 'live') && state.endpoint.get())) return 'preconditions-unmet';
       // First encoding brings the cluster up; after that it is latched on
       // the session — a source switch clears `activeEncodings` transiently
-      // (re-probe) and the PUBLISHed tracks must survive it. `peek`: our
+      // (re-probe) and the served tracks must survive it. `peek`: our
       // own effect writes the cluster.
       return hasEncoding(state.activeEncodings.get()) || peek(cluster) ? 'publishers-ready' : 'preconditions-unmet';
     },
@@ -181,15 +190,7 @@ function setupTrackPublishersSetup({
             const next: PublisherCluster = {
               session,
               namespace: endpoint.namespace,
-              parameters: actor.getAuthParameters(),
               maxQueuedGroups: config.maxQueuedGroups,
-              onError: (error: unknown) => {
-                state.publishError.set({
-                  code: 'transport',
-                  message: error instanceof Error ? error.message : 'Publishing a track stream failed.',
-                  cause: error,
-                });
-              },
               created: [],
             };
             // Catalog first — the subscription anchor every player joins on.
@@ -197,9 +198,9 @@ function setupTrackPublishersSetup({
             cluster.set(next);
 
             // Reverse creation order so frame routing quiesces media before
-            // the catalog track (the subscription anchor) announces done.
-            // The session behavior's close() drain keeps the transport open
-            // for a bounded window, so the PUBLISH_DONE written here reaches
+            // the catalog track (the subscription anchor) ends. The session
+            // behavior's close() drain keeps the transport open for a
+            // bounded window, so the subscription FINs written here reach
             // the peer even when this cleanup runs as part of session
             // teardown (see the composition-order note in the moq engine).
             return () => {
@@ -209,18 +210,13 @@ function setupTrackPublishersSetup({
               context.videoTrackPublisher.set(undefined);
               context.catalogTrackPublisher.set(undefined);
               for (const { handle, publisher } of [...next.created].reverse()) {
-                // Quiesce: 'end' FINs the open group, then PUBLISH_DONE
-                // reports the opened-stream count (draft-19 §10.11 counts
-                // data streams OPENED, including reset ones — not just the
-                // FINed groups), then destroy() force-ends whatever is left.
-                // The synchronous peek is race-free: an open still in
-                // flight can only resume on a later microtask, and by then
-                // destroy() has run, so that stream is aborted before its
-                // header — unattributable to the track and correctly
-                // outside the count it just reported.
+                // Quiesce: 'end' FINs the open group, then the track's
+                // live subscriptions get their clean stream FIN (the
+                // draft-19 track end — no trailing message; a relay
+                // aborts the track on any post-SUBSCRIBE_OK byte), then
+                // destroy() force-ends whatever is left.
                 publisher.send({ type: 'end' });
-                const streamCount = peek(publisher.snapshot).context.openedGroups;
-                handle.done(PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount, '');
+                handle.end();
                 publisher.destroy();
               }
             };
@@ -231,8 +227,8 @@ function setupTrackPublishersSetup({
           // Additive on purpose: absent encodings (a mid-switch re-probe,
           // or a screen share that hasn't started yet) change nothing, and
           // a kind that disappears keeps its publisher — ending the track
-          // mid-session would PUBLISH_DONE it for every subscriber. Media
-          // track order stays camera-video, then screen, then audio.
+          // mid-session would FIN it for every subscriber. Media track
+          // order stays camera-video, then screen, then audio.
           () => {
             const current = cluster.get();
             const encodings = state.activeEncodings.get();
@@ -247,6 +243,25 @@ function setupTrackPublishersSetup({
               addTrackPublisher(current, AUDIO_TRACK_NAME, true, context.audioTrackPublisher);
             }
           },
+
+          // Binding sync — tracked on the cluster + the session actor's
+          // snapshot; mirrors `trackBindings` (trackName → alias) into
+          // `bind`/`unbind` messages so each publisher writes data only
+          // while its track has a live subscription. The snapshot churns
+          // on unrelated counters too, so sends are deduped per publisher
+          // (`boundAlias` lives on the cluster entry and resets with it).
+          () => {
+            const current = cluster.get();
+            const actor = context.publishSessionActor.get();
+            if (!current || !actor) return;
+            const bindings = actor.snapshot.get().context.trackBindings;
+            for (const entry of current.created) {
+              const alias = bindings[entry.handle.trackName];
+              if (alias === entry.boundAlias) continue;
+              entry.boundAlias = alias;
+              entry.publisher.send(alias === undefined ? { type: 'unbind' } : { type: 'bind', trackAlias: alias });
+            }
+          },
         ],
       },
     },
@@ -254,7 +269,7 @@ function setupTrackPublishersSetup({
 }
 
 export const setupTrackPublishers = defineBehavior({
-  stateKeys: ['activeEncodings', 'endpoint', 'publishError'],
+  stateKeys: ['activeEncodings', 'endpoint'],
   contextKeys: [
     'publishSessionActor',
     'catalogTrackPublisher',
