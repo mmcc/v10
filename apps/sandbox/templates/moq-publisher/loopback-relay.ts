@@ -3,10 +3,19 @@
  * between the real publish engine and the real playback engine.
  *
  * One side accepts a `MoqPublishMedia` session through its
- * `connectTransport` seam: it answers the SETUP exchange, accepts the
- * advisory PUBLISH_NAMESPACE and the per-track PUBLISHes (catalog, video,
- * audio) with REQUEST_OK, and parses the publisher's subgroup data streams
- * into per-track object buffers (a small ring of the most recent groups).
+ * `connectTransport` seam and plays the relay half of announce-and-serve,
+ * mirroring moq-relay 0.14.7's pull-through ingest: it answers the SETUP
+ * exchange, solicits announces with a SUBSCRIBE_NAMESPACE for the empty
+ * prefix, and — as the in-page player side asks for tracks (catalog first,
+ * then the catalog's tracks) — opens one upstream SUBSCRIBE per track,
+ * routing the publisher's subgroup data streams by the
+ * SUBSCRIBE_OK-returned aliases into per-track object buffers (a small
+ * ring of the most recent groups). Pull-through works in both directions:
+ * when the last player interest in a track leaves, the upstream
+ * subscription is FINed (the clean unsubscribe — the publisher unbinds
+ * and stops sending), and a later subscribe pulls the track afresh with a
+ * new request ID. A proactive PUBLISH from an old client is refused with
+ * a request error, exactly like the real relay.
  * The other side serves `MoqMediaMixin` player sessions through their
  * `createMoqTransport` seam exactly like `spf-moq-player`'s loopback: SETUP,
  * SUBSCRIBE answered with SUBSCRIBE_OK, FETCH rejected (no history), and
@@ -35,15 +44,36 @@ const MESSAGE_TYPE = {
   SUBSCRIBE: 0x3,
   SUBSCRIBE_OK: 0x4,
   REQUEST_ERROR: 0x5,
-  PUBLISH_NAMESPACE: 0x6,
   REQUEST_OK: 0x7,
-  PUBLISH_DONE: 0xb,
+  NAMESPACE: 0x8,
+  NAMESPACE_DONE: 0xe,
   FETCH: 0x16,
   PUBLISH: 0x1d,
+  SUBSCRIBE_NAMESPACE: 0x50,
 } as const;
 
 /** REQUEST_ERROR code for "nothing published in that range" (§10.6.1). */
 const ERROR_INVALID_RANGE = 0x11;
+
+/** REQUEST_ERROR code moq-relay 0.14.7 answers proactive PUBLISH with. */
+const ERROR_PUBLISH_NOT_SUPPORTED = 400;
+
+/** Message parameter types the upstream SUBSCRIBE carries (§10.2). */
+const SUBSCRIBE_PARAMETER = {
+  FORWARD: 0x10,
+  SUBSCRIBER_PRIORITY: 0x20,
+  LOCATION_FILTER: 0x21,
+  GROUP_ORDER: 0x22,
+} as const;
+
+/** Location Filter type "largest-object" (§5.1.2) — join at the live edge. */
+const LOCATION_FILTER_LARGEST_OBJECT = 0x2;
+
+/** GROUP_ORDER wire value for descending delivery (§10.2). */
+const GROUP_ORDER_DESCENDING = 0x2;
+
+/** Track Property carrying the track's timestamp units-per-second (§10.8). */
+const TRACK_PROPERTY_TIMESCALE = 0x08;
 
 /**
  * SUBGROUP_HEADER stream type used toward the *player*: subgroup-id mode
@@ -233,6 +263,28 @@ function frame(type: number, body: Uint8Array): Uint8Array {
   return new Writer().varint(type).u16(body.length).bytes(body).toBytes();
 }
 
+/** Read one framed control message (§10.1) off a pull-based stream reader. */
+async function readControlFrame(reader: StreamByteReader): Promise<{ type: number; body: Uint8Array }> {
+  const type = await reader.readVarint();
+  const high = await reader.readUint8();
+  const low = await reader.readUint8();
+  return { type, body: await reader.readBytes(high * 256 + low) };
+}
+
+/** Namespace tuple (§10.7): varint field count + length-prefixed UTF-8 fields. */
+function writeNamespaceTuple(writer: Writer, namespace: string[]): Writer {
+  writer.varint(namespace.length);
+  for (const field of namespace) writer.lengthPrefixed(new TextEncoder().encode(field));
+  return writer;
+}
+
+function readNamespaceTuple(reader: Reader): string[] {
+  const count = reader.varint();
+  const namespace: string[] = [];
+  for (let i = 0; i < count; i++) namespace.push(reader.string());
+  return namespace;
+}
+
 function encodeSetup(): Uint8Array {
   // Options-only, and we send none. A Key-Value-Pair block is bounded by its
   // enclosing length rather than counted (§10.2), so "no options" is an empty
@@ -246,9 +298,38 @@ function encodeSubscribeOk(trackAlias: number): Uint8Array {
   return frame(MESSAGE_TYPE.SUBSCRIBE_OK, new Writer().varint(trackAlias).varint(0).toBytes());
 }
 
-function encodeRequestOk(): Uint8Array {
-  // Message parameters (count-prefixed, 0) + empty track-properties block.
-  return frame(MESSAGE_TYPE.REQUEST_OK, new Writer().varint(0).toBytes());
+/**
+ * SUBSCRIBE_NAMESPACE toward the publisher (§10.18): the empty prefix
+ * solicits every namespace the publisher will announce — the same
+ * solicitation moq-relay 0.14.7 opens right after SETUP.
+ */
+function encodeSubscribeNamespace(requestId: number): Uint8Array {
+  // Request ID + namespace prefix tuple (count 0) + parameters (count 0).
+  return frame(MESSAGE_TYPE.SUBSCRIBE_NAMESPACE, new Writer().varint(requestId).varint(0).varint(0).toBytes());
+}
+
+/**
+ * SUBSCRIBE toward the publisher (§10.7) — the exact request moq-relay
+ * 0.14.7 sends when pulling a track: forward on, subscriber priority 0,
+ * join at the largest object, descending group order. Message parameters
+ * are count-prefixed with delta-encoded types and per-type value
+ * encodings (§10.2), so the byte after each delta is what that type says
+ * it is — a raw uint8 for FORWARD / SUBSCRIBER_PRIORITY / GROUP_ORDER, a
+ * length-prefixed filter for LOCATION_FILTER.
+ */
+function encodeSubscribe(requestId: number, namespace: string[], trackName: string): Uint8Array {
+  const body = new Writer().varint(requestId);
+  writeNamespaceTuple(body, namespace);
+  body.lengthPrefixed(new TextEncoder().encode(trackName));
+  body.varint(4);
+  body.varint(SUBSCRIBE_PARAMETER.FORWARD).u8(1);
+  body.varint(SUBSCRIBE_PARAMETER.SUBSCRIBER_PRIORITY - SUBSCRIBE_PARAMETER.FORWARD).u8(0);
+  body
+    .varint(SUBSCRIBE_PARAMETER.LOCATION_FILTER - SUBSCRIBE_PARAMETER.SUBSCRIBER_PRIORITY)
+    .varint(1)
+    .varint(LOCATION_FILTER_LARGEST_OBJECT);
+  body.varint(SUBSCRIBE_PARAMETER.GROUP_ORDER - SUBSCRIBE_PARAMETER.LOCATION_FILTER).u8(GROUP_ORDER_DESCENDING);
+  return frame(MESSAGE_TYPE.SUBSCRIBE, body.toBytes());
 }
 
 function encodeRequestError(errorCode: number, reason: string): Uint8Array {
@@ -312,7 +393,7 @@ interface TrackBuffer {
 
 export interface PublisherLoopbackRelayStats {
   publisherState: 'none' | 'connected' | 'closed';
-  /** Track names the publisher has PUBLISHed this session. */
+  /** Track names the relay holds a live upstream subscription for. */
   publishedTracks: string[];
   /** Player-subscribed track names, in subscribe order. */
   subscriptions: string[];
@@ -404,8 +485,23 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
   };
 
   // ==========================================================================
-  // Publisher side — accepts the publish engine's session
+  // Publisher side — solicits announces, subscribes on player interest
   // ==========================================================================
+
+  /**
+   * The live publisher session's "pull this track upstream" entry point,
+   * set while a publisher transport is connected. Announce-and-serve
+   * means player interest is what makes data flow, so the player side
+   * calls this on every SUBSCRIBE it accepts.
+   */
+  let requestUpstreamTrack: ((track: TrackBuffer) => void) | undefined;
+
+  /**
+   * Its counterpart: withdraws the upstream subscription when the last
+   * player interest in a track leaves, so the publisher unbinds and
+   * stops encoding bytes into a track nobody watches.
+   */
+  let releaseUpstreamTrack: ((track: TrackBuffer) => void) | undefined;
 
   const connectPublisher: ConnectPublishTransport = (endpoint) => {
     // Per-session state, so a re-publish starts clean (fresh aliases, and
@@ -417,9 +513,56 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
 
     let sessionOpen = true;
     let uniController: ReadableStreamDefaultController<ReadableStream<Uint8Array>> | undefined;
-    let bidiController: ReadableStreamDefaultController<never> | undefined;
+    let bidiController:
+      | ReadableStreamDefaultController<{ readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> }>
+      | undefined;
     let controlWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
     const openReaders = new Set<StreamByteReader>();
+    /** Writers of relay-initiated request streams, aborted on close. */
+    const requestWriters = new Set<WritableStreamDefaultWriter<Uint8Array>>();
+
+    /** Request IDs are odd — the server-side numbering; SUBSCRIBE_NAMESPACE takes 1. */
+    let nextRequestId = 1;
+    const takeRequestId = (): number => {
+      const requestId = nextRequestId;
+      nextRequestId += 2;
+      return requestId;
+    };
+
+    /** From the publisher's NAMESPACE entry — upstream SUBSCRIBEs name it. */
+    let announcedNamespace: string[] | undefined;
+    /**
+     * Live upstream subscriptions, at most one per track, keyed on the
+     * live handle: `release()` FINs the request stream (the clean
+     * unsubscribe), and the entry leaves the map as the routine unwinds —
+     * so a later player subscribe opens a fresh SUBSCRIBE.
+     */
+    const upstreamByTrack = new Map<TrackBuffer, { released: boolean; release(): void }>();
+
+    /**
+     * A subgroup data stream can beat the SUBSCRIBE_OK parse that binds
+     * its alias by a microtask (both ride in-memory TransformStreams), so
+     * an unknown alias waits for its binding instead of failing. Aliases
+     * only ever come from the publisher's own SUBSCRIBE_OKs, and
+     * `close()` flushes the waiters with `undefined`, so no wait leaks.
+     */
+    const aliasWaiters = new Map<number, ((track: TrackBuffer | undefined) => void)[]>();
+
+    const bindAlias = (trackAlias: number, track: TrackBuffer): void => {
+      aliasToTrack.set(trackAlias, track);
+      for (const resolve of aliasWaiters.get(trackAlias) ?? []) resolve(track);
+      aliasWaiters.delete(trackAlias);
+    };
+
+    const trackForAlias = (trackAlias: number): Promise<TrackBuffer | undefined> => {
+      const track = aliasToTrack.get(trackAlias);
+      if (track || !sessionOpen) return Promise.resolve(track);
+      return new Promise((resolve) => {
+        const waiters = aliasWaiters.get(trackAlias) ?? [];
+        waiters.push(resolve);
+        aliasWaiters.set(trackAlias, waiters);
+      });
+    };
 
     let resolveClosed!: () => void;
     const closed = new Promise<void>((resolve) => {
@@ -438,6 +581,179 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       uniController.enqueue(pipe.readable);
     };
 
+    /**
+     * Open a relay-initiated request stream toward the publisher — the
+     * carrier for the SUBSCRIBE_NAMESPACE solicitation and each upstream
+     * SUBSCRIBE (the publisher session parks an accept loop on
+     * `incomingBidirectionalStreams`).
+     */
+    const openRequestStream = ():
+      | { writer: WritableStreamDefaultWriter<Uint8Array>; reader: StreamByteReader }
+      | undefined => {
+      if (!sessionOpen || destroyed || !bidiController) return undefined;
+      const relayToPublisher = new TransformStream<Uint8Array, Uint8Array>();
+      const publisherToRelay = new TransformStream<Uint8Array, Uint8Array>();
+      bidiController.enqueue({ readable: relayToPublisher.readable, writable: publisherToRelay.writable });
+      return { writer: relayToPublisher.writable.getWriter(), reader: new StreamByteReader(publisherToRelay.readable) };
+    };
+
+    /**
+     * One live upstream subscription per track: SUBSCRIBE, bind the
+     * SUBSCRIBE_OK's alias for the data-stream router, then hold the
+     * stream open. It ends by FIN alone (no PUBLISH_DONE exists in this
+     * flow) — the publisher's, ending the track for good, or our own via
+     * `handle.release()`, withdrawing a track no player watches.
+     */
+    const runUpstreamSubscription = async (
+      track: TrackBuffer,
+      namespace: string[],
+      stream: { writer: WritableStreamDefaultWriter<Uint8Array>; reader: StreamByteReader },
+      handle: { released: boolean; release(): void }
+    ): Promise<void> => {
+      const { writer, reader } = stream;
+      openReaders.add(reader);
+      requestWriters.add(writer);
+      let trackAlias: number | undefined;
+      try {
+        await writer.write(encodeSubscribe(takeRequestId(), namespace, track.name));
+        const response = await readControlFrame(reader);
+        if (response.type !== MESSAGE_TYPE.SUBSCRIBE_OK) {
+          if (response.type === MESSAGE_TYPE.REQUEST_ERROR) {
+            const fields = new Reader(response.body);
+            const errorCode = fields.varint();
+            fields.varint(); // retry interval
+            log(`upstream SUBSCRIBE ${track.name} rejected (code ${errorCode}: ${fields.string()})`);
+          } else {
+            log(`unexpected 0x${response.type.toString(16)} answering SUBSCRIBE ${track.name}`);
+          }
+          return;
+        }
+        // SUBSCRIBE_OK (§10.8): track alias + message parameters
+        // (count-prefixed; the publish engine sends none — per-type
+        // encodings make a non-empty block unskippable) + track-property
+        // KVPs to the end of the body (delta-encoded types; even type →
+        // varint value, odd → length-prefixed bytes). TIMESCALE is the
+        // one property the engine declares (LOC stamps in microseconds).
+        const fields = new Reader(response.body);
+        trackAlias = fields.varint();
+        let timescale: number | undefined;
+        if (fields.varint() === 0) {
+          let previousType = 0;
+          while (fields.offset < response.body.length) {
+            const propertyType = previousType + fields.varint();
+            previousType = propertyType;
+            const value = propertyType % 2 === 0 ? fields.varint() : fields.slice(fields.varint());
+            if (propertyType === TRACK_PROPERTY_TIMESCALE && typeof value === 'number') timescale = value;
+          }
+        }
+        bindAlias(trackAlias, track);
+        stats.publishedTracks.push(track.name);
+        log(
+          `upstream SUBSCRIBE ${track.name} → alias ${trackAlias}${timescale === undefined ? '' : ` (timescale ${timescale})`}`
+        );
+        // Hold until a FIN — the publisher's, or our own release.
+        while (!(await reader.atEnd())) await reader.readUint8();
+        log(
+          handle.released
+            ? `upstream unsubscribe ${track.name} — no player interest`
+            : `upstream track ${track.name} ended`
+        );
+      } catch {
+        // Stream reset or session teardown — the close path owns cleanup.
+      } finally {
+        openReaders.delete(reader);
+        requestWriters.delete(writer);
+        writer.close().catch(() => {});
+        if (upstreamByTrack.get(track) === handle) upstreamByTrack.delete(track);
+        if (trackAlias !== undefined) {
+          aliasToTrack.delete(trackAlias);
+          // A straggler data stream may be parked on the dead alias.
+          for (const resolve of aliasWaiters.get(trackAlias) ?? []) resolve(undefined);
+          aliasWaiters.delete(trackAlias);
+          const index = stats.publishedTracks.indexOf(track.name);
+          if (index >= 0) stats.publishedTracks.splice(index, 1);
+        }
+        // A player that subscribed during the release window hit the
+        // released handle's dedupe and was dropped — re-issue its pull now
+        // that the old handle is gone. Only on the release path: after a
+        // publisher-side FIN the track is done, and re-subscribing a
+        // still-watched track would loop through DOES_NOT_EXIST forever.
+        if (handle.released && sessionOpen && !destroyed && track.subscribers.size > 0) {
+          subscribeUpstream(track);
+        }
+      }
+    };
+
+    const subscribeUpstream = (track: TrackBuffer): void => {
+      if (!sessionOpen || destroyed || announcedNamespace === undefined) return;
+      if (upstreamByTrack.has(track)) return;
+      const stream = openRequestStream();
+      if (!stream) return;
+      const handle = {
+        released: false,
+        release(): void {
+          if (handle.released) return;
+          handle.released = true;
+          // FIN with no trailing bytes — the clean unsubscribe; the hold
+          // loop unwinds through the reader cancel and cleans up.
+          stream.writer.close().catch(() => {});
+          stream.reader.cancel();
+        },
+      };
+      upstreamByTrack.set(track, handle);
+      void runUpstreamSubscription(track, announcedNamespace, stream, handle);
+    };
+
+    /** Withdraw the upstream pull once no player watches the track. */
+    const releaseUpstream = (track: TrackBuffer): void => {
+      upstreamByTrack.get(track)?.release();
+    };
+
+    /**
+     * Solicit announces: SUBSCRIBE_NAMESPACE for the empty prefix, then
+     * hold the stream for the session's lifetime — REQUEST_OK first, then
+     * NAMESPACE / NAMESPACE_DONE entries (suffix-relative to the prefix,
+     * so with an empty prefix each announced namespace arrives whole).
+     */
+    const runNamespaceSolicitation = async (): Promise<void> => {
+      const stream = openRequestStream();
+      if (!stream) return;
+      const { writer, reader } = stream;
+      openReaders.add(reader);
+      requestWriters.add(writer);
+      try {
+        await writer.write(encodeSubscribeNamespace(takeRequestId()));
+        const response = await readControlFrame(reader);
+        if (response.type !== MESSAGE_TYPE.REQUEST_OK) {
+          log(`SUBSCRIBE_NAMESPACE answered with 0x${response.type.toString(16)}`);
+          return;
+        }
+        while (!(await reader.atEnd())) {
+          const message = await readControlFrame(reader);
+          if (message.type === MESSAGE_TYPE.NAMESPACE) {
+            announcedNamespace = readNamespaceTuple(new Reader(message.body));
+            log(`publisher NAMESPACE ${announcedNamespace.join('/')}`);
+            // Players may already be waiting (a re-publish under a live
+            // player) — pull every track that has a subscriber.
+            for (const track of tracks.values()) {
+              if (track.subscribers.size > 0) subscribeUpstream(track);
+            }
+          } else if (message.type === MESSAGE_TYPE.NAMESPACE_DONE) {
+            log(`publisher NAMESPACE_DONE ${readNamespaceTuple(new Reader(message.body)).join('/')}`);
+            announcedNamespace = undefined;
+          } else {
+            log(`unexpected 0x${message.type.toString(16)} on the namespace stream`);
+          }
+        }
+      } catch {
+        // Stream reset or session teardown — the close path owns cleanup.
+      } finally {
+        openReaders.delete(reader);
+        requestWriters.delete(writer);
+        writer.close().catch(() => {});
+      }
+    };
+
     /** Parse one subgroup data stream (subgroup-writer's shape, §11.4.2). */
     const handleSubgroupStream = async (reader: StreamByteReader, type: number): Promise<void> => {
       const hasProperties = (type & SUBGROUP_FLAG.PROPERTIES) !== 0;
@@ -447,9 +763,9 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       if (explicitSubgroupId) await reader.readVarint();
       if ((type & SUBGROUP_FLAG.DEFAULT_PRIORITY) === 0) await reader.readUint8();
 
-      const track = aliasToTrack.get(trackAlias);
+      const track = await trackForAlias(trackAlias);
       if (!track) {
-        log(`data stream for unknown track alias ${trackAlias}`);
+        // Only reachable at session close, when the waiters flush empty.
         reader.cancel();
         return;
       }
@@ -482,8 +798,9 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       try {
         const streamType = await reader.readVarint();
         if (streamType === MESSAGE_TYPE.SETUP) {
-          // The publisher's control stream: SETUP now, maybe GOAWAY at
-          // close. Nothing needs answering here — drain until it ends.
+          // The publisher's control stream: SETUP and then silence (the
+          // publish engine never sends GOAWAY — the known relay lineage
+          // treats a client GOAWAY as session-fatal). Drain until it ends.
           log('publisher SETUP received');
           while (!(await reader.atEnd())) await reader.readUint8();
         } else if (isSubgroupHeaderType(streamType)) {
@@ -502,66 +819,34 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       }
     };
 
-    /** PUBLISH / PUBLISH_NAMESPACE request streams (publisher-initiated). */
+    /**
+     * Publisher-initiated request streams. Announce-and-serve means the
+     * relay initiates everything, so nothing arrives here from the
+     * current engine — a proactive-PUBLISH client from before the rework
+     * is the only sender. Mirror moq-relay 0.14.7: reject the PUBLISH
+     * with a request error and finish the stream.
+     */
     const handlePublisherRequestStream = async (stream: {
       readable: ReadableStream<Uint8Array>;
       writable: WritableStream<Uint8Array>;
     }): Promise<void> => {
       const writer = stream.writable.getWriter();
-      const reader = stream.readable.getReader();
-      let buffer = new Uint8Array(0);
-
-      /** Accumulate until a whole framed control message is available. */
-      const takeMessage = (): { type: number; body: Uint8Array } | null => {
-        if (buffer.length < 3) return null;
-        const header = new Reader(buffer);
-        const type = header.varint();
-        const bodyStart = header.offset + 2;
-        if (buffer.length < bodyStart) return null;
-        const length = buffer[header.offset]! * 256 + buffer[header.offset + 1]!;
-        const total = bodyStart + length;
-        if (buffer.length < total) return null;
-        const body = buffer.subarray(bodyStart, total);
-        buffer = buffer.slice(total);
-        return { type, body };
-      };
-
+      const reader = new StreamByteReader(stream.readable);
+      openReaders.add(reader);
       try {
-        while (true) {
-          const message = takeMessage();
-          if (message) {
-            if (message.type === MESSAGE_TYPE.PUBLISH) {
-              const fields = new Reader(message.body);
-              fields.varint(); // request id — correlation is per-stream here
-              const namespaceFields = fields.varint();
-              for (let i = 0; i < namespaceFields; i++) fields.string();
-              const trackName = fields.string();
-              const trackAlias = fields.varint();
-              aliasToTrack.set(trackAlias, trackFor(trackName));
-              stats.publishedTracks.push(trackName);
-              await writer.write(encodeRequestOk());
-              log(`publisher PUBLISH ${trackName} → alias ${trackAlias}`);
-            } else if (message.type === MESSAGE_TYPE.PUBLISH_NAMESPACE) {
-              await writer.write(encodeRequestOk());
-              log('publisher PUBLISH_NAMESPACE accepted');
-            } else if (message.type === MESSAGE_TYPE.PUBLISH_DONE) {
-              log('publisher PUBLISH_DONE');
-            }
-            // Everything else (REQUEST_UPDATE, GOAWAY) is ignorable here.
-            continue;
-          }
-
-          const { value, done } = await reader.read();
-          if (done) break;
-          const merged = new Uint8Array(buffer.length + value.length);
-          merged.set(buffer);
-          merged.set(value, buffer.length);
-          buffer = merged;
+        const message = await readControlFrame(reader);
+        if (message.type === MESSAGE_TYPE.PUBLISH) {
+          await writer.write(encodeRequestError(ERROR_PUBLISH_NOT_SUPPORTED, 'PUBLISH is not supported'));
+          log('publisher PUBLISH rejected — announce-and-serve only');
+        } else {
+          log(`unexpected publisher request 0x${message.type.toString(16)}`);
         }
       } catch {
-        // Aborted request stream — same teardown as a graceful end.
+        // Aborted request stream — nothing left to answer.
       } finally {
+        openReaders.delete(reader);
         writer.close().catch(() => {});
+        reader.cancel();
       }
     };
 
@@ -569,9 +854,20 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       if (!sessionOpen) return;
       sessionOpen = false;
       closeTransports.delete(close);
+      if (requestUpstreamTrack === subscribeUpstream) requestUpstreamTrack = undefined;
+      if (releaseUpstreamTrack === releaseUpstream) releaseUpstreamTrack = undefined;
       stats.publisherState = 'closed';
+      // Release any subgroup handlers still parked on an alias binding.
+      for (const waiters of aliasWaiters.values()) {
+        for (const resolve of waiters) resolve(undefined);
+      }
+      aliasWaiters.clear();
       for (const reader of [...openReaders]) reader.cancel();
       openReaders.clear();
+      // Abort (not close): a request writer may have a write parked on a
+      // stream the dying session will never read.
+      for (const writer of [...requestWriters]) writer.abort().catch(() => {});
+      requestWriters.clear();
       controlWriter?.close().catch(() => {});
       controlWriter = undefined;
       for (const controller of [uniController, bidiController]) {
@@ -594,10 +890,13 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           uniController = controller;
         },
       }),
-      // The relay never subscribes upstream (PUBLISH pushes data
-      // unconditionally), but the session parks a reader here, so the
-      // controller must be retained to release that accept loop on close.
-      incomingBidirectionalStreams: new ReadableStream<never>({
+      // The relay's own requests toward the publisher ride here: the
+      // SUBSCRIBE_NAMESPACE solicitation right after SETUP, then one
+      // SUBSCRIBE per player-wanted track (`openRequestStream`).
+      incomingBidirectionalStreams: new ReadableStream<{
+        readable: ReadableStream<Uint8Array>;
+        writable: WritableStream<Uint8Array>;
+      }>({
         start(controller) {
           bidiController = controller;
         },
@@ -618,8 +917,14 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
     };
 
     log(`publisher transport connected (namespace ${endpoint.namespace.join('/') || '—'})`);
-    // Server SETUP arrives right after connect, on its own control stream.
-    queueMicrotask(sendServerSetup);
+    requestUpstreamTrack = subscribeUpstream;
+    releaseUpstreamTrack = releaseUpstream;
+    // Server SETUP right after connect on its own control stream, then the
+    // announce solicitation — the order the real relay opens them.
+    queueMicrotask(() => {
+      sendServerSetup();
+      void runNamespaceSolicitation();
+    });
 
     return { transport, ready: Promise.resolve() };
   };
@@ -706,9 +1011,12 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         void writer.write(encodeSubscribeOk(trackAlias));
 
         // The track may not exist yet (player subscribed before the
-        // publisher went live) — the subscription waits and objects flow
-        // once the publisher PUBLISHes it.
+        // publisher went live) — the subscription waits, and the announce
+        // handler pulls every subscribed track once the namespace lands.
         const track = trackFor(trackName);
+        // Announce-and-serve: player interest is what makes the relay
+        // SUBSCRIBE upstream (catalog first, then the catalog's tracks).
+        requestUpstreamTrack?.(track);
         subscription = {
           trackAlias,
           deliver: (object) =>
@@ -759,6 +1067,9 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           const index = stats.subscriptions.indexOf(subscribedTrack.name);
           if (index >= 0) stats.subscriptions.splice(index, 1);
           log(`player unsubscribe ${subscribedTrack.name}`);
+          // Pull-through: the last player leaving withdraws the upstream
+          // subscription; a later subscribe pulls the track afresh.
+          if (subscribedTrack.subscribers.size === 0) releaseUpstreamTrack?.(subscribedTrack);
         }
         writer.close().catch(() => {});
       }
