@@ -42,7 +42,10 @@
  * actor reports that as a terminal snapshot status (`'ended'`/`'error'`);
  * this behavior destroys the dead actor(s) and re-subscribes the same
  * selection at the live edge (the initial-join filter, exactly the
- * suspend/rejoin path) after a capped backoff (`subscribeRetry`).
+ * suspend/rejoin path) after a capped backoff (`subscribeRetry`). An
+ * `'ended'` subscription first plays out its buffered tail — late
+ * subgroups keep arriving after PUBLISH_DONE by design — where an
+ * `'error'`/stall death has nothing worth draining.
  * Replacing the actor rides the renderers' existing swap path — decoder
  * reconfigure, clock re-anchor — so a broadcaster restart with reset
  * timestamps re-anchors instead of stalling.
@@ -369,12 +372,24 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             }
 
             if (current && isDead(currentStatus)) {
-              // The current subscription is dead; its buffer tail is all it
-              // will ever deliver. Drop it (and any in-flight handoff —
-              // promotion gates on a playout clock this dead track would
-              // stall) and rejoin the selection at the live edge once the
-              // backoff elapses. No fresh subscriber is created before the
-              // timer fires: the guard below holds creation while it runs.
+              // PUBLISH_DONE keeps delivering: the protocol layer holds the
+              // alias route open after DONE precisely so late subgroups
+              // still arrive, and the renderers keep draining the buffer.
+              // Destroying now would cut the tail the viewer already
+              // received — an ended broadcast's last seconds — so recovery
+              // waits for the drain. (Tracked frameCount read: arrivals and
+              // drains re-fire this effect only while an ended tail is
+              // playing out.) 'error'/stall deaths have no tail worth
+              // keeping and take the immediate path.
+              if (currentStatus === 'ended' && current.snapshot.get().context.frameCount > 0) {
+                return;
+              }
+              // The subscription is dead and drained; whatever it buffered
+              // has played. Drop it (and any in-flight handoff — promotion
+              // gates on a playout clock this dead track would stall) and
+              // rejoin the selection at the live edge once the backoff
+              // elapses. No fresh subscriber is created before the timer
+              // fires: the guard below holds creation while it runs.
               if (retryTimer === undefined && armRejoinTimer(selectedId, serverRetryIntervalMs(current))) {
                 clearSlots();
               }

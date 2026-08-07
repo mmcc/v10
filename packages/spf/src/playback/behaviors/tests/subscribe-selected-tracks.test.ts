@@ -70,6 +70,8 @@ interface FakeSubscriber extends TrackSubscriberActor {
   becomeDecodable(oldestTimestampUs?: number): void;
   /** Simulate SUBSCRIBE_OK — the subscription reached the relay. */
   activate(): void;
+  /** Simulate the jitter buffer holding `frameCount` frames. */
+  buffer(frameCount: number): void;
   /**
    * Simulate the subscription dying: the publisher ended it (`'ended'`) or
    * the request failed / the stall watchdog gave up (`'error'`, optionally
@@ -105,6 +107,9 @@ function createFakeSubscriberFactory({
       },
       activate() {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status: 'active' } });
+      },
+      buffer(frameCount: number) {
+        snapshot.set({ value: 'active', context: { ...snapshot.get().context, frameCount } });
       },
       die(status: 'ended' | 'error', error?: unknown) {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status, error } });
@@ -598,6 +603,37 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(1);
       expect(created[0]!.destroyed).toBe(false);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+
+    it('plays out the buffered tail before rejoining after PUBLISH_DONE', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      created[0]!.buffer(5);
+      created[0]!.die('ended');
+
+      // Late subgroups keep arriving after PUBLISH_DONE and the renderers
+      // keep draining — the ended subscriber holds its slot until empty.
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created[0]!.destroyed).toBe(false);
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+      expect(created).toHaveLength(1);
+
+      // Drained: now the normal backoff + live-edge rejoin takes over.
+      created[0]!.buffer(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[0]!.destroyed).toBe(true);
+      expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({ track: { id: HD.id } });
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
 
       reactor.destroy();
     });
