@@ -463,10 +463,26 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     if (track.done) return;
     track.done = true;
     const writes: Promise<void>[] = [...track.pendingFins];
+    let hadReported = false;
     for (const subscriber of track.subscribers) {
-      if (subscriber.finished) continue;
-      subscriber.finished = true;
-      writes.push(subscriber.fin().catch(() => {}));
+      if (!subscriber.finished) {
+        subscriber.finished = true;
+        writes.push(subscriber.fin().catch(() => {}));
+      }
+      // The local end is authoritative: report each live subscription
+      // ended NOW rather than when the peer eventually closes its
+      // request direction — otherwise `subscriberCount` and the binding
+      // stay live (and publishers keep opening data streams) until the
+      // peer notices the FIN. Clearing `reported` keeps the read loop's
+      // own end notification paired: it fires on the same flag.
+      if (subscriber.reported) {
+        subscriber.reported = false;
+        hadReported = true;
+        if (!this.#destroyed) this.#callbacks.onSubscribeEnd?.({ requestId: subscriber.requestId });
+      }
+    }
+    if (hadReported && !this.#destroyed) {
+      this.#callbacks.onTrackBinding?.({ trackName: track.trackName, trackAlias: undefined });
     }
     track.doneFlushed = Promise.all(writes).then(() => {});
   }

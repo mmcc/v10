@@ -309,7 +309,12 @@ describe('createMoqtPublishSession', () => {
   });
 
   it('ends a track by FINing its subscription streams with no trailing message', async () => {
-    const { pair, session, subscriber } = makePublishHarness();
+    const endedRequests: number[] = [];
+    const bindings: (number | undefined)[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onSubscribeEnd: ({ requestId }) => endedRequests.push(requestId),
+      onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
+    });
     await session.ready;
     const track = session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
@@ -319,6 +324,11 @@ describe('createMoqtPublishSession', () => {
     });
 
     track.end();
+    // The local end is authoritative: the subscription is reported ended
+    // and the binding cleared immediately — not when the peer eventually
+    // closes its request direction.
+    expect(endedRequests).toEqual([21]);
+    expect(bindings.at(-1)).toBeUndefined();
     await vi.waitFor(() => {
       expect(subscribe.ended()).toBe(true);
     });
@@ -326,6 +336,11 @@ describe('createMoqtPublishSession', () => {
     // SUBSCRIBE_OK — the old PUBLISH_DONE — makes moq-lite-rs abort the
     // track for every downstream viewer instead of finishing it.
     expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+
+    // The peer closing its side afterwards must not double-report.
+    void subscribe.fin();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(endedRequests).toEqual([21]);
     session.destroy();
     subscriber.destroy();
   });
@@ -500,8 +515,12 @@ describe('createMoqtPublishSession', () => {
       expect(bindings.at(-1)).toBeUndefined();
     });
     // Each accepted update is acknowledged — the subscribe driver treats
-    // REQUEST_OK as the update's completion.
-    expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok', 'request-ok']);
+    // REQUEST_OK as the update's completion. (The binding update above is
+    // synchronous server-side while the ack rides the transport, so this
+    // must wait too.)
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok', 'request-ok']);
+    });
     session.destroy();
     subscriber.destroy();
   });
@@ -715,7 +734,6 @@ describe('createMoqtPublishSession', () => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
 
-    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     // Publishers start unbound — nothing may hit the wire until the peer

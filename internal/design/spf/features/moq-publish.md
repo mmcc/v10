@@ -268,7 +268,7 @@ publisher initiates no requests, so there is no response to bound.
   announce-loss → `onAnnounceEnded`, NAMESPACE_DONE + no-GOAWAY close)
   and the serve half (alias = request ID, TIMESCALE declaration,
   newest-subscription binding with clean replacement FINs, bare-FIN
-  track end) through `publish/tests/helpers/raw-peer.ts`, the relay's
+  track end) through `network/moqt/tests/helpers/raw-peer.ts`, the relay's
   side of the flow the subscribe driver does not initiate.
 - **Full pipeline** —
   `publish/engines/moq/tests/publish-transport.test.ts`: real capture

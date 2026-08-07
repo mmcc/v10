@@ -22,6 +22,12 @@ export interface RawRequest {
   received: ControlMessage[];
   /** True once the publisher FINed (or reset) its side. */
   ended: () => boolean;
+  /**
+   * The decode/stream error that ended the read loop, if any — the
+   * helper exists for byte-precise assertions, so a malformed frame must
+   * surface here instead of masquerading as a clean FIN.
+   */
+  failure: () => unknown;
   /** Write a follow-up frame on the request stream (e.g. a GOAWAY). */
   send: (bytes: Uint8Array) => Promise<void>;
   /** FIN the peer's side (a relay withdrawing the request). */
@@ -34,6 +40,7 @@ export async function openRawRequest(server: MoqtTransport, message: Uint8Array)
   await writer.write(message);
   const received: ControlMessage[] = [];
   let ended = false;
+  let failure: unknown;
   void (async () => {
     const deframer = new ControlMessageDeframer();
     const reader = stream.readable.getReader();
@@ -46,13 +53,15 @@ export async function openRawRequest(server: MoqtTransport, message: Uint8Array)
     () => {
       ended = true;
     },
-    () => {
+    (error) => {
       ended = true;
+      failure = error;
     }
   );
   return {
     received,
     ended: () => ended,
+    failure: () => failure,
     send: (bytes) => writer.write(bytes).catch(() => {}),
     fin: () => writer.close().catch(() => {}),
   };

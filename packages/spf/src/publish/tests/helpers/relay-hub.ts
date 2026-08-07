@@ -292,8 +292,8 @@ export function createRelayHub(): RelayHub {
               aliasToTrack.set(message.trackAlias, track);
             } else if (message.kind === 'request-error') {
               // DOES_NOT_EXIST usually means the demand raced the
-              // publisher's registerTrack — retry while the demand stands.
-              upstreamTracks.delete(trackName);
+              // publisher's registerTrack — retry while the demand stands
+              // (the `finally` below frees the dedupe slot first).
               if (demand.has(trackName) && !destroyed && !connectionClosed) {
                 setTimeout(() => subscribeUpstream(trackName), SUBSCRIBE_RETRY_DELAY_MS);
               }
@@ -308,6 +308,11 @@ export function createRelayHub(): RelayHub {
         } catch {
           // Reset or transport teardown — not a clean track end.
         } finally {
+          // The stream ended one way or another — free the dedupe slot,
+          // so `has()` only ever guards a live (or in-flight) upstream
+          // subscription and later demand can re-pull a track the
+          // publisher ended and re-registered in the same session.
+          upstreamTracks.delete(trackName);
           writer.close().catch(() => {});
         }
       })();
