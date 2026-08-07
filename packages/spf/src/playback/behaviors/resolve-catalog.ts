@@ -202,6 +202,26 @@ function setupResolveCatalog({
           };
 
           /**
+           * Terminal stop: after this, nothing of the current attempt may
+           * write `state.presentation` until the state re-enters.
+           * Cancelling the handles alone is not that — the settle timer's
+           * callback never checks `isCurrent` and would still drain
+           * buffered objects, and a cancel can itself surface in-flight
+           * onEnd/onReset. So the attempt token is bumped (invalidating
+           * every handler that does check), the timer disarmed, and the
+           * buffer discarded before the handles go.
+           */
+          const stopCatalog = (): void => {
+            attempt++;
+            clearTimeout(settleTimer);
+            settleTimer = undefined;
+            bufferedLive.length = 0;
+            fetchSettled = true;
+            fetchHandle?.cancel();
+            subscription?.cancel();
+          };
+
+          /**
            * Recover the catalog subscription: after the backoff (raised to
            * a server-stated Retry Interval when one is given), tear the
            * dead attempt down and run `start()` again with fresh auth
@@ -298,9 +318,9 @@ function setupResolveCatalog({
                     // Terminal: freeze the state — a subscription left open
                     // keeps delivering late objects (and the joining fetch
                     // its replay) into a presentation we just declared done
-                    // updating.
-                    fetchHandle?.cancel();
-                    subscription?.cancel();
+                    // updating. See `stopCatalog` for why cancelling the
+                    // handles alone is not enough.
+                    stopCatalog();
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog track ended with a non-retryable status:', done);
                     return;
@@ -353,7 +373,7 @@ function setupResolveCatalog({
                   // stop the joining fetch with it (its replay must not
                   // keep writing into a presentation declared terminal).
                   if (!isRetryableRequestErrorCode(error.errorCode)) {
-                    fetchHandle?.cancel();
+                    stopCatalog();
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog subscribe failed (non-retryable):', error);
                     return;

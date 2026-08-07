@@ -466,6 +466,11 @@ describe('resolveCatalog', () => {
     await flush();
     expect(subscriptions).toHaveLength(1);
 
+    // A live catalog object buffered behind the unsettled joining fetch —
+    // the settle timer's drain path, which never checks the attempt token.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+
     // The re-subscribe would carry the same credentials the relay just
     // rejected — unlike TRACK_ENDED (covered below), this must not poll.
     subscriptions[0]!.handlers.onDone?.({
@@ -475,11 +480,13 @@ describe('resolveCatalog', () => {
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(subscriptions).toHaveLength(1);
-    // Terminal freezes the state: the dead subscription and its joining
-    // fetch are cancelled so late objects cannot keep updating the
-    // presentation.
+    // Terminal freezes the state: handles cancelled, and the settle timer
+    // disarmed with the buffer discarded — past the fetch deadline, the
+    // buffered object must NOT have drained into the presentation.
     expect(subscriptions[0]!.cancelled).toBe(true);
     expect(fetches[0]!.cancelled).toBe(true);
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
     consoleError.mockRestore();
 
     reactor.destroy();
