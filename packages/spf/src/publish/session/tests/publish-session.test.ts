@@ -8,6 +8,7 @@ import {
   ControlMessageDeframer,
   decodeControlMessage,
   encodeGoaway,
+  encodePublish,
   encodeRequestUpdate,
   encodeSetup,
   encodeSubscribe,
@@ -609,12 +610,15 @@ describe('createMoqtPublishSession', () => {
     });
 
     // A legal §10.9 update must never be session-fatal, even though v1
-    // applies no prefix changes.
+    // applies no prefix changes — the update is answered REQUEST_ERROR
+    // rather than left outstanding, and the carrier stays open.
     await solicitation.send(encodeRequestUpdate(1, { subscriberPriority: 5 }));
     await vi.waitFor(() => {
       expect(updates).toEqual([1]);
+      expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace', 'request-error']);
     });
     expect(closes).toEqual([]);
+    expect(solicitation.ended()).toBe(false);
     session.destroy();
     subscriber.destroy();
   });
@@ -641,6 +645,32 @@ describe('createMoqtPublishSession', () => {
       expect(closes).toHaveLength(1);
     });
     expect((closes[0] as { error?: unknown }).error).toBeInstanceOf(Error);
+    subscriber.destroy();
+  });
+
+  it('reserves request ids across every inbound request kind', async () => {
+    const closes: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onClosed: (info) => closes.push(info),
+    });
+    await session.ready;
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+
+    // A rejected PUBLISH burns its id session-wide…
+    const publish = await openRawRequest(
+      pair.server,
+      encodePublish({ requestId: 121, trackNamespace: NAMESPACE, trackName: 'video', trackAlias: 9 })
+    );
+    await vi.waitFor(() => {
+      expect(publish.received.map((m) => m.kind)).toEqual(['request-error']);
+    });
+    expect(closes).toEqual([]);
+
+    // …so a later SUBSCRIBE cannot reuse it as an alias.
+    await rawSubscribe(pair.server, 'video', 121);
+    await vi.waitFor(() => {
+      expect(closes).toHaveLength(1);
+    });
     subscriber.destroy();
   });
 

@@ -632,11 +632,25 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     const type = await reader.readVarint();
     const message = await this.#readControlFrame(reader, type);
 
-    if (message.kind === 'subscribe' || message.kind === 'subscribe-namespace') {
-      if (this.#peerRequestIds.has(message.requestId)) {
-        throw new MoqtProtocolError(`peer reused request id ${message.requestId}`);
+    // Reserve the request ID for EVERY request-initiating kind — the
+    // uniqueness invariant is session-wide, so an ID burned on a
+    // rejected PUBLISH or FETCH must not be reusable by a later
+    // SUBSCRIBE (whose alias it would become).
+    const initiatingRequestId =
+      message.kind === 'fetch'
+        ? message.request.requestId
+        : message.kind === 'subscribe' ||
+            message.kind === 'subscribe-namespace' ||
+            message.kind === 'publish' ||
+            message.kind === 'publish-namespace' ||
+            message.kind === 'track-status'
+          ? message.requestId
+          : undefined;
+    if (initiatingRequestId !== undefined) {
+      if (this.#peerRequestIds.has(initiatingRequestId)) {
+        throw new MoqtProtocolError(`peer reused request id ${initiatingRequestId}`);
       }
-      this.#peerRequestIds.add(message.requestId);
+      this.#peerRequestIds.add(initiatingRequestId);
     }
     if (message.kind === 'subscribe') {
       await this.#handleIncomingSubscribe(stream, reader, message);
@@ -701,10 +715,17 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
           this.#receivedGoaway = true;
           this.#callbacks.onGoaway?.(message);
         } else if (message.kind === 'request-update') {
-          // Namespace subscriptions may legally be updated (§10.9); v1
-          // applies no prefix changes, but a legal message must never be
-          // session-fatal — surfaced for observability only.
+          // Namespace subscriptions may legally be updated (§10.9). v1
+          // applies none of it (a prefix change would re-base every
+          // entry), so the update is rejected rather than left
+          // outstanding or falsely acknowledged — but never
+          // session-fatal, and our side of the carrier stays open: the
+          // peer decides whether a refused optional update ends its
+          // solicitation, and the existing loss handling covers that.
           this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
+          void writer
+            .write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'namespace update not supported'))
+            .catch(() => {});
         } else {
           throw new MoqtProtocolError(`unexpected ${message.kind} on an incoming subscribe-namespace stream`);
         }
