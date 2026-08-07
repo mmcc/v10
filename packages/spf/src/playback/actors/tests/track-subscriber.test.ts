@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
-import { REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
+import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
 import type { MoqtObject } from '../../../network/moqt/object-stream';
 import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import { createTrackSubscriberActor, DEFAULT_STALL_TIMEOUT_MS } from '../track-subscriber';
@@ -275,8 +275,8 @@ describe('createTrackSubscriberActor', () => {
     const second = createTrackSubscriberActor({ session, track: TRACK });
     subscriptions[1]!.handlers.onError?.({ errorCode: 0x10, retryInterval: 0, reason: 'gone' });
     expect(second.snapshot.get().context.status).toBe('error');
-    // A non-auth death is recoverable — no exhaustion mark.
-    expect(second.snapshot.get().context.authExhausted).toBeUndefined();
+    // DOES_NOT_EXIST is transient (the track may appear) — recoverable.
+    expect(second.snapshot.get().context.unrecoverable).toBeFalsy();
     second.destroy();
   });
 
@@ -295,8 +295,8 @@ describe('createTrackSubscriberActor', () => {
     expect(refreshAuth).toHaveBeenCalledOnce();
     expect(subscriber.snapshot.get().context.status).not.toBe('error');
 
-    // A second expiry is terminal (no retry storm) — and marked exhausted,
-    // so the recovery behavior refuses to rebuild the same failure.
+    // A second expiry is terminal (no retry storm) — and marked
+    // unrecoverable, so recovery refuses to rebuild the same failure.
     subscriptions[1]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 1,
@@ -304,12 +304,12 @@ describe('createTrackSubscriberActor', () => {
     });
     await vi.waitFor(() => expect(subscriber.snapshot.get().context.status).toBe('error'));
     expect(subscriptions).toHaveLength(2);
-    expect(subscriber.snapshot.get().context.authExhausted).toBe(true);
+    expect(subscriber.snapshot.get().context.unrecoverable).toBe(true);
 
     subscriber.destroy();
   });
 
-  it('marks auth failures it cannot refresh past as exhausted', async () => {
+  it('marks auth failures it cannot refresh past as unrecoverable', async () => {
     // No refresh seam: the very first expiry is already unrecoverable.
     const bare = createFakeSession();
     const noSeam = createTrackSubscriberActor({ session: bare.session, track: TRACK });
@@ -319,7 +319,7 @@ describe('createTrackSubscriberActor', () => {
       reason: 'expired',
     });
     expect(noSeam.snapshot.get().context.status).toBe('error');
-    expect(noSeam.snapshot.get().context.authExhausted).toBe(true);
+    expect(noSeam.snapshot.get().context.unrecoverable).toBe(true);
     noSeam.destroy();
 
     // The provider gave up: same exhaustion, carrying the refresh error.
@@ -334,9 +334,47 @@ describe('createTrackSubscriberActor', () => {
       reason: 'expired',
     });
     await vi.waitFor(() => expect(refused.snapshot.get().context.status).toBe('error'));
-    expect(refused.snapshot.get().context.authExhausted).toBe(true);
+    expect(refused.snapshot.get().context.unrecoverable).toBe(true);
     expect(String(refused.snapshot.get().context.error)).toMatch(/no fresh token/);
     refused.destroy();
+  });
+
+  it('marks permanent rejections and auth-shaped ends as unrecoverable', () => {
+    const { session, subscriptions } = createFakeSession();
+
+    // UNAUTHORIZED answers an identical retry identically.
+    const refused = createTrackSubscriberActor({ session, track: TRACK });
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.UNAUTHORIZED,
+      retryInterval: 0,
+      reason: 'wrong claims',
+    });
+    expect(refused.snapshot.get().context.status).toBe('error');
+    expect(refused.snapshot.get().context.unrecoverable).toBe(true);
+    refused.destroy();
+
+    // An auth-shaped PUBLISH_DONE: the replacement would carry the same
+    // credentials the relay just rejected.
+    const authEnded = createTrackSubscriberActor({ session, track: TRACK });
+    subscriptions[1]!.handlers.onDone?.({
+      statusCode: PUBLISH_DONE_STATUS.UNAUTHORIZED,
+      streamCount: 0,
+      reason: 'unauthorized',
+    });
+    expect(authEnded.snapshot.get().context.status).toBe('ended');
+    expect(authEnded.snapshot.get().context.unrecoverable).toBe(true);
+    authEnded.destroy();
+
+    // TRACK_ENDED is the ordinary broadcaster blip — fully recoverable.
+    const blipped = createTrackSubscriberActor({ session, track: TRACK });
+    subscriptions[2]!.handlers.onDone?.({
+      statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+      streamCount: 0,
+      reason: 'broadcast ended',
+    });
+    expect(blipped.snapshot.get().context.status).toBe('ended');
+    expect(blipped.snapshot.get().context.unrecoverable).toBeFalsy();
+    blipped.destroy();
   });
 
   // The outage between the two subscriptions is not delivery time, and both

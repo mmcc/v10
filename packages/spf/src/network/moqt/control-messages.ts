@@ -129,6 +129,61 @@ export const PUBLISH_DONE_STATUS = {
   MALFORMED_TRACK: 0x12,
 } as const;
 
+/**
+ * REQUEST_ERROR codes for which an identical retry can never succeed: the
+ * request or its credentials are wrong in a way that does not change
+ * between attempts. Everything else — including codes this table does not
+ * know — is treated as retryable, so a relay introducing a new transient
+ * code degrades to paced retries rather than a dead player.
+ * EXPIRED_AUTH_TOKEN is deliberately absent: it has its own refresh path
+ * wherever requests are retried.
+ */
+const PERMANENT_REQUEST_ERROR_CODES: ReadonlySet<number> = new Set([
+  REQUEST_ERROR_CODE.UNAUTHORIZED,
+  REQUEST_ERROR_CODE.NOT_SUPPORTED,
+  REQUEST_ERROR_CODE.MALFORMED_AUTH_TOKEN,
+  REQUEST_ERROR_CODE.INVALID_RANGE,
+  REQUEST_ERROR_CODE.UNINTERESTED,
+  REQUEST_ERROR_CODE.PREFIX_OVERLAP,
+  REQUEST_ERROR_CODE.NAMESPACE_TOO_LARGE,
+  REQUEST_ERROR_CODE.INVALID_JOINING_REQUEST_ID,
+  REQUEST_ERROR_CODE.UNSUPPORTED_EXTENSION,
+  // Until session migration exists, the redirect target is unreachable and
+  // re-asking the same relay just re-earns the redirect.
+  REQUEST_ERROR_CODE.REDIRECT,
+  REQUEST_ERROR_CODE.CONFLICTING_FILTERS,
+  REQUEST_ERROR_CODE.INVALID_FILTER,
+]);
+
+/**
+ * Whether a failed request is worth re-issuing unchanged after a backoff.
+ * The transient family (`DOES_NOT_EXIST` while a broadcast has not started,
+ * `TIMEOUT`, `INTERNAL_ERROR`, overload, `GOING_AWAY`) reflects relay or
+ * publisher *state* that time can fix; the permanent family reflects the
+ * request itself and loops forever if retried.
+ */
+export function isRetryableRequestErrorCode(errorCode: number): boolean {
+  return !PERMANENT_REQUEST_ERROR_CODES.has(errorCode);
+}
+
+/**
+ * PUBLISH_DONE statuses after which re-subscribing can never succeed with
+ * the same credentials. Auth-shaped ends are the only members: every other
+ * status describes publisher/relay state a broadcaster restart or live-edge
+ * rejoin legitimately recovers from (`TRACK_ENDED`, `GOING_AWAY`,
+ * `TOO_FAR_BEHIND`, overload, …), and unknown statuses degrade to paced
+ * retries for the same reason as {@link isRetryableRequestErrorCode}.
+ */
+const PERMANENT_PUBLISH_DONE_STATUSES: ReadonlySet<number> = new Set([
+  PUBLISH_DONE_STATUS.UNAUTHORIZED,
+  PUBLISH_DONE_STATUS.EXPIRED,
+]);
+
+/** Whether a PUBLISH_DONE'd subscription is worth re-subscribing. */
+export function isRetryablePublishDoneStatus(statusCode: number): boolean {
+  return !PERMANENT_PUBLISH_DONE_STATUSES.has(statusCode);
+}
+
 /** Stream reset / STOP_SENDING error codes (draft-19 §3.3.4). */
 export const STREAM_RESET_CODE = {
   INTERNAL_ERROR: 0x0,

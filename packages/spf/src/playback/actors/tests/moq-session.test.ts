@@ -336,6 +336,24 @@ describe('createMoqSessionActor', () => {
 
     actor.destroy();
     expect(fake.getCloseInfo()).toBeDefined();
+    // The closed snapshot must not offer a callable handle to a session
+    // that was just destroyed.
+    expect(actor.snapshot.get().context.status).toBe('closed');
+    expect(actor.snapshot.get().context.session).toBeUndefined();
+  });
+
+  it('destroy closes a transport whose handshake never settles', async () => {
+    // A hung handshake means `created.ready` never resolves, so no session
+    // ever owns the transport — destroy() has to close it directly or the
+    // connection leaks for as long as the peer keeps it open.
+    const fake = createFakeTransport();
+    const actor = createMoqSessionActor({
+      source: makeSource(),
+      createTransport: () => ({ transport: fake.transport, ready: new Promise(() => {}) }),
+    });
+
+    actor.destroy();
+    expect(fake.getCloseInfo()).toBeDefined();
   });
 
   describe('reconnect', () => {

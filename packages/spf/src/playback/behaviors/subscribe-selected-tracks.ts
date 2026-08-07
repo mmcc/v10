@@ -45,7 +45,9 @@
  * suspend/rejoin path) after a capped backoff (`subscribeRetry`). An
  * `'ended'` subscription first plays out its buffered tail — late
  * subgroups keep arriving after PUBLISH_DONE by design — where an
- * `'error'`/stall death has nothing worth draining.
+ * `'error'`/stall death has nothing worth draining. Deaths the actor
+ * marks `unrecoverable` (permanent rejections, spent auth) are not
+ * rejoined at all: the corpse holds its slot until the selection moves.
  * Replacing the actor rides the renderers' existing swap path — decoder
  * reconfigure, clock re-anchor — so a broadcaster restart with reset
  * timestamps re-anchors instead of stalling.
@@ -69,6 +71,7 @@ import {
   DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
   MAX_SERVER_RETRY_INTERVAL_MS,
   type RetryBackoffConfig,
+  resolveRetryBackoffConfig,
   retryDelayMs,
 } from '../../network/retry-backoff';
 import type { MoqSessionActor } from '../actors/moq-session';
@@ -181,7 +184,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
 ): Reactor<FsmState | 'destroying' | 'destroyed'> {
   const { state, context, config } = deps;
   const createSubscriber = config?.createTrackSubscriber ?? createTrackSubscriberActor;
-  const retryConfig: RetryBackoffConfig = { ...DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG, ...config?.subscribeRetry };
+  const retryConfig = resolveRetryBackoffConfig(DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG, config?.subscribeRetry);
   // Indexing a mapped-type intersection by a generic key widens to the
   // union of every arm (same constraint documented in track-switching's
   // specialization helper) — go through wide records instead.
@@ -272,13 +275,14 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
   };
 
   /**
-   * Died on credentials the actor already failed to refresh past. A
-   * replacement built from the same auth state dies identically, so
-   * recovery must not loop on it — with the default infinite budget it
-   * would refresh + resubscribe forever. The corpse stays in its slot
-   * (the spent-budget shape); a selection change still moves past it.
+   * Died in a way an identical replacement would repeat — spent auth
+   * refresh, permanent request rejection, auth-shaped PUBLISH_DONE (see
+   * `TrackSubscriberContext.unrecoverable`). Recovery must not loop on
+   * it: with the default infinite budget it would rebuild the same
+   * failure forever. The corpse stays in its slot (the spent-budget
+   * shape); a selection change still moves past it.
    */
-  const authExhausted = (actor: TrackSubscriberActor): boolean => peek(actor.snapshot).context.authExhausted === true;
+  const isUnrecoverable = (actor: TrackSubscriberActor): boolean => peek(actor.snapshot).context.unrecoverable === true;
 
   /**
    * Arm the rejoin backoff for `trackId`, honoring a server-stated Retry
@@ -400,7 +404,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // accounting needs the subscriber to reconcile subgroup FINs
               // against PublishDone.streamCount and the renderers to report
               // drained pipelines; not worth that machinery yet.
-              if (authExhausted(current)) return;
+              if (isUnrecoverable(current)) return;
               // The subscription is dead and drained; whatever it buffered
               // has played. Drop it (and any in-flight handoff — promotion
               // gates on a playout clock this dead track would stall) and
@@ -435,10 +439,10 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             }
 
             if (pending && isDead(pendingStatus)) {
-              // Terminal credentials: a replacement dies identically, so
+              // Unrecoverable death: a replacement dies identically, so
               // the corpse holds the slot (spent-budget shape) instead of
-              // cycling refreshes forever.
-              if (authExhausted(pending)) return;
+              // rebuilding the same failure forever.
+              if (isUnrecoverable(pending)) return;
               // A handoff target died before promoting (e.g. the relay
               // refused the new track). Keep playing the current track,
               // drop the dead pending, and let the backoff pace the retry.

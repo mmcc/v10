@@ -39,7 +39,12 @@ import { createTransitionActor, type TransitionActor } from '../../core/actors/c
 import type { MoqSource } from '../../media/moq/parse-source';
 import { type MessageParameters, MOQT_PROTOCOL_ID } from '../../network/moqt/control-messages';
 import { createMoqtSession, type Goaway, type MoqtSession, type MoqtTransport } from '../../network/moqt/session';
-import { DEFAULT_RECONNECT_BACKOFF_CONFIG, type RetryBackoffConfig, retryDelayMs } from '../../network/retry-backoff';
+import {
+  DEFAULT_RECONNECT_BACKOFF_CONFIG,
+  type RetryBackoffConfig,
+  resolveRetryBackoffConfig,
+  retryDelayMs,
+} from '../../network/retry-backoff';
 
 // =============================================================================
 // Types
@@ -222,8 +227,15 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
 
   let destroyed = false;
   let session: MoqtSession | undefined;
+  /**
+   * The transport of a connect attempt still in flight — the handshake
+   * has not settled, so no session owns it yet. destroy() closes it
+   * directly: waiting on `created.ready` to settle would leave a hung
+   * handshake's connection open indefinitely.
+   */
+  let pendingTransport: MoqtTransport | undefined;
 
-  const reconnectConfig: RetryBackoffConfig = { ...DEFAULT_RECONNECT_BACKOFF_CONFIG, ...options.reconnect };
+  const reconnectConfig = resolveRetryBackoffConfig(DEFAULT_RECONNECT_BACKOFF_CONFIG, options.reconnect);
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let readySinceMs: number | undefined;
@@ -246,7 +258,9 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
           // requests against it while the retry timer runs.
           return { status: 'reconnecting', error: message.error };
         case 'closed':
-          return { ...context, status: 'closed' };
+          // The deliberate teardown destroyed the session — a retained
+          // observer must not find a callable handle on a closed snapshot.
+          return { ...context, status: 'closed', session: undefined };
         case 'failed':
           return { ...context, status: 'failed', error: message.error };
       }
@@ -299,7 +313,9 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       }
       const created = createTransport(composePlaybackConnectUrl(source.connectUrl, authToken), [MOQT_PROTOCOL_ID]);
       transport = created.transport;
+      pendingTransport = transport;
       await created.ready;
+      pendingTransport = undefined;
       if (destroyed) {
         transport.close();
         return;
@@ -332,6 +348,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       // The per-attempt handle, not the shared `session`: a reconnect
       // scheduled mid-attempt clears the shared slot, and the attempt's
       // own session still has to be torn down.
+      pendingTransport = undefined;
       if (attemptSession) {
         attemptSession.destroy();
       } else {
@@ -421,6 +438,12 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
       }
+      try {
+        pendingTransport?.close();
+      } catch {
+        // an already-failed transport throws on close()
+      }
+      pendingTransport = undefined;
       session?.destroy();
       // Published explicitly: the session's own onClosed callback bails on
       // `destroyed`, so this is the only place the deliberate-teardown

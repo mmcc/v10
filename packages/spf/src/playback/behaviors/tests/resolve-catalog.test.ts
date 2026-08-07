@@ -429,6 +429,57 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
+  // A permanent rejection — wrong credentials, malformed request — answers
+  // an identical retry identically: looping on it forever just loads the
+  // relay for nothing.
+  it('does not retry a permanent catalog rejection', async () => {
+    vi.useFakeTimers();
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await flush();
+    expect(subscriptions).toHaveLength(1);
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.UNAUTHORIZED,
+      retryInterval: 0,
+      reason: 'wrong claims',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(subscriptions).toHaveLength(1);
+    expect(consoleError).toHaveBeenCalledWith(
+      '[resolveCatalog] catalog subscribe failed (non-retryable):',
+      expect.anything()
+    );
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
+  it('does not re-subscribe after an auth-shaped PUBLISH_DONE', async () => {
+    vi.useFakeTimers();
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await flush();
+    expect(subscriptions).toHaveLength(1);
+
+    // The re-subscribe would carry the same credentials the relay just
+    // rejected — unlike TRACK_ENDED (covered below), this must not poll.
+    subscriptions[0]!.handlers.onDone?.({
+      statusCode: PUBLISH_DONE_STATUS.UNAUTHORIZED,
+      streamCount: 0,
+      reason: 'unauthorized',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(subscriptions).toHaveLength(1);
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
   // PUBLISH_DONE means the broadcaster ended or dropped the catalog track,
   // not that the session is unhealthy — poll the track back into existence.
   it('re-subscribes when the publisher ends the catalog track', async () => {

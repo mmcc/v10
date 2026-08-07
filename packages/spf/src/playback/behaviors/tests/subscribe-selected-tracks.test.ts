@@ -72,8 +72,8 @@ interface FakeSubscriber extends TrackSubscriberActor {
   activate(): void;
   /** Simulate the jitter buffer holding `frameCount` frames. */
   buffer(frameCount: number): void;
-  /** Simulate a terminal auth failure (see `TrackSubscriberContext.authExhausted`). */
-  dieAuthExhausted(): void;
+  /** Simulate an unrecoverable death (see `TrackSubscriberContext.unrecoverable`). */
+  dieUnrecoverable(): void;
   /**
    * Simulate the subscription dying: the publisher ended it (`'ended'`) or
    * the request failed / the stall watchdog gave up (`'error'`, optionally
@@ -116,11 +116,11 @@ function createFakeSubscriberFactory({
       die(status: 'ended' | 'error', error?: unknown) {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status, error } });
       },
-      /** Simulate a terminal auth failure (see `TrackSubscriberContext.authExhausted`). */
-      dieAuthExhausted() {
+      /** Simulate an unrecoverable death (see `TrackSubscriberContext.unrecoverable`). */
+      dieUnrecoverable() {
         snapshot.set({
           value: 'active',
-          context: { ...snapshot.get().context, status: 'error', authExhausted: true },
+          context: { ...snapshot.get().context, status: 'error', unrecoverable: true },
         });
       },
       destroy() {
@@ -616,14 +616,14 @@ describe('subscribeSelectedVideoTrack', () => {
       reactor.destroy();
     });
 
-    it('does not loop on a terminal auth failure, but a new selection still recovers', async () => {
+    it('does not loop on an unrecoverable death, but a new selection still recovers', async () => {
       const deps = makeDeps();
       const { factory, created } = createFakeSubscriberFactory();
       const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
 
       deps.state.selectedVideoTrackId.set(HD.id);
       await vi.advanceTimersByTimeAsync(0);
-      created[0]!.dieAuthExhausted();
+      created[0]!.dieUnrecoverable();
 
       // A replacement would die on the same credentials — even the default
       // infinite budget must not cycle token refreshes forever.

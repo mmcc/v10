@@ -51,6 +51,34 @@ export const DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG: RetryBackoffConfig = {
 export const MAX_SERVER_RETRY_INTERVAL_MS = 60_000;
 
 /**
+ * Resolve a consumer's partial overrides over a policy's defaults,
+ * discarding values that would corrupt the timer math: `retryDelayMs`'s
+ * result feeds `setTimeout` directly, and a `NaN` or negative delay turns
+ * a paced recovery into a tight loop. Field by field: delays must be
+ * finite and non-negative (a bad override falls back to its default), the
+ * ceiling is raised to the initial delay when the two cross, and
+ * `maxAttempts` must be a non-negative number (`Infinity` is the
+ * legitimate never-give-up value; `NaN` falls back).
+ */
+export function resolveRetryBackoffConfig(
+  defaults: RetryBackoffConfig,
+  overrides?: Partial<RetryBackoffConfig>
+): RetryBackoffConfig {
+  const isDelay = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const initialDelayMs = isDelay(overrides?.initialDelayMs) ? overrides.initialDelayMs : defaults.initialDelayMs;
+  const maxDelayMs = Math.max(
+    initialDelayMs,
+    isDelay(overrides?.maxDelayMs) ? overrides.maxDelayMs : defaults.maxDelayMs
+  );
+  const maxAttempts =
+    typeof overrides?.maxAttempts === 'number' && overrides.maxAttempts >= 0
+      ? overrides.maxAttempts
+      : defaults.maxAttempts;
+  return { initialDelayMs, maxDelayMs, maxAttempts };
+}
+
+/**
  * Delay before retry number `attempt` (0-based count of failures so far),
  * jittered ±25% and clamped to `maxDelayMs`, or `undefined` once `attempt`
  * exhausts `config.maxAttempts` — the caller's give-up signal.

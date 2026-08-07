@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RECONNECT_BACKOFF_CONFIG, type RetryBackoffConfig, retryDelayMs } from '../retry-backoff';
+import {
+  DEFAULT_RECONNECT_BACKOFF_CONFIG,
+  type RetryBackoffConfig,
+  resolveRetryBackoffConfig,
+  retryDelayMs,
+} from '../retry-backoff';
 
 const config: RetryBackoffConfig = { initialDelayMs: 500, maxDelayMs: 4000, maxAttempts: 5 };
 
@@ -37,5 +42,42 @@ describe('retryDelayMs', () => {
 
   it('a zero-attempt budget refuses the first retry', () => {
     expect(retryDelayMs(0, { ...config, maxAttempts: 0 })).toBeUndefined();
+  });
+});
+
+describe('resolveRetryBackoffConfig', () => {
+  it('applies valid overrides over the defaults', () => {
+    expect(resolveRetryBackoffConfig(config, { initialDelayMs: 100, maxDelayMs: 200, maxAttempts: 3 })).toEqual({
+      initialDelayMs: 100,
+      maxDelayMs: 200,
+      maxAttempts: 3,
+    });
+    expect(resolveRetryBackoffConfig(config, { maxAttempts: Number.POSITIVE_INFINITY }).maxAttempts).toBe(
+      Number.POSITIVE_INFINITY
+    );
+    expect(resolveRetryBackoffConfig(config)).toEqual(config);
+  });
+
+  it('discards values that would corrupt the timer math', () => {
+    // The result feeds setTimeout directly: NaN or negative delays turn a
+    // paced recovery into a tight loop.
+    expect(
+      resolveRetryBackoffConfig(config, {
+        initialDelayMs: Number.NaN,
+        maxDelayMs: -1,
+        maxAttempts: Number.NaN,
+      })
+    ).toEqual(config);
+    expect(resolveRetryBackoffConfig(config, { initialDelayMs: Number.POSITIVE_INFINITY }).initialDelayMs).toBe(
+      config.initialDelayMs
+    );
+  });
+
+  it('raises the ceiling to a crossing initial delay', () => {
+    expect(resolveRetryBackoffConfig(config, { initialDelayMs: 10_000 })).toEqual({
+      initialDelayMs: 10_000,
+      maxDelayMs: 10_000,
+      maxAttempts: config.maxAttempts,
+    });
   });
 });

@@ -26,13 +26,15 @@
  * refreshes the token via the session actor and recreates the catalog
  * subscription + joining fetch once — same pattern as `track-subscriber`.
  *
- * Failure recovery: any other subscribe error retries with capped backoff
- * (`subscribeRetry` config, honoring a server-stated Retry Interval) —
- * the common case is DOES_NOT_EXIST because play was pressed before the
- * broadcast started — and a PUBLISH_DONE (broadcaster ended or dropped)
- * re-subscribes the same way. Every recovery restart resets the local
- * catalog base, so a delta from a restarted publisher can never apply
- * against the pre-outage catalog.
+ * Failure recovery: a *transient* subscribe error retries with capped
+ * backoff (`subscribeRetry` config, honoring a server-stated Retry
+ * Interval) — the common case is DOES_NOT_EXIST because play was pressed
+ * before the broadcast started — and a retryable PUBLISH_DONE
+ * (broadcaster ended or dropped) re-subscribes the same way. Permanent
+ * rejections and auth-shaped ends stop instead of looping
+ * (`isRetryableRequestErrorCode` / `isRetryablePublishDoneStatus`).
+ * Every recovery restart resets the local catalog base, so a delta from
+ * a restarted publisher can never apply against the pre-outage catalog.
  *
  * Multi-writer on `state.presentation` with the engine adapter (initial
  * `{ url }` input) — same legitimate split as `resolvePresentation`.
@@ -51,12 +53,17 @@ import { isMoqSourceUrl, parseMoqSource } from '../../media/moq/parse-source';
 import type { MaybeResolvedPresentation } from '../../media/types';
 import { utf8Decode } from '../../network/moqt/bytes';
 import type { MessageParameters } from '../../network/moqt/control-messages';
-import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
+import {
+  isRetryablePublishDoneStatus,
+  isRetryableRequestErrorCode,
+  REQUEST_ERROR_CODE,
+} from '../../network/moqt/control-messages';
 import type { FetchHandle, Subscription } from '../../network/moqt/session';
 import {
   DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
   MAX_SERVER_RETRY_INTERVAL_MS,
   type RetryBackoffConfig,
+  resolveRetryBackoffConfig,
   retryDelayMs,
 } from '../../network/retry-backoff';
 import type { MoqSessionActor } from '../actors/moq-session';
@@ -119,7 +126,7 @@ function setupResolveCatalog({
 }): Reactor<ResolveCatalogFsmState | 'destroying' | 'destroyed'> {
   const applyUpdate = config?.applyCatalogUpdate ?? applyMoqCatalogUpdate;
   const fetchTimeoutMs = config?.catalogFetchTimeoutMs ?? DEFAULT_CATALOG_FETCH_TIMEOUT_MS;
-  const retryConfig: RetryBackoffConfig = { ...DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG, ...config?.subscribeRetry };
+  const retryConfig = resolveRetryBackoffConfig(DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG, config?.subscribeRetry);
 
   const derivedStateSignal = computed<ResolveCatalogFsmState>(() => {
     const presentation = state.presentation.get();
@@ -278,13 +285,20 @@ function setupResolveCatalog({
                   }
                   apply(text, object.objectId);
                 },
-                onDone: () => {
+                onDone: (done) => {
                   // PUBLISH_DONE: the publisher ended the catalog track — a
                   // broadcaster disconnect, not a session problem. Poll the
                   // track back into existence; until the broadcaster
                   // returns, each attempt fails and re-enters the error
-                  // path's backoff.
+                  // path's backoff. Auth-shaped ends are the exception: a
+                  // re-subscribe carries the same credentials the relay
+                  // just rejected, so retrying loops forever.
                   if (!isCurrent()) return;
+                  if (!isRetryablePublishDoneStatus(done.statusCode)) {
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog track ended with a non-retryable status:', done);
+                    return;
+                  }
                   if (!scheduleRestart()) {
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog track ended (retry budget spent)');
@@ -327,13 +341,21 @@ function setupResolveCatalog({
                     console.error('[resolveCatalog] catalog subscribe failed after auth refresh:', error);
                     return;
                   }
+                  // A permanent rejection — wrong credentials, malformed
+                  // request, unsupported feature — answers an identical
+                  // retry identically: stop instead of looping forever.
+                  if (!isRetryableRequestErrorCode(error.errorCode)) {
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog subscribe failed (non-retryable):', error);
+                    return;
+                  }
                   // The usual meaning is "track does not exist yet" — the
                   // viewer joined before the broadcast, or the broadcaster
                   // is mid-reconnect. Retry with backoff until the track
                   // appears (the session's own loss/recovery cycles this
                   // whole state, so a dead session never loops here).
                   //
-                  // A non-auth failure also re-arms the auth refresh: an
+                  // A transient failure also re-arms the auth refresh: an
                   // outage can outlive the token, and a retry cycle that
                   // entered on DOES_NOT_EXIST would otherwise read the
                   // eventual EXPIRED_AUTH_TOKEN as "the refreshed token

@@ -27,7 +27,11 @@ import { createTransitionActor, type TransitionActor } from '../../core/actors/c
 import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
 import type { MoqTrack } from '../../media/moq/parse-catalog';
 import type { LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
-import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
+import {
+  isRetryablePublishDoneStatus,
+  isRetryableRequestErrorCode,
+  REQUEST_ERROR_CODE,
+} from '../../network/moqt/control-messages';
 import type { MoqtObject } from '../../network/moqt/object-stream';
 import type { MoqtSession, PublishDone, RequestError, Subscription } from '../../network/moqt/session';
 
@@ -89,15 +93,17 @@ export interface TrackSubscriberContext {
   arrivalJitter?: { minOffsetMs: number; maxOffsetMs: number; sampleCount: number; epoch: number };
   error?: RequestError | unknown;
   /**
-   * Set with `status: 'error'` when the death was an auth failure the
-   * actor cannot refresh past: the one-shot refresh was already spent (or
-   * no refresh seam exists), so a replacement subscription built from the
-   * same credentials will die the same way. `subscribe-selected-tracks`
-   * reads this to keep terminal auth failures out of its rejoin loop —
-   * without it, every replacement actor gets a fresh one-shot and invalid
-   * credentials refresh + resubscribe forever at the backoff cadence.
+   * Set with a terminal status when an identical replacement subscription
+   * would die the same way: an auth failure the actor cannot refresh past
+   * (one-shot spent, refresh rejected, or no refresh seam), a permanent
+   * REQUEST_ERROR (`isRetryableRequestErrorCode` false — wrong
+   * credentials, malformed request, unsupported feature), or an
+   * auth-shaped PUBLISH_DONE. `subscribe-selected-tracks` reads this to
+   * keep such deaths out of its rejoin loop — without it, every
+   * replacement actor starts fresh and a permanent rejection is retried
+   * forever at the backoff cadence.
    */
-  authExhausted?: boolean;
+  unrecoverable?: boolean;
   done?: PublishDone;
 }
 
@@ -132,8 +138,8 @@ type SubscriberMessage =
       arrivalJitter: TrackSubscriberContext['arrivalJitter'];
     }
   | { type: 'buffer-drained'; frameCount: number; oldestTimestampUs?: number; newestTimestampUs?: number }
-  | { type: 'done'; done: PublishDone }
-  | { type: 'error'; error: RequestError | unknown; authExhausted?: boolean };
+  | { type: 'done'; done: PublishDone; unrecoverable?: boolean }
+  | { type: 'error'; error: RequestError | unknown; unrecoverable?: boolean };
 
 export interface TrackSubscriberActor
   extends Pick<TransitionActor<TrackSubscriberContext, SubscriberMessage>, 'snapshot'> {
@@ -299,9 +305,9 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             newestTimestampUs: message.newestTimestampUs ?? context.newestTimestampUs,
           };
         case 'done':
-          return { ...context, status: 'ended', done: message.done };
+          return { ...context, status: 'ended', done: message.done, unrecoverable: message.unrecoverable };
         case 'error':
-          return { ...context, status: 'error', error: message.error, authExhausted: message.authExhausted };
+          return { ...context, status: 'error', error: message.error, unrecoverable: message.unrecoverable };
       }
     }
   );
@@ -421,7 +427,9 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
         onObject: handleObject,
         onDone: (done) => {
           disarmStallTimer();
-          inner.send({ type: 'done', done });
+          // An auth-shaped end is not worth re-subscribing: the replacement
+          // carries the same credentials the relay just rejected.
+          inner.send({ type: 'done', done, unrecoverable: !isRetryablePublishDoneStatus(done.statusCode) });
         },
         onError: (error) => {
           disarmStallTimer();
@@ -437,17 +445,19 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
                 })
                 .catch((refreshError) =>
                   // The provider could not supply a fresh token — as
-                  // exhausted as a rejected refresh (see `authExhausted`).
-                  inner.send({ type: 'error', error: refreshError, authExhausted: true })
+                  // terminal as a rejected refresh (see `unrecoverable`).
+                  inner.send({ type: 'error', error: refreshError, unrecoverable: true })
                 );
               return;
             }
             // No refresh seam, or the refreshed token was rejected too —
-            // credentials this actor cannot fix (see `authExhausted`).
-            inner.send({ type: 'error', error, authExhausted: true });
+            // credentials this actor cannot fix (see `unrecoverable`).
+            inner.send({ type: 'error', error, unrecoverable: true });
             return;
           }
-          inner.send({ type: 'error', error });
+          // Permanent rejections (wrong credentials, malformed request,
+          // unsupported feature) answer an identical retry identically.
+          inner.send({ type: 'error', error, unrecoverable: !isRetryableRequestErrorCode(error.errorCode) });
         },
       }
     );
