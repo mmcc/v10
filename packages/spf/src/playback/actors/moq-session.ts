@@ -10,6 +10,17 @@
  * context; the finite `value` is just the universal active/destroyed
  * lifecycle marker.
  *
+ * **Unexpected session loss reconnects rather than terminating.** A
+ * transport drop, relay restart, or failed connect cycles the status
+ * through `'reconnecting'` and retries with capped, jittered backoff
+ * (`reconnect` config). Each recovered connection is a *new*
+ * `MoqtSession` published on a `'ready'` snapshot — behaviors keyed on
+ * `status === 'ready'` tear their subscriptions down on the drop and
+ * re-issue them against the fresh session, which is what rejoins the
+ * catalog and media tracks at the live edge. `'failed'` now means the
+ * retry budget is spent (or the failure is permanent, like the QUIC
+ * mandate below); `'closed'` remains the deliberate local teardown.
+ *
  * Also the home of the MSF §11.4 auth seam: `authProvider` supplies the
  * initial authorization token (defaulting to the source's `c4m` fragment
  * token) and refreshes it when a request fails with EXPIRED_AUTH_TOKEN —
@@ -21,16 +32,17 @@ import type { MoqSource } from '../../media/moq/parse-source';
 import { utf8Encode } from '../../network/moqt/bytes';
 import { encodeAuthTokenUseValue, type MessageParameters, MOQT_PROTOCOL_ID } from '../../network/moqt/control-messages';
 import { createMoqtSession, type Goaway, type MoqtSession, type MoqtTransport } from '../../network/moqt/session';
+import { DEFAULT_RECONNECT_BACKOFF_CONFIG, type RetryBackoffConfig, retryDelayMs } from '../../network/retry-backoff';
 
 // =============================================================================
 // Types
 // =============================================================================
 
-export type MoqSessionStatus = 'connecting' | 'ready' | 'closed' | 'failed';
+export type MoqSessionStatus = 'connecting' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export interface MoqSessionActorContext {
   status: MoqSessionStatus;
-  /** Present from `'ready'` on. */
+  /** Present while `'ready'`; cleared when the session drops. */
   session?: MoqtSession;
   /** Set when the server announced migration; requests should re-issue elsewhere. */
   goaway?: Goaway;
@@ -40,6 +52,7 @@ export interface MoqSessionActorContext {
 type SessionMessage =
   | { type: 'connected'; session: MoqtSession }
   | { type: 'goaway'; goaway: Goaway }
+  | { type: 'reconnecting'; error?: unknown }
   | { type: 'closed' }
   | { type: 'failed'; error: unknown };
 
@@ -71,6 +84,14 @@ export interface CreateMoqSessionActorOptions {
   authProvider?: MoqAuthProvider;
   /** Forwarded to the session driver (alias buffering timeout, etc.). */
   unknownAliasTimeoutMs?: number;
+  /**
+   * Reconnect policy for unexpected session loss (transport drop, relay
+   * restart, connect failure). Defaults to
+   * {@link DEFAULT_RECONNECT_BACKOFF_CONFIG} — retry forever with capped,
+   * jittered backoff. `maxAttempts: 0` disables reconnection entirely
+   * (the pre-resilience terminal behavior).
+   */
+  reconnect?: Partial<RetryBackoffConfig>;
 }
 
 export interface MoqSessionActor extends Pick<TransitionActor<MoqSessionActorContext, SessionMessage>, 'snapshot'> {
@@ -111,6 +132,11 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
   let destroyed = false;
   let session: MoqtSession | undefined;
 
+  const reconnectConfig: RetryBackoffConfig = { ...DEFAULT_RECONNECT_BACKOFF_CONFIG, ...options.reconnect };
+  let reconnectAttempts = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let readySinceMs: number | undefined;
+
   const inner = createTransitionActor<MoqSessionActorContext, SessionMessage>(
     { status: 'connecting' },
     (context, message) => {
@@ -119,9 +145,15 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       if (context.status === 'closed' || context.status === 'failed') return context;
       switch (message.type) {
         case 'connected':
-          return { ...context, status: 'ready', session: message.session };
+          // A fresh context, not a merge: a GOAWAY or error left behind by
+          // a previous connection describes nothing about this one.
+          return { status: 'ready', session: message.session };
         case 'goaway':
           return { ...context, goaway: message.goaway };
+        case 'reconnecting':
+          // The dead session leaves the context so no consumer can issue
+          // requests against it while the retry timer runs.
+          return { status: 'reconnecting', error: message.error };
         case 'closed':
           return { ...context, status: 'closed' };
         case 'failed':
@@ -162,13 +194,16 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
         unknownAliasTimeoutMs: options.unknownAliasTimeoutMs,
         callbacks: {
           onGoaway: (goaway) => inner.send({ type: 'goaway', goaway }),
-          onClosed: ({ error }) => {
-            inner.send(error === undefined ? { type: 'closed' } : { type: 'failed', error });
-          },
+          // Any close the actor did not initiate — transport drop, relay
+          // restart, protocol failure — is an outage to recover from, not
+          // a terminal state. destroy() sets `destroyed` before closing
+          // the session, so a deliberate teardown never lands here.
+          onClosed: ({ error }) => scheduleReconnect(error),
         },
       });
       await session.ready;
       if (destroyed) return;
+      readySinceMs = performance.now();
       inner.send({ type: 'connected', session });
     } catch (error) {
       // A transport opened before the failure must not leak the relay
@@ -182,9 +217,44 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
           // an already-failed transport throws on close()
         }
       }
-      if (!destroyed) inner.send({ type: 'failed', error });
+      if (!destroyed) scheduleReconnect(error);
     }
   };
+
+  /**
+   * How long a connection must stay ready before a later drop counts as a
+   * *new* outage (resetting the backoff) rather than a continuation of the
+   * last one. Keeps a connect-then-immediately-drop flap escalating toward
+   * the backoff ceiling instead of hammering the relay at the initial delay.
+   */
+  const STABLE_CONNECTION_RESET_MS = 30_000;
+
+  const scheduleReconnect = (error: unknown): void => {
+    // One recovery per outage: the session driver and the start() catch can
+    // both report the same death (a session destroyed mid-connect fires its
+    // onClosed synchronously), and a stray late callback after the retry
+    // budget is spent must not revive a terminal actor.
+    if (destroyed || reconnectTimer !== undefined) return;
+    const status = inner.snapshot.get().context.status;
+    if (status === 'closed' || status === 'failed') return;
+    if (readySinceMs !== undefined && performance.now() - readySinceMs >= STABLE_CONNECTION_RESET_MS) {
+      reconnectAttempts = 0;
+    }
+    readySinceMs = undefined;
+    session = undefined;
+    const delay = retryDelayMs(reconnectAttempts, reconnectConfig);
+    if (delay === undefined) {
+      inner.send({ type: 'failed', error: error ?? new Error('MoQ session closed and the reconnect budget is spent') });
+      return;
+    }
+    reconnectAttempts++;
+    inner.send({ type: 'reconnecting', error });
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void start();
+    }, delay);
+  };
+
   void start();
 
   const tokenParameters = (): MessageParameters => {
@@ -214,7 +284,15 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
+      if (reconnectTimer !== undefined) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
       session?.destroy();
+      // Published explicitly: the session's own onClosed callback bails on
+      // `destroyed`, so this is the only place the deliberate-teardown
+      // status can come from now that unexpected closes reconnect instead.
+      inner.send({ type: 'closed' });
       inner.destroy();
     },
   };

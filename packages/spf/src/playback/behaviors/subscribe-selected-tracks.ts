@@ -36,21 +36,43 @@
  * both subscribers down; reopening re-subscribes the current selection
  * through the initial-join filters (a live-edge rejoin, not a handoff).
  *
+ * Dead-subscription recovery: a subscription can die while its selection
+ * stands — the publisher ended it (PUBLISH_DONE on a broadcaster blip),
+ * the relay refused it, or the subscriber's stall watchdog gave up. The
+ * actor reports that as a terminal snapshot status (`'ended'`/`'error'`);
+ * this behavior destroys the dead actor(s) and re-subscribes the same
+ * selection at the live edge (the initial-join filter, exactly the
+ * suspend/rejoin path) after a capped backoff (`subscribeRetry`).
+ * Replacing the actor rides the renderers' existing swap path — decoder
+ * reconfigure, clock re-anchor — so a broadcaster restart with reset
+ * timestamps re-anchors instead of stalling.
+ *
  * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor`
  * slots (renderers and latency/bandwidth behaviors only read). Slot reads
  * inside the effect use `peek` — the effect re-fires on selection/session/
- * pending-snapshot changes, not on its own slot writes.
+ * pending-snapshot changes, plus status *transitions* of its own actors
+ * (equality-gated `computed`s over the slots) and the rejoin timer's tick,
+ * not on its own slot writes.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
-import { computed, peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
+import { computed, peek, type ReadonlySignal, type Signal, signal } from '../../core/signals/primitives';
 import type { MoqTrack } from '../../media/moq/parse-catalog';
 import { isLiveTrack, type MaybeResolvedPresentation } from '../../media/types';
 import { findTrack } from '../../media/utils/tracks';
 import type { LocationFilter } from '../../network/moqt/control-messages';
+import {
+  DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
+  type RetryBackoffConfig,
+  retryDelayMs,
+} from '../../network/retry-backoff';
 import type { MoqSessionActor } from '../actors/moq-session';
-import { createTrackSubscriberActor, type TrackSubscriberActor } from '../actors/track-subscriber';
+import {
+  createTrackSubscriberActor,
+  type TrackSubscriberActor,
+  type TrackSubscriberStatus,
+} from '../actors/track-subscriber';
 
 // ============================================================================
 // State / context / config
@@ -86,6 +108,18 @@ export interface SubscribeSelectedTracksContext {
 export interface SubscribeSelectedTracksConfig {
   /** Subscriber factory seam for tests. */
   createTrackSubscriber?: typeof createTrackSubscriberActor;
+  /**
+   * Backoff for re-subscribing a media track whose subscription died
+   * (publisher ended it, relay error, data stall). Defaults to
+   * {@link DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG}; `maxAttempts: 0`
+   * disables recovery.
+   */
+  subscribeRetry?: Partial<RetryBackoffConfig>;
+  /**
+   * Data-starvation deadline threaded into each track subscriber — see
+   * `CreateTrackSubscriberOptions.stallTimeoutMs`.
+   */
+  subscribeStallTimeoutMs?: number;
 }
 
 type SelectionKey = 'selectedVideoTrackId' | 'selectedAudioTrackId';
@@ -143,6 +177,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
 ): Reactor<FsmState | 'destroying' | 'destroyed'> {
   const { state, context, config } = deps;
   const createSubscriber = config?.createTrackSubscriber ?? createTrackSubscriberActor;
+  const retryConfig: RetryBackoffConfig = { ...DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG, ...config?.subscribeRetry };
   // Indexing a mapped-type intersection by a generic key widens to the
   // union of every arm (same constraint documented in track-switching's
   // specialization helper) — go through wide records instead.
@@ -175,6 +210,47 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     subscriberSlot.set(undefined);
   };
 
+  // --- Dead-subscription recovery -------------------------------------
+  // A subscription can die under a live selection: the publisher ended it
+  // (PUBLISH_DONE on a broadcaster blip), the relay refused it, or the
+  // stall watchdog gave up on it. The actors report that as a terminal
+  // snapshot status; recovery destroys them and re-subscribes the same
+  // selection at the live edge after a backoff.
+  //
+  // Status is read through `computed`s rather than tracked snapshot reads
+  // so the effect re-fires on status *transitions* only — a raw tracked
+  // read of the current subscriber's snapshot would re-run the effect on
+  // every buffered frame for the whole life of the subscription.
+  const isDead = (status: TrackSubscriberStatus | undefined): boolean => status === 'ended' || status === 'error';
+  const currentStatusSignal = computed(() => subscriberSlot.get()?.snapshot.get().context.status);
+  const pendingStatusSignal = computed(() => pendingSlot.get()?.snapshot.get().context.status);
+  // Bumped by the rejoin timer: after the dead subscriber's slots are
+  // cleared nothing else re-fires the effect (slot reads are peeked), so
+  // the timer's bump is what re-runs it to build the fresh subscription.
+  const rejoinTick = signal(0);
+  // Closure-held on purpose (entry and effects need to share them);
+  // `entry` resets both so no retry state leaks across state cycles.
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryAttempts = 0;
+
+  const clearRetryTimer = (): void => {
+    if (retryTimer === undefined) return;
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
+  };
+
+  /** Arm the rejoin backoff. Returns false when the retry budget is spent. */
+  const armRejoinTimer = (): boolean => {
+    const delay = retryDelayMs(retryAttempts, retryConfig);
+    if (delay === undefined) return false;
+    retryAttempts++;
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      rejoinTick.set(peek(rejoinTick) + 1);
+    }, delay);
+    return true;
+  };
+
   return createMachineReactor<FsmState>({
     initial: 'preconditions-unmet',
     monitor: () => derivedStateSignal.get(),
@@ -183,9 +259,17 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
       'session-ready': {
         // Subscriptions live exactly as long as the session state — exit
         // (session loss, source change, destroy) cancels both actors.
-        entry: () => clearSlots,
+        entry: () => {
+          retryAttempts = 0;
+          return () => {
+            clearRetryTimer();
+            clearSlots();
+          };
+        },
         effects: [
           () => {
+            // Tracked: the rejoin timer bumps this once its backoff elapses.
+            rejoinTick.get();
             const actor = context.moqSessionActor.get()!;
             const session = actor.snapshot.get().context.session;
             const selectedId = selectionSignal.get();
@@ -199,12 +283,51 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               return;
             }
 
+            const currentStatus = currentStatusSignal.get();
+            // Steady healthy state — an active subscription with no
+            // recovery in flight — proves the outage (if any) is over, so
+            // later failures back off from the start again. The `!pending`
+            // and timer guards matter: a dead handoff target re-runs this
+            // effect with a perfectly healthy current, and resetting there
+            // would hold every handoff retry at the initial delay forever.
+            if (currentStatus === 'active' && !pending && retryTimer === undefined) retryAttempts = 0;
+
+            if (current && isDead(currentStatus)) {
+              // The current subscription is dead; its buffer tail is all it
+              // will ever deliver. Drop it (and any in-flight handoff —
+              // promotion gates on a playout clock this dead track would
+              // stall) and rejoin the selection at the live edge once the
+              // backoff elapses. No fresh subscriber is created before the
+              // timer fires: the guard below holds creation while it runs.
+              if (retryTimer === undefined && armRejoinTimer()) clearSlots();
+              return;
+            }
+            // While a rejoin backoff runs, nothing may (re)subscribe — the
+            // timer's tick re-runs this effect and the normal creation path
+            // below performs the live-edge join.
+            if (retryTimer !== undefined) return;
+
             if (current?.track.id === selectedId) {
               // Selection reverted while a handoff was in flight.
               if (pending) {
                 pending.destroy();
                 pendingSlot.set(undefined);
               }
+              return;
+            }
+
+            if (pending && isDead(pendingStatusSignal.get())) {
+              // A handoff target died before promoting (e.g. the relay
+              // refused the new track). Keep playing the current track,
+              // drop the dead pending, and let the backoff pace the retry.
+              // Arming cannot clobber a live timer — this branch sits below
+              // the retryTimer bail above. When the budget is spent, the
+              // dead pending stays in its slot on purpose: clearing it
+              // would let the creation path below re-subscribe with no
+              // delay at all.
+              if (!armRejoinTimer()) return;
+              pending.destroy();
+              pendingSlot.set(undefined);
               return;
             }
 
@@ -248,6 +371,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               locationFilter: current ? { type: 'next-group-start' } : wiring.joinFilter,
               parameters: actor.getAuthParameters(),
               refreshAuth: () => actor.refreshAuthToken(),
+              stallTimeoutMs: config?.subscribeStallTimeoutMs,
             });
             // Tracked read: subscribing this effect to the new actor's
             // snapshot is what re-fires the handoff check as frames land.

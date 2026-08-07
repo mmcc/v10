@@ -16,6 +16,12 @@
  *
  * Auth-expiry retry (MSF §11.4): a REQUEST_ERROR with EXPIRED_AUTH_TOKEN
  * asks `refreshAuth` for fresh parameters and resubscribes once.
+ *
+ * Data-starvation watchdog (`stallTimeoutMs`): a live MSF media track
+ * delivers continuously, so a subscription that stays silent past the
+ * deadline is treated as dead even though the wire never said so —
+ * the subscription is cancelled and the status goes `'error'`, which is
+ * the terminal signal `subscribe-selected-tracks` recovers from.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
@@ -94,6 +100,16 @@ export interface CreateTrackSubscriberOptions {
   parameters?: MessageParameters;
   /** Auth-expiry seam: return refreshed parameters to retry the subscribe with. */
   refreshAuth?(): Promise<MessageParameters>;
+  /**
+   * Data-starvation watchdog: a live MSF media track delivers continuously,
+   * so a subscription this long without a single object is dead in a way
+   * the wire never said — a relay that dropped its publisher without
+   * sending PUBLISH_DONE, or a half-closed path. On expiry the actor
+   * cancels the subscription and reports `status: 'error'`, which is the
+   * signal `subscribe-selected-tracks` recovers from by re-subscribing at
+   * the live edge. `0` disables. Default 10 000 ms.
+   */
+  stallTimeoutMs?: number;
 }
 
 type SubscriberMessage =
@@ -127,6 +143,9 @@ export interface TrackSubscriberActor
 // =============================================================================
 
 const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'largest-object' };
+
+/** See `CreateTrackSubscriberOptions.stallTimeoutMs`. */
+export const DEFAULT_STALL_TIMEOUT_MS = 10_000;
 
 /**
  * Time constant of the arrival-offset envelope's decay, in milliseconds.
@@ -165,6 +184,38 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   let lastArrivalMs: number | undefined;
   let authRetried = false;
   let subscription: Subscription | undefined;
+
+  // Data-starvation watchdog (see `stallTimeoutMs`): armed per subscribe
+  // attempt, re-armed per arriving object, disarmed once the subscription
+  // is dead by other means (done / error / destroy).
+  const stallTimeoutMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const disarmStallTimer = (): void => {
+    if (stallTimer === undefined) return;
+    clearTimeout(stallTimer);
+    stallTimer = undefined;
+  };
+
+  const armStallTimer = (): void => {
+    if (stallTimeoutMs <= 0 || destroyed) return;
+    // A straggler object still in flight after done/error must not re-arm
+    // the watchdog on a subscription already reported dead — the re-armed
+    // timer would fire a second 'error' at a consumer that moved on.
+    const status = inner.snapshot.get().context.status;
+    if (status === 'ended' || status === 'error') return;
+    disarmStallTimer();
+    stallTimer = setTimeout(() => {
+      stallTimer = undefined;
+      subscription?.cancel();
+      inner.send({
+        type: 'error',
+        error: new Error(
+          `MoQ track "${track.moq.name}" delivered no objects for ${stallTimeoutMs}ms; subscription presumed dead`
+        ),
+      });
+    }, stallTimeoutMs);
+  };
 
   // Decaying arrival-offset envelope (see `arrivalJitter` on the context).
   // Two numbers and no allocation, deliberately: this runs on every
@@ -261,7 +312,11 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   };
 
   const handleObject = (object: MoqtObject): void => {
-    if (destroyed || object.status !== 'normal') return;
+    if (destroyed) return;
+    // Any object is proof of delivery — including status-only ones the
+    // buffer ignores below — so the watchdog re-arms before any filtering.
+    armStallTimer();
+    if (object.status !== 'normal') return;
     if (isBehindWatermark(object.groupId, object.objectId)) return;
     const timescale = trackTimescale ?? catalogTimescale;
     const loc = toLocFrame(object, timescale !== undefined ? { timescale } : {});
@@ -354,8 +409,12 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
           inner.send({ type: 'subscribed' });
         },
         onObject: handleObject,
-        onDone: (done) => inner.send({ type: 'done', done }),
+        onDone: (done) => {
+          disarmStallTimer();
+          inner.send({ type: 'done', done });
+        },
         onError: (error) => {
+          disarmStallTimer();
           if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN && options.refreshAuth && !authRetried) {
             authRetried = true;
             void options
@@ -372,6 +431,10 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
         },
       }
     );
+    // Armed after the subscribe is issued so the deadline also covers a
+    // subscription that OKs and then never delivers — the case PUBLISH_DONE
+    // and REQUEST_ERROR both fail to report.
+    armStallTimer();
   };
 
   subscribe({
@@ -423,6 +486,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
+      disarmStallTimer();
       subscription?.cancel();
       frames.length = 0;
       inner.destroy();

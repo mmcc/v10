@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MoqSource } from '../../../media/moq/parse-source';
 import { encodeSetup } from '../../../network/moqt/control-messages';
 import type { MoqtTransport } from '../../../network/moqt/session';
@@ -43,6 +43,14 @@ function createFakeTransport() {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
       void pipe.writable.getWriter().write(encodeSetup([]));
       uniController.enqueue(pipe.readable);
+    },
+    /**
+     * The peer or the network dropped the connection: `closed` settles
+     * without anyone calling `close()` locally, which is how the session
+     * driver learns about an outage.
+     */
+    drop() {
+      resolveClosed(undefined);
     },
     getCloseInfo: () => closeInfo,
   };
@@ -89,7 +97,7 @@ describe('createMoqSessionActor', () => {
     actor.destroy();
   });
 
-  it('fails when the transport cannot connect, closing the half-open transport', async () => {
+  it('fails when the transport cannot connect and reconnect is disabled, closing the half-open transport', async () => {
     const fake = createFakeTransport();
     const actor = createMoqSessionActor({
       source: makeSource(),
@@ -97,6 +105,8 @@ describe('createMoqSessionActor', () => {
         transport: fake.transport,
         ready: Promise.reject(new Error('handshake failed')),
       }),
+      // Pin the terminal path; the default retries (covered below).
+      reconnect: { maxAttempts: 0 },
     });
 
     await vi.waitFor(() => expect(actor.snapshot.get().context.status).toBe('failed'));
@@ -237,5 +247,160 @@ describe('createMoqSessionActor', () => {
 
     actor.destroy();
     expect(fake.getCloseInfo()).toBeDefined();
+  });
+
+  describe('reconnect', () => {
+    // Backoff delays are jittered ±25%, so these tests advance well past a
+    // delay rather than by its exact value.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Yield a macrotask so the connect chain's promises settle; no timer fires. */
+    const settle = () => vi.advanceTimersByTimeAsync(0);
+
+    it('retries a failed connect after a backoff delay instead of failing', async () => {
+      const failing = createFakeTransport();
+      const recovered = createFakeTransport();
+      let attempts = 0;
+      const createTransport = vi.fn<CreateMoqTransport>(() =>
+        ++attempts === 1
+          ? { transport: failing.transport, ready: Promise.reject(new Error('handshake failed')) }
+          : { transport: recovered.transport, ready: Promise.resolve() }
+      );
+
+      const actor = createMoqSessionActor({ source: makeSource(), createTransport });
+      await settle();
+
+      // Default policy retries forever: a first failure is an outage, not the end.
+      expect(actor.snapshot.get().context.status).toBe('reconnecting');
+      expect(actor.snapshot.get().context.error).toBeInstanceOf(Error);
+      expect(actor.snapshot.get().context.session).toBeUndefined();
+      expect(createTransport).toHaveBeenCalledTimes(1);
+
+      recovered.sendServerSetup();
+      await vi.advanceTimersByTimeAsync(1000); // 2× the 500ms default first delay
+
+      expect(createTransport).toHaveBeenCalledTimes(2);
+      expect(actor.snapshot.get().context.status).toBe('ready');
+      expect(actor.snapshot.get().context.session).toBeDefined();
+      // The recovered connection publishes a clean context, not the old failure.
+      expect(actor.snapshot.get().context.error).toBeUndefined();
+
+      actor.destroy();
+    });
+
+    it('re-fetches the auth token for each reconnect attempt', async () => {
+      // A relay outage outlasting the token's lifetime must not reconnect
+      // with the expired one.
+      const failing = createFakeTransport();
+      const recovered = createFakeTransport();
+      let attempts = 0;
+      const createTransport = vi.fn<CreateMoqTransport>(() =>
+        ++attempts === 1
+          ? { transport: failing.transport, ready: Promise.reject(new Error('handshake failed')) }
+          : { transport: recovered.transport, ready: Promise.resolve() }
+      );
+      const getToken = vi.fn(() => (attempts === 0 ? 'first' : 'second'));
+
+      const actor = createMoqSessionActor({ source: makeSource(), createTransport, authProvider: { getToken } });
+      await settle();
+      expect(getToken).toHaveBeenCalledTimes(1);
+
+      recovered.sendServerSetup();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(getToken).toHaveBeenCalledTimes(2);
+      expect(actor.getAuthParameters().authorizationTokens?.[0]).toEqual(
+        new Uint8Array([0x3, 0x0, ...new TextEncoder().encode('second')])
+      );
+
+      actor.destroy();
+    });
+
+    it('reconnects with a new session when an established transport drops', async () => {
+      const first = createFakeTransport();
+      const second = createFakeTransport();
+      let attempts = 0;
+      const createTransport = vi.fn<CreateMoqTransport>(() => ({
+        transport: (++attempts === 1 ? first : second).transport,
+        ready: Promise.resolve(),
+      }));
+
+      const actor = createMoqSessionActor({ source: makeSource(), createTransport });
+      first.sendServerSetup();
+      await settle();
+      expect(actor.snapshot.get().context.status).toBe('ready');
+      const firstSession = actor.snapshot.get().context.session;
+
+      first.drop();
+      await settle();
+
+      // The dead session leaves the context so nothing issues requests on it.
+      expect(actor.snapshot.get().context.status).toBe('reconnecting');
+      expect(actor.snapshot.get().context.session).toBeUndefined();
+
+      second.sendServerSetup();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(createTransport).toHaveBeenCalledTimes(2);
+      expect(actor.snapshot.get().context.status).toBe('ready');
+      // Behaviors keyed on 'ready' re-subscribe against this new session.
+      expect(actor.snapshot.get().context.session).toBeDefined();
+      expect(actor.snapshot.get().context.session).not.toBe(firstSession);
+
+      actor.destroy();
+    });
+
+    it('fails once the retry budget is spent and never retries again', async () => {
+      // The transport object is irrelevant here — every attempt rejects
+      // before a session exists.
+      const fake = createFakeTransport();
+      const createTransport = vi.fn<CreateMoqTransport>(() => ({
+        transport: fake.transport,
+        ready: Promise.reject(new Error('handshake failed')),
+      }));
+
+      const actor = createMoqSessionActor({
+        source: makeSource(),
+        createTransport,
+        reconnect: { maxAttempts: 1, initialDelayMs: 10 },
+      });
+      await settle();
+      expect(actor.snapshot.get().context.status).toBe('reconnecting');
+      expect(createTransport).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(createTransport).toHaveBeenCalledTimes(2);
+      expect(actor.snapshot.get().context.status).toBe('failed');
+      expect(actor.snapshot.get().context.error).toBeInstanceOf(Error);
+
+      // 'failed' is terminal: the spent budget schedules nothing more.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(createTransport).toHaveBeenCalledTimes(2);
+
+      actor.destroy();
+    });
+
+    it('does not retry after destroy while reconnecting', async () => {
+      const fake = createFakeTransport();
+      const createTransport = vi.fn<CreateMoqTransport>(() => ({
+        transport: fake.transport,
+        ready: Promise.reject(new Error('handshake failed')),
+      }));
+
+      const actor = createMoqSessionActor({ source: makeSource(), createTransport });
+      await settle();
+      expect(actor.snapshot.get().context.status).toBe('reconnecting');
+
+      actor.destroy();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // destroy() cleared the pending timer; a destroyed actor never reconnects.
+      expect(createTransport).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { signal } from '../../../core/signals/primitives';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
@@ -67,6 +67,11 @@ interface FakeSubscriber extends TrackSubscriberActor {
   destroyed: boolean;
   /** Simulate a buffered keyframe-led group (optionally at a timestamp). */
   becomeDecodable(oldestTimestampUs?: number): void;
+  /**
+   * Simulate the subscription dying: the publisher ended it (`'ended'`) or
+   * the request failed / the stall watchdog gave up (`'error'`).
+   */
+  die(status: 'ended' | 'error'): void;
 }
 
 function createFakeSubscriberFactory() {
@@ -89,6 +94,9 @@ function createFakeSubscriberFactory() {
           value: 'active',
           context: { ...snapshot.get().context, hasDecodableFrame: true, oldestTimestampUs },
         });
+      },
+      die(status: 'ended' | 'error') {
+        snapshot.set({ value: 'active', context: { ...snapshot.get().context, status } });
       },
       destroy() {
         subscriber.destroyed = true;
@@ -150,6 +158,13 @@ function makeAudioDeps() {
     },
   };
 }
+
+// Dead-subscription rejoin backoff (`DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG`):
+// a 500ms initial delay jittered ±25%, i.e. 375–625ms for the first retry.
+// Recovery tests either stop short of the floor (nothing may re-subscribe
+// yet) or advance generously past the ceiling.
+const BELOW_REJOIN_BACKOFF_MS = 300;
+const PAST_REJOIN_BACKOFF_MS = 1_000;
 
 // ============================================================================
 // Tests
@@ -387,6 +402,156 @@ describe('subscribeSelectedVideoTrack', () => {
 
     reactor.destroy();
   });
+
+  it('threads the configured stall timeout into every subscriber it creates', async () => {
+    const deps = makeDeps();
+    const { factory, created } = createFakeSubscriberFactory();
+    const reactor = subscribeSelectedVideoTrack.setup({
+      ...deps,
+      config: { createTrackSubscriber: factory, subscribeStallTimeoutMs: 1234 },
+    });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    // The handoff target arms the same watchdog as the initial join.
+    deps.state.selectedVideoTrackId.set(SD.id);
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+    for (const subscriber of created) expect(subscriber.options.stallTimeoutMs).toBe(1234);
+
+    reactor.destroy();
+  });
+
+  describe('dead-subscription recovery', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rejoins at the live edge after the current subscription errors', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(1);
+
+      // Relay error / stall watchdog: the dead actor's buffer tail is all it
+      // will ever deliver, so it is dropped immediately.
+      created[0]!.die('error');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[0]!.destroyed).toBe(true);
+      expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+
+      // Nothing re-subscribes while the rejoin backoff runs.
+      await vi.advanceTimersByTimeAsync(BELOW_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(1);
+
+      // The backoff elapsed: the same selection rejoins through the initial
+      // join filter (a live-edge rejoin, not a handoff).
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({
+        track: { id: HD.id },
+        locationFilter: { type: 'next-group-start' },
+      });
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
+      expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
+
+      reactor.destroy();
+    });
+
+    it('rejoins at the live edge after the publisher ends the current subscription', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(1);
+
+      // PUBLISH_DONE on a broadcaster blip, with the selection still standing.
+      created[0]!.die('ended');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[0]!.destroyed).toBe(true);
+      expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(BELOW_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({
+        track: { id: HD.id },
+        locationFilter: { type: 'next-group-start' },
+      });
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
+
+      reactor.destroy();
+    });
+
+    it('keeps the current subscription playing when a handoff target dies, then retries the switch', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(2);
+
+      // The relay refused the new track before it could promote: only the
+      // pending subscriber dies, the current one keeps playing.
+      created[1]!.die('error');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[1]!.destroyed).toBe(true);
+      expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
+      expect(created[0]!.destroyed).toBe(false);
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      await vi.advanceTimersByTimeAsync(BELOW_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(2);
+
+      // Same backoff paces the retry; a current subscription still exists,
+      // so the new attempt is another group-boundary handoff.
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(3);
+      expect(created[2]!.options).toMatchObject({
+        track: { id: SD.id },
+        locationFilter: { type: 'next-group-start' },
+      });
+      expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[2]);
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+
+    it('leaves the dead subscription in place when recovery is disabled', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({
+        ...deps,
+        config: { createTrackSubscriber: factory, subscribeRetry: { maxAttempts: 0 } },
+      });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(1);
+
+      created[0]!.die('error');
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      // No retry budget: the dead actor stays in its slot untouched and the
+      // engine's failover path owns the outcome.
+      expect(created).toHaveLength(1);
+      expect(created[0]!.destroyed).toBe(false);
+      expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+  });
 });
 
 describe('subscribeSelectedAudioTrack', () => {
@@ -434,5 +599,44 @@ describe('subscribeSelectedAudioTrack', () => {
     await vi.waitFor(() => expect(created).toHaveLength(1));
 
     reactor.destroy();
+  });
+
+  describe('dead-subscription recovery', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rejoins straight at the live edge after the subscription dies', async () => {
+      const deps = makeAudioDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedAudioTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedAudioTrackId.set(MAIN_AUDIO.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(1);
+
+      created[0]!.die('ended');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[0]!.destroyed).toBe(true);
+      expect(deps.context.audioSubscriberActor.get()).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(BELOW_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(1);
+
+      // Audio's initial join filter — every frame is independently decodable.
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({
+        track: { id: MAIN_AUDIO.id },
+        locationFilter: { type: 'largest-object' },
+      });
+      expect(deps.context.audioSubscriberActor.get()).toBe(created[1]);
+      expect(deps.context.pendingAudioSubscriberActor.get()).toBeUndefined();
+
+      reactor.destroy();
+    });
   });
 });
