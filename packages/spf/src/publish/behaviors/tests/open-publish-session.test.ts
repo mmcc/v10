@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createComposition } from '../../../core/composition/create-composition';
 import { signal } from '../../../core/signals/primitives';
-import { PUBLISH_DONE_STATUS } from '../../../network/moqt/control-messages';
-import { createMoqtSession, type PublishDone } from '../../../network/moqt/session';
+import { createMoqtSession } from '../../../network/moqt/session';
+import { type RawRequest, rawSubscribe, solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
 import { createTransportPair, type TransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
 import type { ConnectPublishTransport } from '../../session/publish-session';
 import {
@@ -16,11 +16,10 @@ const ENDPOINT = { url: 'https://relay.example.com/moq', namespace: ['live', 'ab
 
 const disposals: (() => void)[] = [];
 
-function makeAcceptingPeer(pair: TransportPair) {
+function makePeer(pair: TransportPair) {
   const closes: unknown[] = [];
   const peer = createMoqtSession(pair.server, {
     callbacks: {
-      onIncomingPublish: (_publish, respond) => respond.accept(),
       onClosed: (info) => closes.push(info),
     },
   });
@@ -70,17 +69,20 @@ describe('openPublishSession', () => {
 
   it('opens the session and mirrors the actor lifecycle into sessionStatus', async () => {
     const pair = createTransportPair();
-    makeAcceptingPeer(pair);
+    makePeer(pair);
     const { state, context } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
 
     openGate(state);
     await vi.waitFor(() => {
       expect(state.sessionStatus.get()).toBe('ready');
     });
-    const actor = context.publishSessionActor.get()!;
-    const session = actor.snapshot.get().context.session!;
 
-    session.publishTrack({ trackNamespace: ENDPOINT.namespace, trackName: 'video' });
+    // A track registers (setupTrackPublishers' job in the composed
+    // engine) and the peer solicits the namespace; the announce lands
+    // and the session is live.
+    const actor = context.publishSessionActor.get()!;
+    actor.snapshot.get().context.session!.registerTrack({ trackNamespace: ENDPOINT.namespace, trackName: 'catalog' });
+    void solicitNamespace(pair.server, []);
     await vi.waitFor(() => {
       expect(state.sessionStatus.get()).toBe('live');
     });
@@ -89,7 +91,7 @@ describe('openPublishSession', () => {
 
   it('tears the session down on unpublish and settles on closed', async () => {
     const pair = createTransportPair();
-    const { closes } = makeAcceptingPeer(pair);
+    const { closes } = makePeer(pair);
     const { state, context } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
 
     openGate(state);
@@ -125,7 +127,8 @@ describe('openPublishSession', () => {
   // Production-path teardown: the transport stage composed the way the moq
   // publish engine composes it (setupTrackPublishers before
   // openPublishSession — cleanups run in composition order, so the
-  // publishers quiesce and queue PUBLISH_DONE while the transport lives).
+  // publishers quiesce and FIN their tracks' subscription streams while
+  // the transport lives).
   // ---------------------------------------------------------------------------
 
   function makeTransportStage(pair: TransportPair) {
@@ -134,30 +137,25 @@ describe('openPublishSession', () => {
       initialState: { publishActivated: false, cameraState: 'idle', screenShareState: 'idle', sessionStatus: 'idle' },
     });
     disposals.push(() => void composition.destroy());
+    makePeer(pair);
 
-    const dones = { catalog: [] as PublishDone[], video: [] as PublishDone[] };
-    const { peer } = makeAcceptingPeer(pair);
+    const subscriptions = {} as { catalog: RawRequest; video: RawRequest };
 
     const goLive = async () => {
       composition.state.endpoint.set(ENDPOINT);
       composition.state.activeEncodings.set({ camera: { codec: 'vp8', width: 640, height: 480 } });
       composition.state.publishActivated.set(true);
       composition.state.cameraState.set('active');
+      void solicitNamespace(pair.server, []);
       await vi.waitFor(() => {
         expect(composition.state.sessionStatus.get()).toBe('live');
       });
 
-      // Subscribe to both offered tracks so PUBLISH_DONE has subscriber
-      // streams to land on, and open one video group so the video track
-      // has an opened data stream to report.
-      peer.subscribe(
-        { trackNamespace: ENDPOINT.namespace, trackName: 'catalog' },
-        { onDone: (done) => dones.catalog.push(done) }
-      );
-      peer.subscribe(
-        { trackNamespace: ENDPOINT.namespace, trackName: 'video' },
-        { onDone: (done) => dones.video.push(done) }
-      );
+      // Hold live subscriptions on both tracks so the teardown's clean
+      // end (a bare stream FIN) is observable, and open one video group
+      // so an in-flight data stream rides through the teardown too.
+      subscriptions.catalog = await rawSubscribe(pair.server, ENDPOINT.namespace, 'catalog', 11);
+      subscriptions.video = await rawSubscribe(pair.server, ENDPOINT.namespace, 'video', 13);
       await vi.waitFor(() => {
         const actor = composition.context.publishSessionActor.get()!;
         expect(actor.snapshot.get().context.subscriberCount).toBe(2);
@@ -169,36 +167,40 @@ describe('openPublishSession', () => {
       });
     };
 
-    return { composition, dones, goLive };
+    return { composition, subscriptions, goLive };
   }
 
-  it('delivers PUBLISH_DONE for every track when the composition is destroyed', async () => {
+  it('FINs every track subscription cleanly when the composition is destroyed', async () => {
     const pair = createTransportPair();
-    const { composition, dones, goLive } = makeTransportStage(pair);
+    const { composition, subscriptions, goLive } = makeTransportStage(pair);
     await goLive();
 
     // The production teardown path — no manual draining beforehand.
     await composition.destroy();
 
     await vi.waitFor(() => {
-      expect(dones.catalog).toHaveLength(1);
-      // Stream Count reports data streams OPENED (draft-19 §10.11), so the
-      // still-open video group counts.
-      expect(dones.video).toMatchObject([{ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 1 }]);
+      expect(subscriptions.catalog.ended()).toBe(true);
+      expect(subscriptions.video.ended()).toBe(true);
     });
+    // A bare FIN is the clean draft-19 track end — any trailing message
+    // (the old PUBLISH_DONE) makes moq-lite-rs abort the track instead.
+    expect(subscriptions.catalog.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expect(subscriptions.video.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
   });
 
-  it('delivers PUBLISH_DONE for every track when unpublish collapses the gate', async () => {
+  it('FINs every track subscription when unpublish collapses the gate', async () => {
     const pair = createTransportPair();
-    const { composition, dones, goLive } = makeTransportStage(pair);
+    const { composition, subscriptions, goLive } = makeTransportStage(pair);
     await goLive();
 
     composition.state.publishActivated.set(false);
 
     await vi.waitFor(() => {
-      expect(dones.catalog).toHaveLength(1);
-      expect(dones.video).toMatchObject([{ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 1 }]);
+      expect(subscriptions.catalog.ended()).toBe(true);
+      expect(subscriptions.video.ended()).toBe(true);
     });
+    expect(subscriptions.catalog.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expect(subscriptions.video.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
     // An orderly stop, not a failure.
     await vi.waitFor(() => {
       expect(composition.state.sessionStatus.get()).toBe('closed');
@@ -209,7 +211,7 @@ describe('openPublishSession', () => {
   it('clears a prior session error on the next attempt', async () => {
     let attempts = 0;
     const pair = createTransportPair();
-    makeAcceptingPeer(pair);
+    makePeer(pair);
     const { state } = setupBehavior(() => {
       attempts += 1;
       if (attempts === 1) throw new Error('connect refused');

@@ -5,6 +5,7 @@ import { applyMoqCatalogUpdate } from '../../../../media/moq/parse-catalog';
 import { utf8Decode } from '../../../../network/moqt/bytes';
 import type { MoqtObject } from '../../../../network/moqt/object-stream';
 import { createMoqtSession } from '../../../../network/moqt/session';
+import { solicitNamespace } from '../../../../network/moqt/tests/helpers/raw-peer';
 import { createTransportPair } from '../../../../network/moqt/tests/helpers/transport-pair';
 import { MoqPublishMediaMixin } from '../adapter';
 
@@ -12,6 +13,13 @@ import { MoqPublishMediaMixin } from '../adapter';
  * The full-pipeline proof: real capture (canvas + oscillator) → real
  * WebCodecs encode → the in-repo publish session over an in-memory
  * transport pair → the EXISTING subscribe driver on the far side.
+ *
+ * Ingest is announce-and-serve (moq-relay 0.14.7), so the peer speaks
+ * first: it solicits announces on a raw bidi stream (SUBSCRIBE_NAMESPACE
+ * — the subscribe driver never initiates one), reads the publisher's
+ * REQUEST_OK and NAMESPACE entry off it, then pulls each track with the
+ * driver's ordinary SUBSCRIBEs — the publisher answers SUBSCRIBE_OK and
+ * only then lets data flow for that track.
  */
 class TestPublishMedia extends MoqPublishMediaMixin(EventTarget) {}
 
@@ -53,13 +61,16 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(makeLiveCameraStream());
 
     const pair = createTransportPair();
-    const publishes: string[] = [];
+    const proactivePublishes: string[] = [];
     const subscriber = createMoqtSession(pair.server, {
       unknownAliasTimeoutMs: 2000,
       callbacks: {
+        // Regression tripwire: moq-relay 0.14.7 removed PUBLISH ingest —
+        // mirror its rejection so a slide back to the proactive-PUBLISH
+        // model fails this test loudly (asserted empty at the end).
         onIncomingPublish: (publish, respond) => {
-          publishes.push(publish.trackName);
-          respond.accept();
+          proactivePublishes.push(publish.trackName);
+          respond.reject(400, 'PUBLISH is not supported');
         },
       },
     });
@@ -89,33 +100,41 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     media.publishEndpoint = 'https://relay.example.com/moq';
     media.publishNamespace = 'live/abc123';
     const published = media.publish();
+    // The peer solicits announces (empty prefix covers every namespace)
+    // the way the real relay does right after SETUP. Opened after
+    // publish(): the in-memory pair only completes a write once the far
+    // side reads, and the publish session (the reader) exists only once
+    // publishing starts.
+    const solicitation = await solicitNamespace(pair.server, []);
 
-    // The session offers every track; the subscriber accepts.
+    // The session accepts the solicitation and announces the namespace on
+    // it — the whole ingest offer; no per-track PUBLISH exists anymore.
     await vi.waitFor(
       () => {
-        expect(publishes).toContain('catalog');
-        expect(publishes).toContain('video');
-        expect(publishes).toContain('audio');
+        expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
       },
       { timeout: 15_000 }
     );
+    // Empty solicited prefix → the suffix is the full namespace.
+    expect(solicitation.received[1]).toMatchObject({ kind: 'namespace', trackNamespaceSuffix: ['live', 'abc123'] });
 
-    // publish() resolves once the session is live.
+    // publish() resolves once the session is live — "announced", under
+    // announce-and-serve, not "PUBLISH accepted".
     await expect(published).resolves.toBeUndefined();
     expect(media.publishState).toBe('live');
     expect(media.publishStartedAt).not.toBeNaN();
     expect(statuses).toEqual(['idle', 'connecting', 'ready', 'live']);
 
-    // Subscribe to the published tracks with the existing driver.
+    // Pull the published tracks with the existing driver: the publisher
+    // serves each SUBSCRIBE with SUBSCRIBE_OK, and a track publisher
+    // writes nothing until its subscription binds — the catalog replays
+    // its latest frame on bind, so subscribing after `live` still yields
+    // the current catalog.
     const namespace = ['live', 'abc123'];
     const collect = (trackName: string) => {
       const objects: MoqtObject[] = [];
-      const done: unknown[] = [];
-      subscriber.subscribe(
-        { trackNamespace: namespace, trackName },
-        { onObject: (object) => objects.push(object), onDone: (info) => done.push(info) }
-      );
-      return { objects, done };
+      subscriber.subscribe({ trackNamespace: namespace, trackName }, { onObject: (object) => objects.push(object) });
+      return { objects };
     };
     const catalog = collect('catalog');
     const video = collect('video');
@@ -162,18 +181,20 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     expect(audio.objects.every((object) => object.objectId === 0)).toBe(true);
     expect(audio.objects[1]!.groupId).toBeGreaterThan(audio.objects[0]!.groupId);
 
-    // Unpublish: PUBLISH_DONE reaches the subscriptions and the session
-    // returns to idle.
+    // Unpublish: the announce is retracted with NAMESPACE_DONE on the
+    // solicitation stream (each subscribe stream ends with a bare FIN —
+    // PUBLISH_DONE never appears) and the session returns to idle.
     media.unpublish();
     await vi.waitFor(
       () => {
-        expect(video.done.length).toBeGreaterThanOrEqual(1);
-        expect(catalog.done.length).toBeGreaterThanOrEqual(1);
+        expect(solicitation.received.map((m) => m.kind)).toContain('namespace-done');
       },
       { timeout: 10_000 }
     );
     await vi.waitFor(() => {
       expect(media.publishState).toBe('idle');
     });
+    // The publisher never fell back to proactive PUBLISH ingest.
+    expect(proactivePublishes).toEqual([]);
   }, 60_000);
 });

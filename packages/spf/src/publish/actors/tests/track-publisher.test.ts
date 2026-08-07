@@ -90,7 +90,8 @@ function counters(publisher: TrackPublisherActor) {
 describe('createTrackPublisherActor', () => {
   it('maps keyframes to group boundaries and round-trips LOC frames through the reader', async () => {
     const factory = makeStreamFactory();
-    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, trackAlias: 5 });
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+    publisher.send({ type: 'bind', trackAlias: 5 });
 
     const config = new Uint8Array([9, 9]);
     const key0 = locFrame(0, [1, 2, 3], config);
@@ -164,9 +165,9 @@ describe('createTrackPublisherActor', () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({
       openUniStream: factory.openUniStream,
-      trackAlias: 3,
       groupPerFrame: true,
     });
+    publisher.send({ type: 'bind', trackAlias: 3 });
 
     for (let i = 0; i < 3; i++) {
       const frame = locFrame(i * 20_000, [i]);
@@ -227,7 +228,8 @@ describe('createTrackPublisherActor', () => {
         },
       });
     };
-    const publisher = createTrackPublisherActor({ openUniStream, trackAlias: 3, groupPerFrame: true });
+    const publisher = createTrackPublisherActor({ openUniStream, groupPerFrame: true });
+    publisher.send({ type: 'bind', trackAlias: 3 });
 
     for (let i = 0; i < 10; i++) {
       const frame = locFrame(i * 20_000, [i]);
@@ -259,7 +261,8 @@ describe('createTrackPublisherActor', () => {
 
   it('ignores delta frames before the first keyframe', async () => {
     const factory = makeStreamFactory();
-    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, trackAlias: 1 });
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+    publisher.send({ type: 'bind', trackAlias: 1 });
 
     const delta = locFrame(0, [1]);
     publisher.send({
@@ -280,9 +283,9 @@ describe('createTrackPublisherActor', () => {
     factory.gate = true;
     const publisher = createTrackPublisherActor({
       openUniStream: factory.openUniStream,
-      trackAlias: 2,
       maxQueuedGroups: 1,
     });
+    publisher.send({ type: 'bind', trackAlias: 2 });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1, 2], new Uint8Array([7]));
@@ -331,8 +334,7 @@ describe('createTrackPublisherActor', () => {
     });
     // Streams actually opened: group 0 (later reset) and group 2. Group 1
     // was dropped while queued — it never opened a stream, and counting it
-    // would inflate PUBLISH_DONE's Stream Count with a stream the peer can
-    // never receive.
+    // would claim a stream the peer can never receive.
     expect(counters(publisher).openedGroups).toBe(2);
     publisher.destroy();
   });
@@ -344,7 +346,8 @@ describe('createTrackPublisherActor', () => {
       new Promise((resolve) => {
         resolveOpen = resolve;
       });
-    const publisher = createTrackPublisherActor({ openUniStream, trackAlias: 7 });
+    const publisher = createTrackPublisherActor({ openUniStream });
+    publisher.send({ type: 'bind', trackAlias: 7 });
 
     const key = locFrame(0, [1, 2], new Uint8Array([7]));
     publisher.send({ type: 'frame', payload: key.payload, properties: key.properties, keyframe: true, timestampUs: 0 });
@@ -387,9 +390,9 @@ describe('createTrackPublisherActor', () => {
       openUniStream: async () => {
         throw new Error('no more streams');
       },
-      trackAlias: 1,
       onError,
     });
+    publisher.send({ type: 'bind', trackAlias: 1 });
 
     const frame = locFrame(0, [1]);
     publisher.send({
@@ -408,7 +411,8 @@ describe('createTrackPublisherActor', () => {
 
   it('counts opened groups (streams) on the snapshot, including unfinished ones', async () => {
     const factory = makeStreamFactory();
-    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, trackAlias: 6 });
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+    publisher.send({ type: 'bind', trackAlias: 6 });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1], new Uint8Array([7]));
@@ -424,8 +428,8 @@ describe('createTrackPublisherActor', () => {
     sendKey(1_000_000);
     // Group 1 is still open (no boundary/FIN yet): the opened count —
     // which lands as each group's wire stream actually opens — leads the
-    // published (FINed) count; draft-19's PUBLISH_DONE Stream Count wants
-    // streams opened, not streams completed.
+    // published (FINed) count: it reports streams opened, not streams
+    // completed.
     await vi.waitFor(() => {
       expect(counters(publisher).openedGroups).toBe(2);
     });
@@ -439,7 +443,8 @@ describe('createTrackPublisherActor', () => {
   it('destroy() under backpressure resets abandoned groups and unblocks their writes', async () => {
     const factory = makeStreamFactory();
     factory.gate = true;
-    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, trackAlias: 4 });
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+    publisher.send({ type: 'bind', trackAlias: 4 });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1, 2], new Uint8Array([7]));
@@ -484,7 +489,8 @@ describe('createTrackPublisherActor', () => {
 
   it('destroy() finishes the open stream best-effort', async () => {
     const factory = makeStreamFactory();
-    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, trackAlias: 1 });
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+    publisher.send({ type: 'bind', trackAlias: 1 });
     const frame = locFrame(0, [1], new Uint8Array([7]));
     publisher.send({
       type: 'frame',
@@ -503,5 +509,271 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams[0]!.closed).toBe(true);
     });
     expect(publisher.snapshot.get().value).toBe('destroyed');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Subscription binding — announce-and-serve's demand gate.
+  // ---------------------------------------------------------------------------
+
+  it('drops frames while unbound and opens no streams', async () => {
+    const factory = makeStreamFactory();
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
+    const key = locFrame(0, [1, 2], new Uint8Array([7]));
+    publisher.send({ type: 'frame', payload: key.payload, properties: key.properties, keyframe: true, timestampUs: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // An unbound stream would carry an alias the peer never registered —
+    // its "unknown track alias" drop path.
+    expect(factory.streams).toHaveLength(0);
+    expect(counters(publisher).publishedObjects).toBe(0);
+    publisher.destroy();
+  });
+
+  it('joins at the next keyframe after a bind', async () => {
+    const factory = makeStreamFactory();
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
+    const sendFrame = (timestampUs: number, key: boolean) => {
+      const frame = locFrame(timestampUs, [1], key ? new Uint8Array([7]) : undefined);
+      publisher.send({
+        type: 'frame',
+        payload: frame.payload,
+        properties: frame.properties,
+        keyframe: key,
+        timestampUs,
+      });
+    };
+
+    sendFrame(0, true); // unbound — dropped
+    publisher.send({ type: 'bind', trackAlias: 9 });
+    sendFrame(33_333, false); // bound, but no open group to extend — dropped
+    sendFrame(2_000_000, true); // the join point
+    sendFrame(2_033_333, false);
+    publisher.send({ type: 'end' });
+
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(1);
+      expect(factory.streams[0]!.closed).toBe(true);
+    });
+    const { header, objects } = await parseSubgroup(factory.streams[0]!);
+    expect(header.trackAlias).toBe(9);
+    expect(objects.map((o) => o.objectId)).toEqual([0, 1]);
+    expect(toLocFrame(objects[0]!)!.timestampUs).toBe(2_000_000);
+    publisher.destroy();
+  });
+
+  it('replays the latest frame as a fresh group on every bind', async () => {
+    const factory = makeStreamFactory();
+    const publisher = createTrackPublisherActor({
+      openUniStream: factory.openUniStream,
+      groupPerFrame: true,
+      replayLastGroupOnBind: true,
+    });
+
+    // Both frames arrive unbound — only the latest is retained.
+    for (const [timestampUs, byte] of [
+      [0, 1],
+      [1_000, 2],
+    ] as const) {
+      const frame = locFrame(timestampUs, [byte]);
+      publisher.send({
+        type: 'frame',
+        payload: frame.payload,
+        properties: frame.properties,
+        keyframe: false,
+        timestampUs,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(factory.streams).toHaveLength(0);
+
+    publisher.send({ type: 'bind', trackAlias: 4 });
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(1);
+      expect(factory.streams[0]!.closed).toBe(true);
+    });
+    const first = await parseSubgroup(factory.streams[0]!);
+    expect(first.header.trackAlias).toBe(4);
+    expect(toLocFrame(first.objects[0]!)!.timestampUs).toBe(1_000);
+
+    // A replacement subscription re-binds — it needs the catalog too.
+    publisher.send({ type: 'bind', trackAlias: 6 });
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(2);
+      expect(factory.streams[1]!.closed).toBe(true);
+    });
+    const second = await parseSubgroup(factory.streams[1]!);
+    expect(second.header.trackAlias).toBe(6);
+    expect(second.header.groupId).toBe(1);
+    expect(toLocFrame(second.objects[0]!)!.timestampUs).toBe(1_000);
+    publisher.destroy();
+  });
+
+  it('starts a fresh group under the new alias on rebind and drops the old queue', async () => {
+    const factory = makeStreamFactory();
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
+    const sendKey = (timestampUs: number) => {
+      const frame = locFrame(timestampUs, [1], new Uint8Array([7]));
+      publisher.send({
+        type: 'frame',
+        payload: frame.payload,
+        properties: frame.properties,
+        keyframe: true,
+        timestampUs,
+      });
+    };
+
+    publisher.send({ type: 'bind', trackAlias: 1 });
+    sendKey(0);
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(1);
+    });
+    publisher.send({ type: 'bind', trackAlias: 3 });
+    sendKey(2_000_000);
+    publisher.send({ type: 'end' });
+
+    // The old binding's open group dies with its subscription (a stream
+    // under the replaced alias is the peer's unknown-alias drop); the new
+    // binding starts a fresh group under the new alias.
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(2);
+      expect(factory.streams[0]!.aborted).toBe(true);
+      expect(factory.streams[1]!.closed).toBe(true);
+    });
+    expect(counters(publisher).droppedGroups).toBe(1);
+    const second = await parseSubgroup(factory.streams[1]!);
+    expect(second.header.trackAlias).toBe(3);
+    expect(second.header.groupId).toBe(1);
+    publisher.destroy();
+  });
+
+  it('a rebind is not starved behind a hung stream open', async () => {
+    // Models exhausted uni-stream credit: opens resolve only when the
+    // transport grants them. The serial chain must advance past an
+    // abandoned open — SerialRunner.abortAll() only signals, so awaiting
+    // the hung promise would hold the new binding's work hostage.
+    const streams: FakeUniStream[] = [];
+    const grants: ((stream: WritableStream<Uint8Array>) => void)[] = [];
+    const openUniStream = (): Promise<WritableStream<Uint8Array>> =>
+      new Promise((resolve) => {
+        grants.push(resolve);
+      });
+    const makeStream = (): { record: FakeUniStream; stream: WritableStream<Uint8Array> } => {
+      const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+      streams.push(record);
+      return {
+        record,
+        stream: new WritableStream<Uint8Array>({
+          write(chunk) {
+            record.chunks.push(chunk);
+          },
+          close() {
+            record.closed = true;
+          },
+          abort(reason) {
+            record.aborted = true;
+            record.abortReason = reason;
+          },
+        }),
+      };
+    };
+    const publisher = createTrackPublisherActor({ openUniStream });
+
+    const sendKey = (timestampUs: number) => {
+      const frame = locFrame(timestampUs, [1], new Uint8Array([7]));
+      publisher.send({
+        type: 'frame',
+        payload: frame.payload,
+        properties: frame.properties,
+        keyframe: true,
+        timestampUs,
+      });
+    };
+
+    publisher.send({ type: 'bind', trackAlias: 1 });
+    sendKey(0); // open #1 requested, never granted
+    await vi.waitFor(() => {
+      expect(grants).toHaveLength(1);
+    });
+
+    // The subscription is replaced while the open hangs; the new
+    // binding's group must request its own stream without waiting.
+    publisher.send({ type: 'bind', trackAlias: 3 });
+    sendKey(2_000_000);
+    await vi.waitFor(() => {
+      expect(grants).toHaveLength(2);
+    });
+
+    const second = makeStream();
+    grants[1]!(second.stream);
+    publisher.send({ type: 'end' });
+    await vi.waitFor(() => {
+      expect(second.record.closed).toBe(true);
+    });
+    const parsed = await parseSubgroup(second.record);
+    expect(parsed.header.trackAlias).toBe(3);
+
+    // The abandoned open finally lands: its stream belongs to a dropped
+    // group and is aborted on arrival, untouched.
+    const first = makeStream();
+    grants[0]!(first.stream);
+    await vi.waitFor(() => {
+      expect(first.record.aborted).toBe(true);
+    });
+    expect(first.record.chunks).toHaveLength(0);
+    publisher.destroy();
+  });
+
+  it('unbind drops in-flight groups without the error path and a re-bind resumes', async () => {
+    const onError = vi.fn();
+    const factory = makeStreamFactory();
+    factory.gate = true;
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, onError });
+
+    const sendKey = (timestampUs: number) => {
+      const frame = locFrame(timestampUs, [1, 2], new Uint8Array([7]));
+      publisher.send({
+        type: 'frame',
+        payload: frame.payload,
+        properties: frame.properties,
+        keyframe: true,
+        timestampUs,
+      });
+    };
+
+    publisher.send({ type: 'bind', trackAlias: 2 });
+    sendKey(0); // the header write hangs on the gate
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(1);
+    });
+
+    // The subscription ends: the queued group dies silently — an
+    // unsubscribe is ordinary pull-through lifecycle, not a failure.
+    publisher.send({ type: 'unbind' });
+    factory.releaseAll();
+    await vi.waitFor(() => {
+      expect(factory.streams[0]!.aborted).toBe(true);
+      expect(counters(publisher).droppedGroups).toBe(1);
+    });
+    expect(onError).not.toHaveBeenCalled();
+
+    // While unbound, frames drop.
+    factory.gate = false;
+    sendKey(2_000_000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(factory.streams).toHaveLength(1);
+
+    // A new subscription re-binds and publishing resumes at its keyframe.
+    publisher.send({ type: 'bind', trackAlias: 8 });
+    sendKey(4_000_000);
+    publisher.send({ type: 'end' });
+    await vi.waitFor(() => {
+      expect(factory.streams).toHaveLength(2);
+      expect(factory.streams[1]!.closed).toBe(true);
+    });
+    const { header } = await parseSubgroup(factory.streams[1]!);
+    expect(header.trackAlias).toBe(8);
+    publisher.destroy();
   });
 });
