@@ -64,6 +64,7 @@ import { findTrack } from '../../media/utils/tracks';
 import type { LocationFilter } from '../../network/moqt/control-messages';
 import {
   DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
+  MAX_SERVER_RETRY_INTERVAL_MS,
   type RetryBackoffConfig,
   retryDelayMs,
 } from '../../network/retry-backoff';
@@ -257,17 +258,34 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     retryTrackId = undefined;
   };
 
-  /** Arm the rejoin backoff for `trackId`. Returns false when the retry budget is spent. */
-  const armRejoinTimer = (trackId: string): boolean => {
+  /**
+   * The Retry Interval a REQUEST_ERROR death carried, when it did — an
+   * overloaded relay's stated pacing outranks the local backoff, same as
+   * the catalog retry path.
+   */
+  const serverRetryIntervalMs = (actor: TrackSubscriberActor): number => {
+    const error = peek(actor.snapshot).context.error as { retryInterval?: unknown } | undefined;
+    return typeof error?.retryInterval === 'number' ? error.retryInterval : 0;
+  };
+
+  /**
+   * Arm the rejoin backoff for `trackId`, honoring a server-stated Retry
+   * Interval above the local delay. Returns false when the retry budget is
+   * spent.
+   */
+  const armRejoinTimer = (trackId: string, retryIntervalMs = 0): boolean => {
     const delay = retryDelayMs(retryAttempts, retryConfig);
     if (delay === undefined) return false;
     retryAttempts++;
     retryTrackId = trackId;
-    retryTimer = setTimeout(() => {
-      retryTimer = undefined;
-      retryTrackId = undefined;
-      rejoinTick.set(peek(rejoinTick) + 1);
-    }, delay);
+    retryTimer = setTimeout(
+      () => {
+        retryTimer = undefined;
+        retryTrackId = undefined;
+        rejoinTick.set(peek(rejoinTick) + 1);
+      },
+      Math.max(delay, Math.min(retryIntervalMs, MAX_SERVER_RETRY_INTERVAL_MS))
+    );
     return true;
   };
 
@@ -317,6 +335,13 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               if (recoveredStatus === 'active') {
                 recoveryTarget = undefined;
                 retryAttempts = 0;
+              } else if (recoveryTarget.track.id !== selectedId) {
+                // The selection abandoned this recovery before its
+                // replacement proved anything — the accumulated (possibly
+                // spent) budget belongs to the abandoned track and must
+                // not tax the new one.
+                recoveryTarget = undefined;
+                retryAttempts = 0;
               }
             }
 
@@ -350,7 +375,9 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // stall) and rejoin the selection at the live edge once the
               // backoff elapses. No fresh subscriber is created before the
               // timer fires: the guard below holds creation while it runs.
-              if (retryTimer === undefined && armRejoinTimer(selectedId)) clearSlots();
+              if (retryTimer === undefined && armRejoinTimer(selectedId, serverRetryIntervalMs(current))) {
+                clearSlots();
+              }
               return;
             }
             // A backoff armed for a selection that no longer stands is the
@@ -384,7 +411,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // dead pending stays in its slot on purpose: clearing it
               // would let the creation path below re-subscribe the same
               // dead track with no delay at all.
-              if (!armRejoinTimer(selectedId)) return;
+              if (!armRejoinTimer(selectedId, serverRetryIntervalMs(pending))) return;
               pending.destroy();
               pendingSlot.set(undefined);
               return;

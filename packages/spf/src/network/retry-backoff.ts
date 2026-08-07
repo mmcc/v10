@@ -44,6 +44,13 @@ export const DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG: RetryBackoffConfig = {
 };
 
 /**
+ * Ceiling on a server-supplied REQUEST_ERROR Retry Interval (milliseconds).
+ * Retry paths honor the server's stated interval above their local backoff,
+ * but an absurd value must not park recovery forever.
+ */
+export const MAX_SERVER_RETRY_INTERVAL_MS = 60_000;
+
+/**
  * Delay before retry number `attempt` (0-based count of failures so far),
  * jittered ±25% and clamped to `maxDelayMs`, or `undefined` once `attempt`
  * exhausts `config.maxAttempts` — the caller's give-up signal.

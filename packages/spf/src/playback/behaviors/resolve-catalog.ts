@@ -55,6 +55,7 @@ import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
 import type { FetchHandle, Subscription } from '../../network/moqt/session';
 import {
   DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
+  MAX_SERVER_RETRY_INTERVAL_MS,
   type RetryBackoffConfig,
   retryDelayMs,
 } from '../../network/retry-backoff';
@@ -100,13 +101,6 @@ export interface ResolveCatalogConfig {
 }
 
 const DEFAULT_CATALOG_FETCH_TIMEOUT_MS = 5000;
-
-/**
- * Ceiling on a server-supplied REQUEST_ERROR Retry Interval (milliseconds).
- * The interval is honored above the local backoff, but an absurd value must
- * not park the catalog forever.
- */
-const MAX_SERVER_RETRY_INTERVAL_MS = 60_000;
 
 type ResolveCatalogFsmState = 'preconditions-unmet' | 'awaiting-session' | 'catalog-active';
 

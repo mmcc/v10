@@ -72,9 +72,10 @@ interface FakeSubscriber extends TrackSubscriberActor {
   activate(): void;
   /**
    * Simulate the subscription dying: the publisher ended it (`'ended'`) or
-   * the request failed / the stall watchdog gave up (`'error'`).
+   * the request failed / the stall watchdog gave up (`'error'`, optionally
+   * carrying the RequestError the wire delivered).
    */
-  die(status: 'ended' | 'error'): void;
+  die(status: 'ended' | 'error', error?: unknown): void;
 }
 
 function createFakeSubscriberFactory({
@@ -105,8 +106,8 @@ function createFakeSubscriberFactory({
       activate() {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status: 'active' } });
       },
-      die(status: 'ended' | 'error') {
-        snapshot.set({ value: 'active', context: { ...snapshot.get().context, status } });
+      die(status: 'ended' | 'error', error?: unknown) {
+        snapshot.set({ value: 'active', context: { ...snapshot.get().context, status, error } });
       },
       destroy() {
         subscriber.destroyed = true;
@@ -597,6 +598,61 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(1);
       expect(created[0]!.destroyed).toBe(false);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
+
+      reactor.destroy();
+    });
+
+    it('honors a relay-stated retry interval above the local backoff', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory();
+      const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
+
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      created[0]!.die('error', { errorCode: 0x10, retryInterval: 5000, reason: 'overloaded' });
+
+      // The local backoff window (≤625ms) has long passed, but the relay
+      // asked for 5s — the rejoin must wait it out.
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(4200);
+      expect(created).toHaveLength(2);
+      expect(created[1]!.options).toMatchObject({ track: { id: HD.id } });
+
+      reactor.destroy();
+    });
+
+    it('a recovery abandoned by a selection change does not tax the new track’s budget', async () => {
+      const deps = makeDeps();
+      const { factory, created } = createFakeSubscriberFactory({ initialStatus: 'pending' });
+      const reactor = subscribeSelectedVideoTrack.setup({
+        ...deps,
+        config: { createTrackSubscriber: factory, subscribeRetry: { maxAttempts: 1 } },
+      });
+
+      // HD dies and its recovery replacement is created but never proves
+      // healthy — the single-attempt budget is now spent on HD.
+      deps.state.selectedVideoTrackId.set(HD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      created[0]!.die('error');
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(2);
+
+      // Selecting SD abandons HD's recovery; SD must start with a fresh
+      // budget rather than inheriting HD's spent one.
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveLength(3);
+      expect(created[2]!.options).toMatchObject({ track: { id: SD.id } });
+
+      created[2]!.die('error');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created[2]!.destroyed).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+      expect(created).toHaveLength(4);
+      expect(created[3]!.options).toMatchObject({ track: { id: SD.id } });
 
       reactor.destroy();
     });
