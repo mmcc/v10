@@ -23,14 +23,21 @@
  *
  * Also the home of the MSF §11.4 auth seam: `authProvider` supplies the
  * initial authorization token (defaulting to the source's `c4m` fragment
- * token) and refreshes it when a request fails with EXPIRED_AUTH_TOKEN —
- * subscribers call `getAuthParameters()` when building requests and
- * `refreshAuthToken()` before an auth-expiry retry.
+ * token), composed onto the connect URL's `?jwt=` query parameter — the
+ * only carriage the known relay fleet (moq-lite-rs lineage) accepts; see
+ * `composePlaybackConnectUrl`. `getAuthParameters()` always resolves empty
+ * — nothing rides a request's parameters. `refreshAuthToken()` always
+ * rejects: this actor connects once and never reconnects (a `goaway` is
+ * only recorded, see `SessionMessage`'s `'goaway'` case), so a refreshed
+ * token has nowhere left to attach — the jwt is fixed at connect time.
+ * Both stay on the interface (with `MoqAuthProvider.refreshToken`) for a
+ * future relay generation that accepts draft-19 AUTHORIZATION_TOKEN
+ * request parameters, at which point a token could ride a request
+ * instead of only the connect URL.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import type { MoqSource } from '../../media/moq/parse-source';
-import { utf8Encode } from '../../network/moqt/bytes';
-import { encodeAuthTokenUseValue, type MessageParameters, MOQT_PROTOCOL_ID } from '../../network/moqt/control-messages';
+import { type MessageParameters, MOQT_PROTOCOL_ID } from '../../network/moqt/control-messages';
 import { createMoqtSession, type Goaway, type MoqtSession, type MoqtTransport } from '../../network/moqt/session';
 import { DEFAULT_RECONNECT_BACKOFF_CONFIG, type RetryBackoffConfig, retryDelayMs } from '../../network/retry-backoff';
 
@@ -66,13 +73,21 @@ export type CreateMoqTransport = (
 ) => { transport: MoqtTransport; ready: Promise<void> };
 
 /**
- * Supplies/refreshes the authorization token *value* attached to requests
- * (MSF §11.4). The actor serializes it into a MOQT Token structure with
- * Alias Type USE_VALUE.
+ * Supplies/refreshes the authorization token *value* for the connection
+ * (MSF §11.4). The actor composes it onto the connect URL's `?jwt=` query
+ * parameter (`composePlaybackConnectUrl`).
  */
 export interface MoqAuthProvider {
   getToken(): Promise<Uint8Array | string | undefined> | Uint8Array | string | undefined;
-  /** Called on auth-expiry; return a fresh token (or nothing to give up). */
+  /**
+   * Unused today: `MoqSessionActor.refreshAuthToken()` rejects before ever
+   * calling this — see its doc. A refreshed token has no connection left
+   * to attach to (the jwt rides only the connect URL, fixed at connect
+   * time), so calling this here would mint a token from the provider that
+   * no code could ever use. Kept on the interface for a future relay
+   * generation that accepts draft-19 AUTHORIZATION_TOKEN request
+   * parameters, at which point a mid-session refresh becomes meaningful.
+   */
   refreshToken?(): Promise<Uint8Array | string | undefined> | Uint8Array | string | undefined;
   /** MOQT auth Token Type codepoint. Default 0. */
   tokenType?: number;
@@ -95,9 +110,19 @@ export interface CreateMoqSessionActorOptions {
 }
 
 export interface MoqSessionActor extends Pick<TransitionActor<MoqSessionActorContext, SessionMessage>, 'snapshot'> {
-  /** Request parameters carrying the current auth token, when one exists. */
+  /**
+   * Request parameters carrying the current auth token — currently always
+   * empty; the token rides the connect URL instead (see the module doc).
+   */
   getAuthParameters(): MessageParameters;
-  /** Fetch a fresh token from the provider; resolves to the new parameters. */
+  /**
+   * Always rejects — see the implementation's doc comment for why. Kept
+   * on the interface (and called by callers' one-shot EXPIRED_AUTH_TOKEN
+   * retries, e.g. `resolve-catalog.ts`/`track-subscriber.ts`) so that
+   * retry path gives up cleanly on rejection instead of needing removal
+   * now and reinstatement once a future relay generation supports
+   * mid-session auth refresh.
+   */
   refreshAuthToken(): Promise<MessageParameters>;
   destroy(): void;
 }
@@ -114,9 +139,76 @@ function createWebTransport(
   return { transport, ready: transport.ready.then(() => undefined) };
 }
 
-function toTokenBytes(token: Uint8Array | string | undefined): Uint8Array | undefined {
+// Fatal, unlike `network/moqt/bytes`' shared `utf8Decode` — that decoder is
+// non-fatal because other wire code legitimately tolerates lossy text, and
+// must stay that way. A token is different: silently substituting U+FFFD
+// for invalid bytes sends a corrupted credential to the relay, which
+// closes the session with no signal beyond a generic connect failure.
+// Local to this file on purpose.
+const fatalTokenDecoder = new TextDecoder('utf-8', { fatal: true });
+
+function toTokenString(token: Uint8Array | string | undefined): string | undefined {
   if (token === undefined) return undefined;
-  return typeof token === 'string' ? utf8Encode(token) : token;
+  if (typeof token === 'string') return token;
+  try {
+    return fatalTokenDecoder.decode(token);
+  } catch {
+    // A binary token (e.g. a CBOR-encoded CAT token) has nowhere to go:
+    // the connect URL's `?jwt=` parameter is the only carriage this actor
+    // has (see the module doc), and that parameter is text. Throw loudly
+    // instead of shipping a substituted/corrupted value the relay will
+    // reject anyway with no useful signal.
+    throw new Error(
+      'a binary authorization token cannot be carried in the ?jwt= connect-URL parameter — a text (JWT) token is required'
+    );
+  }
+}
+
+/**
+ * Whether resolving an auth token for this URL would be wasted work — the
+ * exact complement of the two cases where {@link composePlaybackConnectUrl}
+ * discards the token it is handed:
+ *
+ *   - the URL already carries an explicit `jwt` param, which wins;
+ *   - the URL is unparseable, so it goes to WebTransport verbatim.
+ *
+ * The two must agree. When they disagree, the actor mints a token that is
+ * then thrown away — and a *throwing* provider surfaces its own error
+ * instead of the canonical `new WebTransport(url)` failure the malformed
+ * URL should have produced, which reads as an auth outage rather than the
+ * typo it is.
+ */
+function skipTokenResolution(url: string): boolean {
+  try {
+    return new URL(url).searchParams.has('jwt');
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Compose the WebTransport connect URL for a source. moq-lite-rs lineage
+ * relays (Mux's relay-rs fleet, the Varnish lab relays) authenticate with
+ * a JWT `?jwt=` query parameter on the connect URL and close the
+ * connection right after CLIENT_SETUP when auth is required but missing
+ * — the same carriage `composePublishConnectUrl` uses on the publish
+ * side (`publish/session/publish-session.ts`), for the same reason: this
+ * relay fleet hard-closes the session (`5 "invalid value"`) when a
+ * draft-19 AUTHORIZATION_TOKEN structure rides a request's parameters
+ * instead. An explicit `jwt` param already in the source URL wins, and
+ * an unparseable URL is returned verbatim so `new WebTransport(url)`
+ * raises the canonical error.
+ */
+export function composePlaybackConnectUrl(url: string, authToken?: string): string {
+  if (!authToken) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.searchParams.has('jwt')) return url;
+    parsed.searchParams.set('jwt', authToken);
+    return parsed.href;
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -128,7 +220,6 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
   const { source, authProvider } = options;
   const createTransport = options.createTransport ?? createWebTransport;
 
-  let authToken = toTokenBytes(source.c4mToken);
   let destroyed = false;
   let session: MoqtSession | undefined;
 
@@ -179,12 +270,34 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
     let transport: MoqtTransport | undefined;
     let attemptSession: MoqtSession | undefined;
     try {
-      if (authProvider) {
-        authToken = toTokenBytes(await authProvider.getToken()) ?? authToken;
-        // destroy() during a pending getToken() must not open a connection.
-        if (destroyed) return;
+      let authToken: string | undefined;
+      // Skip token resolution whenever the token would be discarded by
+      // `composePlaybackConnectUrl` (see `skipTokenResolution`): minting one
+      // would be pointless work, and a provider failure must not block —
+      // or mis-report — a connect whose URL was never going to carry it.
+      if (!skipTokenResolution(source.connectUrl)) {
+        let providerToken: Uint8Array | string | undefined;
+        if (authProvider) {
+          providerToken = await authProvider.getToken();
+          // destroy() during a pending getToken() must not open a connection.
+          if (destroyed) return;
+        }
+        try {
+          // Decoded inside start() so a binary (non-UTF-8) token — from
+          // the source's `c4m` fragment or the auth provider — lands as a
+          // snapshot failure rather than escaping this actor's
+          // constructor. Its own try, and terminal: the same bytes decode
+          // the same way on every attempt, so the reconnect path the outer
+          // catch takes for *transient* failures would loop on a config
+          // error forever.
+          const c4mToken = toTokenString(source.c4mToken);
+          authToken = toTokenString(providerToken) ?? c4mToken;
+        } catch (error) {
+          inner.send({ type: 'failed', error });
+          return;
+        }
       }
-      const created = createTransport(source.connectUrl, [MOQT_PROTOCOL_ID]);
+      const created = createTransport(composePlaybackConnectUrl(source.connectUrl, authToken), [MOQT_PROTOCOL_ID]);
       transport = created.transport;
       await created.ready;
       if (destroyed) {
@@ -268,10 +381,15 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
 
   void start();
 
-  const tokenParameters = (): MessageParameters => {
-    if (!authToken) return {};
-    return { authorizationTokens: [encodeAuthTokenUseValue(authProvider?.tokenType ?? 0, authToken)] };
-  };
+  // The token rides ONLY in the connect URL's `?jwt=` query parameter
+  // (`composePlaybackConnectUrl`). The known relay fleet (moq-lite-rs
+  // lineage, incl. Mux's relay-rs deployments) does not support draft-19
+  // AUTHORIZATION_TOKEN structures yet and hard-closes the session
+  // (`5 "invalid value"`) when one appears in a request's parameters —
+  // the same defect fixed on the publish side in `publish-session.ts`.
+  // Re-attach via this seam (encodeAuthTokenUseValue, §10.2.2) once
+  // relays accept draft-19 auth.
+  const tokenParameters = (): MessageParameters => ({});
 
   return {
     get snapshot() {
@@ -281,15 +399,19 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
     getAuthParameters: tokenParameters,
 
     async refreshAuthToken(): Promise<MessageParameters> {
-      // No refreshed token means the provider gave up (or there is no
-      // provider) — resolving with the stale parameters would trigger a
-      // pointless second unauthorized request, so surface the give-up.
-      const refreshed = toTokenBytes(await authProvider?.refreshToken?.());
-      if (!refreshed) {
-        throw new Error('MoQ auth provider could not supply a fresh token');
-      }
-      authToken = refreshed;
-      return tokenParameters();
+      // Always rejects, without calling `authProvider.refreshToken()`.
+      // The token rides ONLY the connect URL (`composePlaybackConnectUrl`),
+      // fixed at connect time, and this actor never reconnects (a goaway
+      // is only recorded — see the module doc) — so a freshly minted token
+      // would have no connection left to attach to. Calling the provider
+      // anyway would cost a real round-trip (and, for a provider backed by
+      // a minting service, a real token) for a value guaranteed to go
+      // unused. Callers' one-shot EXPIRED_AUTH_TOKEN retries
+      // (resolve-catalog.ts, track-subscriber.ts) already treat rejection
+      // here as "give up cleanly."
+      throw new Error(
+        'cannot refresh the MoQ auth token: the token rides only the connect URL, fixed at connect time, and this actor does not reconnect — a fresh token has nothing to attach to'
+      );
     },
 
     destroy(): void {
