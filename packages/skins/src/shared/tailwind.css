@@ -7,4 +7,5 @@
 
 @theme {
   --animate-media-shake: media-shake 300ms ease-in-out;
+  --animate-media-pulse: media-pulse 2s ease-in-out infinite;
 }

@@ -3,10 +3,14 @@ import type {
   BackgroundFeatures,
   LiveAudioFeatures,
   LiveVideoFeatures,
+  PublisherFeatures,
   VideoFeatures,
 } from '../../player';
 import { audioTrackFeature } from './audio-track';
 import { bufferFeature } from './buffer';
+import { captureDevicesFeature } from './capture-devices';
+import { captureSourceFeature } from './capture-source';
+import { captureTracksFeature } from './capture-tracks';
 import { controlsFeature } from './controls';
 import { errorFeature } from './error';
 import { fullscreenFeature } from './fullscreen';
@@ -14,6 +18,8 @@ import { liveFeature } from './live';
 import { pipFeature } from './pip';
 import { playbackFeature } from './playback';
 import { playbackRateFeature } from './playback-rate';
+import { publishFeature } from './publish';
+import { publishStatsFeature } from './publish-stats';
 import { qualityFeature } from './quality';
 import { remotePlaybackFeature } from './remote-playback';
 import { sourceFeature } from './source';
@@ -86,4 +92,20 @@ export const liveAudioFeatures: LiveAudioFeatures = [
   bufferFeature,
   errorFeature,
   liveFeature,
+];
+
+/**
+ * Features for a publisher (broadcast) player. Composes the publish and
+ * capture feature slices with {@link controlsFeature},
+ * {@link fullscreenFeature}, and {@link errorFeature} for the surrounding UI.
+ */
+export const publisherFeatures: PublisherFeatures = [
+  publishFeature,
+  captureDevicesFeature,
+  captureSourceFeature,
+  captureTracksFeature,
+  publishStatsFeature,
+  controlsFeature,
+  fullscreenFeature,
+  errorFeature,
 ];

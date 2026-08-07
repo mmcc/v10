@@ -1,5 +1,8 @@
 export * from './audio-track';
 export * from './buffer';
+export * from './capture-devices';
+export * from './capture-source';
+export * from './capture-tracks';
 export * from './controls';
 export * from './error';
 export * as features from './feature.parts';
@@ -10,6 +13,8 @@ export * from './pip';
 export * from './playback';
 export * from './playback-rate';
 export * from './presets';
+export * from './publish';
+export * from './publish-stats';
 export * from './quality';
 export * from './remote-playback';
 export * from './source';

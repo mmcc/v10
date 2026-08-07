@@ -1,0 +1,252 @@
+/* ==========================================================================
+   Default publisher skin
+
+   Class vocabulary contract — the skin template must use these classes.
+   Elements drive state via data attributes; the stylesheet only reads them.
+
+   Root:
+   - `media-default-skin media-default-skin--publisher` on the `media-container` root.
+
+   Preview media:
+   - Slotted `<video>` (shadow DOM) or `<video>` (light DOM): styled by
+     media.css; mirrored horizontally (self-view) by capture.css.
+
+   Status row (top-left overlay):
+   - `media-publish-status` — row container for the three items below.
+   - `media-badge media-badge--publish` on `media-publish-badge[data-publish-state]`.
+   - `media-publish-timer` on `media-publish-timer[data-publish-state]`.
+   - `media-connection-indicator` on `media-connection-indicator[data-quality]`,
+     containing the `signal` icon as `media-icon media-icon--signal`.
+
+   Capture placeholder (covers media area until capture is active):
+   - `media-capture-placeholder` on `media-capture-placeholder[data-capture-state]`.
+   - `media-capture-placeholder__content` — centered column inside it.
+   - `media-capture-placeholder__icon` — optional oversized `media-icon`.
+   - `media-capture-placeholder__message` — status/denied message text.
+   - `media-button media-button--enable-devices` on
+     `media-enable-devices-button[data-capture-state][data-disabled]`.
+
+   Controls bar (single, always visible):
+   - `media-surface media-controls media-controls--root` on `media-controls`.
+   - `media-controls__spacer` — flexible gap between button groups.
+   - `media-button-group` — left (camera/mic/screen-share) and right
+     (publish + fullscreen) groups; the left group adds
+     `media-button-group--devices` to space the split controls apart.
+   - `media-device-control` — split control wrapping a capture toggle and the
+     caret that opens its device picker, plus that toggle's tooltip and the
+     picker menu. The caret must stay the menu's previous sibling so the
+     availability rule in capture.css can hide it.
+   - `media-button media-button--subtle media-device-control__caret` on the
+     caret button, containing `media-icon` (the `chevron` asset).
+   - `media-button media-button--subtle media-button--icon media-button--camera`
+     on `media-camera-button[data-muted]`, containing
+     `media-icon media-icon--camera` and `media-icon media-icon--camera-off`.
+   - `media-button media-button--subtle media-button--icon media-button--mic`
+     on `media-mic-button[data-muted]`, containing
+     `media-icon media-icon--mic` and `media-icon media-icon--mic-off`.
+   - `media-button media-button--subtle media-button--icon media-button--screen-share`
+     on `media-screen-share-button[data-sharing][data-availability]`, containing
+     `media-icon media-icon--screen-share`.
+   - `media-button media-button--publish` on
+     `media-publish-button[data-publish-state][data-disabled]`.
+   - `media-button media-button--subtle media-button--icon media-button--fullscreen`
+     with `media-icon media-icon--fullscreen-enter` / `media-icon--fullscreen-exit`
+     (icon swap from shared/css/video/icon-state.css).
+
+   Device pickers (camera/mic radio groups) reuse the menu vocabulary:
+   - `media-surface media-popover media-menu` host, `media-menu__group` on
+     `media-camera-radio-group` / `media-mic-radio-group`, `media-menu__item`,
+     `media-menu__indicator`, `media-menu__separator`, `media-menu__back`.
+   - Tooltips: `media-surface media-tooltip` + `media-tooltip__kbd`.
+
+   Shared chrome: `media-overlay` scrim (always visible here), and the error
+   dialog vocabulary (`media-error`, `media-error__dialog media-surface`,
+   `media-error__content`, `media-error__title`, `media-error__description`,
+   `media-error__actions`).
+   ========================================================================== */
+
+@import "./components/reset.css";
+@import "./components/root.css";
+@import "./components/surface.css";
+@import "./components/media.css";
+@import "./components/overlay.css";
+@import "./components/error.css";
+@import "./components/controls.css";
+@import "./components/button.css";
+@import "./components/button-group.css";
+@import "./components/badge.css";
+@import "./components/icons.css";
+@import "./components/popup.css";
+@import "./components/menus.css";
+@import "./components/publish.css";
+@import "./components/capture.css";
+@import "../../shared/css/video/icon-state.css";
+@import "../../shared/global/video/keyframes.css";
+
+/* ==========================================================================
+   Root
+   ========================================================================== */
+
+.media-default-skin--publisher {
+  --media-border-color: oklch(0 0 0 / 0.1);
+  --media-surface-background-color: oklch(1 0 0 / 0.1);
+  --media-surface-inner-border-color: oklch(1 0 0 / 0.1);
+  --media-surface-outer-border-color: oklch(0 0 0 / 0.1);
+  --media-surface-shadow-color: oklch(0 0 0 / 0.15);
+  --media-surface-backdrop-filter: blur(16px) saturate(1.5);
+
+  /* We have to create an alias so that the shadow DOM can inherit the custom property value */
+  --media-video-border-radius: var(--media-border-radius, 1.75rem);
+
+  --media-controls-transition-duration: 100ms;
+  --media-controls-transition-timing-function: ease-out;
+
+  --media-error-dialog-transition-duration: 350ms;
+  --media-error-dialog-transition-delay: 100ms;
+  --media-error-dialog-transition-timing-function: ease-out;
+
+  --media-popup-transition-duration: 100ms;
+  --media-popup-transition-timing-function: ease-out;
+
+  /* Publisher tokens. The live color matches the live-edge dot in button.css
+     (no shared red token exists yet); quality colors are literals chosen to
+     hold up on dark video — visual QA welcome. */
+  --media-publish-live-color: oklch(0.65 0.22 27);
+  --media-quality-good-color: oklch(0.72 0.19 149);
+  --media-quality-fair-color: oklch(0.8 0.16 85);
+  --media-quality-poor-color: var(--media-publish-live-color);
+  --media-capture-placeholder-background: oklch(0.2 0 0);
+
+  overflow: clip;
+  background: oklch(0 0 0);
+
+  @media (prefers-reduced-motion: reduce) {
+    --media-error-dialog-transition-duration: 50ms;
+    --media-error-dialog-transition-delay: 0ms;
+    --media-popup-transition-duration: 0ms;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    --media-border-color: oklch(1 0 0 / 0.15);
+  }
+
+  @media (prefers-reduced-transparency: reduce) or (prefers-contrast: more) {
+    --media-surface-background-color: oklch(0 0 0);
+    --media-surface-inner-border-color: oklch(1 0 0 / 0.25);
+    --media-surface-outer-border-color: transparent;
+  }
+
+  /* Inner border ring */
+  &::after {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    content: "";
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--media-border-color);
+  }
+
+  &:fullscreen {
+    --media-border-radius: 0;
+
+    &::after {
+      display: none;
+    }
+
+    @media (width >= 1280px) {
+      --scale: 1.25;
+    }
+    @media (width >= 1536px) {
+      --scale: 1.5;
+    }
+    @media (width >= 1920px) {
+      --scale: 1.75;
+    }
+  }
+}
+
+/* ==========================================================================
+   Error Dialog
+   ========================================================================== */
+
+.media-default-skin--publisher .media-error {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.media-default-skin--publisher .media-error__dialog {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+  width: 100%;
+  max-width: calc(var(--spacing) * 72);
+  padding: calc(var(--spacing) * 3);
+  color: oklch(1 0 0);
+  text-shadow: 0 1px 0 oklch(0 0 0 / 0.25);
+  border-radius: calc(var(--spacing) * 7);
+  transition-delay: var(--media-error-dialog-transition-delay);
+  transition-timing-function: var(--media-error-dialog-transition-timing-function);
+  transition-duration: var(--media-error-dialog-transition-duration);
+  transition-property: opacity, scale;
+}
+
+.media-default-skin--publisher .media-error[data-starting-style] .media-error__dialog,
+.media-default-skin--publisher .media-error[data-ending-style] .media-error__dialog {
+  opacity: 0;
+  scale: 0.5;
+}
+.media-default-skin--publisher .media-error[data-ending-style] .media-error__dialog {
+  transition-delay: 0ms;
+}
+
+.media-default-skin--publisher .media-error__content {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2) calc(var(--spacing) * 1.5);
+  text-shadow: inherit;
+}
+
+.media-default-skin--publisher .media-error__title {
+  font-size: var(--font-size-medium);
+}
+
+.media-default-skin--publisher .media-error[data-open] ~ .media-controls {
+  display: none;
+}
+
+/* ==========================================================================
+   Controls
+   Publishers must always see mute/stop controls, so the bar never hides
+   (no `data-visible` show/hide behavior in v1).
+   ========================================================================== */
+
+.media-default-skin--publisher .media-controls--root {
+  --inset-factor: 2;
+  --inset: calc(var(--spacing) * var(--inset-factor));
+  --base-boundary-offset: var(--inset-factor);
+
+  position: absolute;
+  inset-inline: var(--inset);
+  bottom: var(--inset);
+  z-index: 10;
+  color: var(--media-color-primary, oklch(1 0 0));
+
+  @container media-root (width > 42rem) {
+    --inset-factor: 3;
+  }
+}
+
+.media-default-skin--publisher .media-controls__spacer {
+  flex: 1;
+}
+
+/* The controls are always visible, so the scrim is too. */
+.media-default-skin--publisher .media-overlay {
+  opacity: 1;
+}

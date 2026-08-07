@@ -2,6 +2,17 @@
 /* Global @keyframes for all video skins (CSS & Tailwind)                     */
 /* -------------------------------------------------------------------------- */
 
+/* Soft opacity pulse for live/connecting status dots (publisher skins). */
+@keyframes media-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 @keyframes media-shake {
   0%,
   100% {

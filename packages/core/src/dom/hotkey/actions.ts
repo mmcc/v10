@@ -2,6 +2,7 @@ import { isUndefined } from '@videojs/utils/predicate';
 import { MEDIA_INPUT_ACTION_OVERRIDES } from '../media-actions';
 import type { AnyPlayerStore } from '../player';
 import {
+  selectCaptureTracks,
   selectFullscreen,
   selectPiP,
   selectPlayback,
@@ -16,6 +17,8 @@ export type HotkeyActionName =
   | 'toggleFullscreen'
   | 'toggleSubtitles'
   | 'togglePictureInPicture'
+  | 'toggleMicMuted'
+  | 'toggleCameraMuted'
   | 'seekStep'
   | 'volumeStep'
   | 'speedUp'
@@ -60,6 +63,14 @@ const HOTKEY_ACTIONS: Record<HotkeyActionName, HotkeyActionResolver> = {
     const pip = selectPiP(store.state);
     if (!pip) return;
     pip.pip ? pip.exitPictureInPicture() : pip.requestPictureInPicture();
+  },
+
+  toggleMicMuted({ store }) {
+    selectCaptureTracks(store.state)?.toggleMicMuted();
+  },
+
+  toggleCameraMuted({ store }) {
+    selectCaptureTracks(store.state)?.toggleCameraMuted();
   },
 
   seekStep: MEDIA_INPUT_ACTION_OVERRIDES.seekStep,

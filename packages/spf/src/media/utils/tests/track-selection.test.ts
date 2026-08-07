@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AudioTrack, Presentation, VideoTrack } from '../../types';
-import { getResolvedSelectedTrackDuration, type TrackSelectionState } from '../track-selection';
+import { getResolvedSelectedTrackDuration, getSelectedTrack, type TrackSelectionState } from '../track-selection';
 
 function createPresentation(config: { video?: VideoTrack[]; audio?: AudioTrack[]; duration?: number }): Presentation {
   const selectionSets = [];
@@ -130,5 +130,29 @@ describe('getResolvedSelectedTrackDuration', () => {
 
   it('returns undefined when there is no presentation', () => {
     expect(getResolvedSelectedTrackDuration({})).toBeUndefined();
+  });
+});
+
+describe('getSelectedTrack', () => {
+  it('resolves a selected track in a sibling switching set — the explicit cross-set selection', () => {
+    // The MoQ parser emits a screen share as a second, non-alternate
+    // switching set; consumers of the selected track must still resolve
+    // an id pointing into it.
+    const presentation = createPresentation({ video: [resolvedVideoTrack({ id: 'camera-1' })] });
+    (presentation.selectionSets[0] as { switchingSets: unknown[] }).switchingSets.push({
+      id: 'video-switching-screen',
+      type: 'video' as const,
+      tracks: [resolvedVideoTrack({ id: 'screen-1' })],
+    });
+    const state: TrackSelectionState = { presentation, selectedVideoTrackId: 'screen-1' };
+
+    expect(getSelectedTrack(state, 'video')?.id).toBe('screen-1');
+  });
+
+  it('returns undefined for an unknown id', () => {
+    const presentation = createPresentation({ video: [resolvedVideoTrack({ id: 'camera-1' })] });
+    const state: TrackSelectionState = { presentation, selectedVideoTrackId: 'gone' };
+
+    expect(getSelectedTrack(state, 'video')).toBeUndefined();
   });
 });

@@ -96,6 +96,17 @@
       "development": "./dist/dev/presets/live-audio/*.js",
       "default": "./dist/default/presets/live-audio/*.js"
     },
+    "./publisher": {
+      "types": "./dist/dev/presets/publisher/index.d.ts",
+      "development": "./dist/dev/presets/publisher/index.js",
+      "default": "./dist/default/presets/publisher/index.js"
+    },
+    "./publisher/*.css": "./dist/default/presets/publisher/*.css",
+    "./publisher/*": {
+      "types": "./dist/dev/presets/publisher/*.d.ts",
+      "development": "./dist/dev/presets/publisher/*.js",
+      "default": "./dist/default/presets/publisher/*.js"
+    },
     "./i18n": {
       "types": "./dist/dev/i18n/index.d.ts",
       "development": "./dist/dev/i18n/index.js",

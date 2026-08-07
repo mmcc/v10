@@ -18,6 +18,7 @@ const createConfig = (mode: PackageBuildMode): UserConfig => ({
     'dom/native-hls/index': './src/dom/native-hls/index.ts',
     'dom/simple-hls-audio-only/index': './src/dom/simple-hls-audio-only/index.ts',
     'dom/simple-hls/index': './src/dom/simple-hls/index.ts',
+    'dom/moq-publish/index': './src/dom/moq-publish/index.ts',
     'dom/vimeo/index': './src/dom/vimeo/index.ts',
     'dom/mux/index': './src/dom/mux/index.ts',
     'dom/google-cast/index': './src/dom/google-cast/index.ts',

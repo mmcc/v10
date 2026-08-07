@@ -10,6 +10,7 @@ const createConfig = (mode: PackageBuildMode): UserConfig => ({
     hls: 'src/playback/engines/hls/index.ts',
     'media-tracks': 'src/media/media-tracks/index.ts',
     moq: 'src/playback/engines/moq/index.ts',
+    'moq-publish': 'src/publish/engines/moq/index.ts',
     'background-video': 'src/playback/engines/background-video/index.ts',
   },
 });

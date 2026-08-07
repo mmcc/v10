@@ -87,6 +87,64 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'publish',
+          // All DOM-free publish tests: behaviors, actors, and the session.
+          include: ['src/publish/**/*.test.ts'],
+          exclude: ['src/publish/**/dom/**', 'src/publish/engines/**'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'publish-dom',
+          include: ['src/publish/behaviors/dom/**/*.test.ts', 'src/publish/actors/dom/**/*.test.ts'],
+          browser: {
+            enabled: true,
+            headless: true,
+            // Fake capture devices + auto-granted prompts so the real
+            // getUserMedia/getDisplayMedia paths run deterministically in CI.
+            provider: playwright({
+              launchOptions: {
+                args: [
+                  '--use-fake-ui-for-media-stream',
+                  '--use-fake-device-for-media-capture',
+                  '--auto-accept-this-tab-capture',
+                ],
+              },
+            }),
+            screenshotFailures: false,
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'publish-engines',
+          include: ['src/publish/engines/**/*.test.ts'],
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright({
+              launchOptions: {
+                args: [
+                  '--use-fake-ui-for-media-stream',
+                  '--use-fake-device-for-media-capture',
+                  '--auto-accept-this-tab-capture',
+                  // Web-audio test sources (oscillator → stream destination)
+                  // need a running AudioContext without a user gesture.
+                  '--autoplay-policy=no-user-gesture-required',
+                ],
+              },
+            }),
+            screenshotFailures: false,
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'types',
           include: [],
           typecheck: {
