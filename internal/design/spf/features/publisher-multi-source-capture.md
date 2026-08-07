@@ -163,6 +163,34 @@ and add `SCREEN_TRACK_NAME = 'screen'`. `catalogInputFor` gains a `screen`
 branch; both video tracks publish in one `renderGroup` per the RFC
 (never `altGroup` — that seam stays reserved for simulcast).
 
+**Catalog latching (added after the mic-switch sync bug):** the catalog
+advertisement is latched the same way the track publishers are. A device
+switch re-acquires cleanup-first, so the kind's probe verdict — and with
+it `activeEncodings[kind]` — vanishes for the length of the re-probe. The
+MOQT track publisher survives that transient by design (above), but a
+catalog derived from the encodings alone re-published without the track
+and then re-added it, and subscribers obey catalogs: every mic switch
+tore down the viewer's audio subscription and re-joined it at the live
+edge (`largest-object`), where the audio renderer — the master clock —
+re-anchored at ~zero latency and dragged the whole presentation with it.
+That was measured as "audio jumps toward real-time and A/V drifts after
+switching mics." `deriveCatalog` therefore keeps a kind advertised with
+its last-known config while its capture status is `'active'` or
+`'acquiring'` **and** the kind has no completed probe verdict
+(`encoderSupport[kind]` — the probe clears it with the encoding on a
+re-probe and re-commits it even when the ladder is empty or the selection
+strategy vetoes the kind, so its presence distinguishes "answered: not
+encodable" from "still probing"); drops the kind when the status parks
+anywhere else, when a completed probe selected nothing, or when the
+catalog publisher is replaced (a rebuilt session re-latches its per-kind
+PUBLISHes from the current encodings, so held kinds must not outlive the
+publisher they were advertised on); and deduplicates byte-identical
+catalog sends per publisher. **Known follow-up:** because the catalog no longer flaps, a switch that resolves
+to a *different* config (mono mic → stereo) updates the catalog entry
+in place, and a subscriber that diffs tracks by id alone keeps its
+decoder config until it re-reads the entry — the viewer-side
+config-identity diff is tracked as its own piece of work.
+
 **Encoder budget (resolved):** no adaptive policy in v1. The screen
 encoder gets its own lower-bandwidth default config via the existing
 `video` config seam extended with a `screen` sibling — a static
