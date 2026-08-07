@@ -161,9 +161,12 @@ playback stack's decode direction):
 
 - [`network/moqt/subgroup-writer.ts`](../../../../packages/spf/src/network/moqt/subgroup-writer.ts)
   — subgroup data-stream writing; round-trips through `object-stream.ts`'s
-  reader. The only new `network/moqt` file: the parent-owned wire layer
-  needed **no new control-message codecs** (its codec was already
-  symmetric), so publish additions there stayed additive siblings.
+  reader. The only new `network/moqt` file: the parent-owned wire layer's
+  codec was already symmetric, so publish additions there stayed
+  additive. The announce-and-serve rework added exactly two encoders to
+  the existing codec module — `encodeNamespace` / `encodeNamespaceDone`
+  (their decoders predated them) — plus the `TRACK_PROPERTY.TIMESCALE`
+  constant.
 - [`media/moq/loc-packaging.ts`](../../../../packages/spf/src/media/moq/loc-packaging.ts)
   / [`media/moq/build-catalog.ts`](../../../../packages/spf/src/media/moq/build-catalog.ts)
   — encode complements of `loc.ts` / `parse-catalog.ts`; each round-trips
