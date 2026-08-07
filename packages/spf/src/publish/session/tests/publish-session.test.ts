@@ -252,9 +252,20 @@ describe('createMoqtPublishSession', () => {
       expect(bindings).toEqual([{ trackName: 'video', trackAlias: video.subscription.requestId }]);
     });
 
-    video.subscription.update({ subscriberPriority: 9 });
+    // The ack lands as the driver's update completion (`onUpdateOk` sits
+    // in the subscribe-time handlers).
+    const updateAcks: number[] = [];
+    const updated = subscriber.subscribe(
+      { trackNamespace: NAMESPACE, trackName: 'video' },
+      { onUpdateOk: () => updateAcks.push(1) }
+    );
     await vi.waitFor(() => {
-      expect(updates).toEqual([{ requestId: video.subscription.requestId }]);
+      expect(subscribes).toHaveLength(2);
+    });
+    updated.update({ subscriberPriority: 9 });
+    await vi.waitFor(() => {
+      expect(updates).toEqual([{ requestId: updated.requestId }]);
+      expect(updateAcks).toHaveLength(1);
     });
     session.destroy();
     subscriber.destroy();
@@ -488,6 +499,9 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(bindings.at(-1)).toBeUndefined();
     });
+    // Each accepted update is acknowledged — the subscribe driver treats
+    // REQUEST_OK as the update's completion.
+    expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok', 'request-ok']);
     session.destroy();
     subscriber.destroy();
   });

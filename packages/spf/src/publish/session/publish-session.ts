@@ -796,6 +796,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
             }
           }
           this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
+          // The subscribe driver treats REQUEST_OK as the update's
+          // completion (`onUpdateOk`). Strictly reactive: a peer that
+          // never sends REQUEST_UPDATE (moq-lite-rs parks on end-of-
+          // stream after SUBSCRIBE_OK) never sees a trailing byte.
+          if (!subscriber.finished) void writer.write(encodeRequestOk()).catch(() => {});
         } else if (message.kind === 'goaway') {
           this.#receivedGoaway = true;
           this.#callbacks.onGoaway?.(message);
