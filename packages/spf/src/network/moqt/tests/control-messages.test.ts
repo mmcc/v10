@@ -18,8 +18,11 @@ import {
   encodeSetup,
   encodeSubscribe,
   encodeSubscribeOk,
+  isRetryablePublishDoneStatus,
+  isRetryableRequestErrorCode,
   MESSAGE_TYPE,
   type MessageParameters,
+  PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
   SETUP_OPTION,
 } from '../control-messages';
@@ -309,5 +312,46 @@ describe('encodeKeyValuePairs', () => {
     expect(bytes[0]).toBe(0x02);
     const decoded = decodeKeyValuePairs(new ByteReader(bytes), bytes.length);
     expect(decoded).toEqual(pairs);
+  });
+});
+
+describe('isRetryableRequestErrorCode', () => {
+  it('keeps transient state-shaped failures retryable', () => {
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.DOES_NOT_EXIST)).toBe(true);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.TIMEOUT)).toBe(true);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.INTERNAL_ERROR)).toBe(true);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.GOING_AWAY)).toBe(true);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.EXCESSIVE_LOAD)).toBe(true);
+    // EXPIRED_AUTH_TOKEN has its own refresh path; the generic classifier
+    // must not preempt it.
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN)).toBe(true);
+  });
+
+  it('treats request-shaped rejections as permanent', () => {
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.UNAUTHORIZED)).toBe(false);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.MALFORMED_AUTH_TOKEN)).toBe(false);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.NOT_SUPPORTED)).toBe(false);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.MALFORMED_TRACK)).toBe(false);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.INVALID_FILTER)).toBe(false);
+    expect(isRetryableRequestErrorCode(REQUEST_ERROR_CODE.REDIRECT)).toBe(false);
+  });
+
+  it('degrades unknown codes to retryable, not dead', () => {
+    expect(isRetryableRequestErrorCode(0x7fff)).toBe(true);
+  });
+});
+
+describe('isRetryablePublishDoneStatus', () => {
+  it('keeps publisher/relay life-cycle ends retryable', () => {
+    expect(isRetryablePublishDoneStatus(PUBLISH_DONE_STATUS.TRACK_ENDED)).toBe(true);
+    expect(isRetryablePublishDoneStatus(PUBLISH_DONE_STATUS.GOING_AWAY)).toBe(true);
+    expect(isRetryablePublishDoneStatus(PUBLISH_DONE_STATUS.TOO_FAR_BEHIND)).toBe(true);
+    expect(isRetryablePublishDoneStatus(0x7fff)).toBe(true);
+  });
+
+  it('treats auth-shaped and malformed-track ends as permanent', () => {
+    expect(isRetryablePublishDoneStatus(PUBLISH_DONE_STATUS.UNAUTHORIZED)).toBe(false);
+    expect(isRetryablePublishDoneStatus(PUBLISH_DONE_STATUS.EXPIRED)).toBe(false);
+    expect(isRetryablePublishDoneStatus(PUBLISH_DONE_STATUS.MALFORMED_TRACK)).toBe(false);
   });
 });

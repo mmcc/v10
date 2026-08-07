@@ -8,6 +8,7 @@ import { makeShareSignals, type ShareSignalsConfig } from '../../../core/composi
 import type { QualityConfig } from '../../../media/abr/quality-selection';
 import type { AudioTrack, MaybeResolvedPresentation, TextTrack, VideoTrack } from '../../../media/types';
 import type { BandwidthConfig, BandwidthState } from '../../../network/bandwidth-estimator';
+import type { RetryBackoffConfig } from '../../../network/retry-backoff';
 import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
@@ -186,6 +187,31 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
    * starts discarding the paused buffer anyway.
    */
   pauseHoldSeconds?: number;
+  /**
+   * Session reconnect policy (`setupMoqSession` → session actor): an
+   * unexpected transport loss retries with capped, jittered backoff
+   * instead of terminating; behaviors rejoin the catalog and media tracks
+   * at the live edge on each recovered connection. Defaults to
+   * retry-forever, 500ms → 10s.
+   */
+  reconnect?: Partial<RetryBackoffConfig>;
+  /**
+   * Retry policy for failed or publisher-ended subscriptions, shared by
+   * the catalog (`resolveCatalog`) and media tracks
+   * (`subscribeSelected*Track`). Failed usually means "does not exist
+   * yet" — play pressed before the broadcast, or a broadcaster mid-blip —
+   * so the cadence doubles as the join latency once the track appears.
+   * Defaults to retry-forever, 500ms → 3s.
+   */
+  subscribeRetry?: Partial<RetryBackoffConfig>;
+  /**
+   * Media-subscription data-starvation deadline in milliseconds
+   * (`track-subscriber` watchdog): a live subscription silent this long is
+   * presumed dead and re-subscribed, covering relays that drop their
+   * publisher without ending downstream subscriptions. `0` disables.
+   * Default 10 000 ms.
+   */
+  subscribeStallTimeoutMs?: number;
   preferredSubtitleLanguage?: string;
   includeForcedTracks?: boolean;
   enableDefaultTrack?: boolean;

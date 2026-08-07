@@ -27,6 +27,7 @@ import { computed, type ReadonlySignal, type Signal } from '../../core/signals/p
 import { isMoqSourceUrl, parseMoqSource } from '../../media/moq/parse-source';
 import type { MaybeResolvedPresentation } from '../../media/types';
 import { DEFAULT_PRELOAD, isBlockingPreload, type StandardPreload } from '../../media/utils/preload';
+import type { RetryBackoffConfig } from '../../network/retry-backoff';
 import {
   type CreateMoqTransport,
   createMoqSessionActor,
@@ -51,6 +52,8 @@ export interface SetupMoqSessionConfig {
   authProvider?: MoqAuthProvider;
   /** Fallback when `state.preload` is unset. Defaults to `'metadata'`. */
   defaultPreload?: StandardPreload;
+  /** Session reconnect policy — rides through to the session actor. */
+  reconnect?: Partial<RetryBackoffConfig>;
 }
 
 type MoqSessionFsmState = 'preconditions-unmet' | 'idle' | 'session-active';
@@ -119,6 +122,7 @@ function setupMoqSessionSetup({
             source,
             createTransport: config?.createMoqTransport,
             authProvider: config?.authProvider,
+            reconnect: config?.reconnect,
           });
           context.moqSessionActor.set(actor);
 
