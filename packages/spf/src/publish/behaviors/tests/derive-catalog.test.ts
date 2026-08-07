@@ -23,6 +23,7 @@ function setupBehavior(buildCatalog?: (input: unknown) => string) {
   const state = {
     activeEncodings: signal<DeriveCatalogState['activeEncodings']>(undefined),
     endpoint: signal<DeriveCatalogState['endpoint']>(undefined),
+    encoderSupport: signal<DeriveCatalogState['encoderSupport']>(undefined),
     cameraState: signal<DeriveCatalogState['cameraState']>('idle'),
     screenShareState: signal<DeriveCatalogState['screenShareState']>('idle'),
     micState: signal<DeriveCatalogState['micState']>('idle'),
@@ -257,6 +258,97 @@ describe('deriveCatalog', () => {
     const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
     const audio = catalog.tracks.find((track: { name: string }) => track.name === 'audio');
     expect(audio.channelConfig).toBe('1');
+  });
+
+  it('drops a held kind once its re-probe completes with no supported config (live source, unencodable)', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    state.cameraState.set('active');
+    state.micState.set('active');
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+
+    // Device switch: encoding and support retract together (the probe's
+    // cleanup clears both) — the joint absence is the held transient.
+    state.micState.set('acquiring');
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    await settle();
+    expect(sent).toHaveLength(1);
+
+    // The new device acquires, but its probe resolves to an empty ladder:
+    // a completed verdict, not a transient. Capture status stays 'active'
+    // — a live source does not make the track encodable.
+    state.micState.set('active');
+    state.encoderSupport.set({ audio: [] });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(trackNames(sent[1]!)).toEqual(['video']);
+  });
+
+  it('drops a held kind the selection strategy vetoed (support present, encoding withheld)', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    state.cameraState.set('active');
+    state.micState.set('active');
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+
+    state.micState.set('acquiring');
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    await settle();
+    expect(sent).toHaveLength(1);
+
+    // The re-probe found support, but `selectEncoderConfig` omitted the
+    // kind — a policy veto: publishing without the track is the intended
+    // outcome, so the catalog must not keep advertising it.
+    state.micState.set('active');
+    state.encoderSupport.set({ audio: [AUDIO_CONFIG] });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(trackNames(sent[1]!)).toEqual(['video']);
+  });
+
+  it('a replaced catalog publisher does not inherit held kinds from the departed session', async () => {
+    const first = makePublisherStub();
+    const second = makePublisherStub();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    state.cameraState.set('active');
+    state.micState.set('active');
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.catalogTrackPublisher.set(first.publisher);
+    await vi.waitFor(() => {
+      expect(first.sent).toHaveLength(1);
+    });
+
+    // Mid-switch hold on the old publisher...
+    state.micState.set('acquiring');
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    await settle();
+    expect(first.sent).toHaveLength(1);
+
+    // ...then the session rebuilds. The new cluster re-latches its
+    // per-kind PUBLISHes from the current encodings, which do not include
+    // audio — a catalog holding it would name a track the new session has
+    // never published.
+    context.catalogTrackPublisher.set(second.publisher);
+    await vi.waitFor(() => {
+      expect(second.sent).toHaveLength(1);
+    });
+    expect(trackNames(second.sent[0]!)).toEqual(['video']);
   });
 
   it('a rebuilt catalog publisher receives the current catalog even when its content is unchanged', async () => {

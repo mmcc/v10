@@ -176,9 +176,16 @@ re-anchored at ~zero latency and dragged the whole presentation with it.
 That was measured as "audio jumps toward real-time and A/V drifts after
 switching mics." `deriveCatalog` therefore keeps a kind advertised with
 its last-known config while its capture status is `'active'` or
-`'acquiring'`, drops it when the status parks anywhere else, and
-deduplicates byte-identical catalog sends per publisher. **Known
-follow-up:** because the catalog no longer flaps, a switch that resolves
+`'acquiring'` **and** the kind has no completed probe verdict
+(`encoderSupport[kind]` — the probe clears it with the encoding on a
+re-probe and re-commits it even when the ladder is empty or the selection
+strategy vetoes the kind, so its presence distinguishes "answered: not
+encodable" from "still probing"); drops the kind when the status parks
+anywhere else, when a completed probe selected nothing, or when the
+catalog publisher is replaced (a rebuilt session re-latches its per-kind
+PUBLISHes from the current encodings, so held kinds must not outlive the
+publisher they were advertised on); and deduplicates byte-identical
+catalog sends per publisher. **Known follow-up:** because the catalog no longer flaps, a switch that resolves
 to a *different* config (mono mic → stereo) updates the catalog entry
 in place, and a subscriber that diffs tracks by id alone keeps its
 decoder config until it re-reads the entry — the viewer-side
