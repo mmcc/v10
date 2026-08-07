@@ -58,6 +58,17 @@ const ERROR_INVALID_RANGE = 0x11;
 /** REQUEST_ERROR code moq-relay 0.14.7 answers proactive PUBLISH with. */
 const ERROR_PUBLISH_NOT_SUPPORTED = 400;
 
+/** REQUEST_ERROR code for an unregistered track (§15.11.2). */
+const ERROR_DOES_NOT_EXIST = 0x10;
+
+/**
+ * How long an upstream pull for a not-yet-registered track waits before
+ * retrying while a player still wants it. The real relay hub polls its
+ * registry every 25ms while demand stands; the loopback keeps the same
+ * order of magnitude with less request-stream churn.
+ */
+const UPSTREAM_RETRY_DELAY_MS = 50;
+
 /** Message parameter types the upstream SUBSCRIBE carries (§10.2). */
 const SUBSCRIBE_PARAMETER = {
   FORWARD: 0x10,
@@ -378,6 +389,12 @@ interface BufferedObject {
 interface PlayerSubscription {
   trackAlias: number;
   deliver(object: BufferedObject): void;
+  /**
+   * End this subscription from the relay side: FIN toward the player and
+   * cancel its request stream, so its teardown removes the entry. Used
+   * when the upstream track is aborted for every viewer.
+   */
+  end(): void;
 }
 
 interface TrackBuffer {
@@ -520,6 +537,8 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
     const openReaders = new Set<StreamByteReader>();
     /** Writers of relay-initiated request streams, aborted on close. */
     const requestWriters = new Set<WritableStreamDefaultWriter<Uint8Array>>();
+    /** Pending DOES_NOT_EXIST retries, cleared on close. */
+    const retryTimers = new Set<ReturnType<typeof setTimeout>>();
 
     /** Request IDs are odd — the server-side numbering; SUBSCRIBE_NAMESPACE takes 1. */
     let nextRequestId = 1;
@@ -608,12 +627,14 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       track: TrackBuffer,
       namespace: string[],
       stream: { writer: WritableStreamDefaultWriter<Uint8Array>; reader: StreamByteReader },
-      handle: { released: boolean; release(): void }
+      handle: { released: boolean; release(): void },
+      attempt: number
     ): Promise<void> => {
       const { writer, reader } = stream;
       openReaders.add(reader);
       requestWriters.add(writer);
       let trackAlias: number | undefined;
+      let retryWhileWanted = false;
       try {
         await writer.write(encodeSubscribe(takeRequestId(), namespace, track.name));
         const response = await readControlFrame(reader);
@@ -622,7 +643,20 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
             const fields = new Reader(response.body);
             const errorCode = fields.varint();
             fields.varint(); // retry interval
-            log(`upstream SUBSCRIBE ${track.name} rejected (code ${errorCode}: ${fields.string()})`);
+            const reason = fields.string();
+            if (errorCode === ERROR_DOES_NOT_EXIST) {
+              // Not registered *yet* — a player can want a track before
+              // the publisher brings it up (screen share starting after
+              // the viewer joined). The relay hub retries while demand
+              // stands; the finally below schedules the same. Log only
+              // the first miss, not every poll.
+              retryWhileWanted = true;
+              if (attempt === 0) {
+                log(`upstream SUBSCRIBE ${track.name}: not registered yet — retrying while a player waits`);
+              }
+            } else {
+              log(`upstream SUBSCRIBE ${track.name} rejected (code ${errorCode}: ${reason})`);
+            }
           } else {
             log(`unexpected 0x${response.type.toString(16)} answering SUBSCRIBE ${track.name}`);
           }
@@ -651,13 +685,21 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         log(
           `upstream SUBSCRIBE ${track.name} → alias ${trackAlias}${timescale === undefined ? '' : ` (timescale ${timescale})`}`
         );
-        // Hold until a FIN — the publisher's, or our own release.
-        while (!(await reader.atEnd())) await reader.readUint8();
-        log(
-          handle.released
-            ? `upstream unsubscribe ${track.name} — no player interest`
-            : `upstream track ${track.name} ended`
-        );
+        // Hold for the FIN — the publisher's clean track end, or our own
+        // release. A subscription ends by FIN *alone*: any byte after
+        // SUBSCRIBE_OK is a protocol violation, and the real relay
+        // aborts the track for every viewer — mirror that by ending each
+        // downstream subscription rather than silently draining.
+        if (!(await reader.atEnd())) {
+          log(`upstream ${track.name}: data after SUBSCRIBE_OK — aborting the track for its viewers`);
+          for (const subscriber of [...track.subscribers]) subscriber.end();
+        } else {
+          log(
+            handle.released
+              ? `upstream unsubscribe ${track.name} — no player interest`
+              : `upstream track ${track.name} ended`
+          );
+        }
       } catch {
         // Stream reset or session teardown — the close path owns cleanup.
       } finally {
@@ -673,18 +715,28 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           const index = stats.publishedTracks.indexOf(track.name);
           if (index >= 0) stats.publishedTracks.splice(index, 1);
         }
-        // A player that subscribed during the release window hit the
-        // released handle's dedupe and was dropped — re-issue its pull now
-        // that the old handle is gone. Only on the release path: after a
-        // publisher-side FIN the track is done, and re-subscribing a
-        // still-watched track would loop through DOES_NOT_EXIST forever.
-        if (handle.released && sessionOpen && !destroyed && track.subscribers.size > 0) {
-          subscribeUpstream(track);
+        // Re-issue paths, both gated on standing demand. Release: a
+        // player that subscribed during the release window hit the
+        // released handle's dedupe and was dropped — pull again now that
+        // the old handle is gone. DOES_NOT_EXIST: poll until the
+        // publisher registers the track. A publisher-side FIN re-issues
+        // nothing — the track is done, and re-subscribing a still-watched
+        // track would loop through DOES_NOT_EXIST forever.
+        if (sessionOpen && !destroyed && track.subscribers.size > 0) {
+          if (handle.released) {
+            subscribeUpstream(track);
+          } else if (retryWhileWanted) {
+            const timer = setTimeout(() => {
+              retryTimers.delete(timer);
+              if (track.subscribers.size > 0) subscribeUpstream(track, attempt + 1);
+            }, UPSTREAM_RETRY_DELAY_MS);
+            retryTimers.add(timer);
+          }
         }
       }
     };
 
-    const subscribeUpstream = (track: TrackBuffer): void => {
+    const subscribeUpstream = (track: TrackBuffer, attempt = 0): void => {
       if (!sessionOpen || destroyed || announcedNamespace === undefined) return;
       if (upstreamByTrack.has(track)) return;
       const stream = openRequestStream();
@@ -701,7 +753,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         },
       };
       upstreamByTrack.set(track, handle);
-      void runUpstreamSubscription(track, announcedNamespace, stream, handle);
+      void runUpstreamSubscription(track, announcedNamespace, stream, handle, attempt);
     };
 
     /** Withdraw the upstream pull once no player watches the track. */
@@ -868,6 +920,8 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       // stream the dying session will never read.
       for (const writer of [...requestWriters]) writer.abort().catch(() => {});
       requestWriters.clear();
+      for (const timer of retryTimers) clearTimeout(timer);
+      retryTimers.clear();
       controlWriter?.close().catch(() => {});
       controlWriter = undefined;
       for (const controller of [uniController, bidiController]) {
@@ -1023,6 +1077,12 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
             publishObject(
               encodeObjectStream(trackAlias, object.groupId, object.objectId, object.properties, object.payload)
             ),
+          end: () => {
+            // FIN toward the player (the clean track end), then cancel
+            // our read side — the loop's teardown removes the entry.
+            writer.close().catch(() => {});
+            abort();
+          },
         };
         // Replay + register back-to-back (no await between): nothing can
         // interleave, so the subscriber sees every object exactly once.
