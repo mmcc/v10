@@ -14,8 +14,10 @@
  * when the last player interest in a track leaves, the upstream
  * subscription is FINed (the clean unsubscribe — the publisher unbinds
  * and stops sending), and a later subscribe pulls the track afresh with a
- * new request ID. A proactive PUBLISH from an old client is refused with
- * a request error, exactly like the real relay.
+ * new request ID; a publisher-side FIN is the end of the track and is
+ * propagated to every attached viewer as their own clean stream end. A
+ * proactive PUBLISH from an old client is refused with a request error,
+ * exactly like the real relay.
  * The other side serves `MoqMediaMixin` player sessions through their
  * `createMoqTransport` seam exactly like `spf-moq-player`'s loopback: SETUP,
  * SUBSCRIBE answered with SUBSCRIBE_OK, FETCH rejected (no history), and
@@ -693,12 +695,19 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         if (!(await reader.atEnd())) {
           log(`upstream ${track.name}: data after SUBSCRIBE_OK — aborting the track for its viewers`);
           for (const subscriber of [...track.subscribers]) subscriber.end();
+        } else if (handle.released) {
+          log(`upstream unsubscribe ${track.name} — no player interest`);
         } else {
-          log(
-            handle.released
-              ? `upstream unsubscribe ${track.name} — no player interest`
-              : `upstream track ${track.name} ended`
-          );
+          // The publisher's FIN is the END of the track: propagate it —
+          // the same clean FIN toward every attached viewer — so no
+          // player hangs on a dead track and a later publisher session
+          // cannot resume stale subscriptions. The downstream teardowns'
+          // releaseUpstream calls land after this routine's finally has
+          // emptied the handle map, so the unwind cannot recurse; and
+          // with `retryWhileWanted` unset, no retry loop starts (the
+          // track is done, not late).
+          log(`upstream track ${track.name} ended`);
+          for (const subscriber of [...track.subscribers]) subscriber.end();
         }
       } catch {
         // Stream reset or session teardown — the close path owns cleanup.
@@ -706,6 +715,10 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         openReaders.delete(reader);
         requestWriters.delete(writer);
         writer.close().catch(() => {});
+        // Cancel unconditionally: on the violation path the publisher may
+        // keep writing, and the reader just left `openReaders`, so nothing
+        // else would ever reset the stream. A no-op on the FIN paths.
+        reader.cancel();
         if (upstreamByTrack.get(track) === handle) upstreamByTrack.delete(track);
         if (trackAlias !== undefined) {
           aliasToTrack.delete(trackAlias);
