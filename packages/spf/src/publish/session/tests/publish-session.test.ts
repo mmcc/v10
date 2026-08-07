@@ -567,6 +567,111 @@ describe('createMoqtPublishSession', () => {
     subscriber.destroy();
   });
 
+  it('surfaces the announce loss when only the response half of the solicitation dies', async () => {
+    const endings: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onAnnounceEnded: ({ error }) => endings.push(error),
+    });
+    await session.ready;
+
+    const solicitation = await solicitNamespace(pair.server, []);
+    await vi.waitFor(() => {
+      expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok']);
+    });
+
+    // The peer resets only the response direction; its request half — the
+    // read loop's end signal — stays open, so the entry write's failure
+    // is the only evidence the carrier is unusable.
+    await solicitation.abandonReads();
+    session.announce(NAMESPACE);
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
+    await vi.waitFor(() => {
+      expect(endings).toHaveLength(1);
+    });
+    session.destroy();
+    subscriber.destroy();
+  });
+
+  it('tolerates a REQUEST_UPDATE on the namespace solicitation stream', async () => {
+    const updates: number[] = [];
+    const closes: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onRequestUpdate: ({ requestId }) => updates.push(requestId),
+      onClosed: (info) => closes.push(info),
+    });
+    await session.ready;
+    session.announce(NAMESPACE);
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
+
+    const solicitation = await solicitNamespace(pair.server, []);
+    await vi.waitFor(() => {
+      expect(solicitation.received).toHaveLength(2);
+    });
+
+    // A legal §10.9 update must never be session-fatal, even though v1
+    // applies no prefix changes.
+    await solicitation.send(encodeRequestUpdate(1, { subscriberPriority: 5 }));
+    await vi.waitFor(() => {
+      expect(updates).toEqual([1]);
+    });
+    expect(closes).toEqual([]);
+    session.destroy();
+    subscriber.destroy();
+  });
+
+  it('closes the session when the peer reuses a request id', async () => {
+    const closes: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onClosed: (info) => closes.push(info),
+    });
+    await session.ready;
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'audio' });
+
+    const first = await rawSubscribe(pair.server, 'video', 101);
+    await vi.waitFor(() => {
+      expect(first.received).toHaveLength(1);
+    });
+
+    // Aliases ARE the peer's request ids: a reused id would hand two
+    // tracks the same alias and make their subgroup streams
+    // indistinguishable — protocol violation, session-fatal.
+    await rawSubscribe(pair.server, 'audio', 101);
+    await vi.waitFor(() => {
+      expect(closes).toHaveLength(1);
+    });
+    expect((closes[0] as { error?: unknown }).error).toBeInstanceOf(Error);
+    subscriber.destroy();
+  });
+
+  it('rejects a subscription update it cannot apply instead of acknowledging it', async () => {
+    const endedRequests: number[] = [];
+    const bindings: (number | undefined)[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onSubscribeEnd: ({ requestId }) => endedRequests.push(requestId),
+      onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
+    });
+    await session.ready;
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+
+    const sub = await rawSubscribe(pair.server, 'video', 111);
+    await vi.waitFor(() => {
+      expect(bindings.at(-1)).toBe(111);
+    });
+
+    // A filter change is not applied — acknowledging it would leave the
+    // peer believing its new range is in effect.
+    await sub.send(encodeRequestUpdate(111, { locationFilter: { type: 'next-group-start' } }));
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-error']);
+      expect(sub.ended()).toBe(true);
+      expect(endedRequests).toEqual([111]);
+      expect(bindings.at(-1)).toBeUndefined();
+    });
+    session.destroy();
+    subscriber.destroy();
+  });
+
   it('treats announce-carrier loss after a GOAWAY as migration, not failure', async () => {
     const goaways: number[] = [];
     const endings: unknown[] = [];

@@ -30,6 +30,12 @@ export interface RawRequest {
   failure: () => unknown;
   /** Write a follow-up frame on the request stream (e.g. a GOAWAY). */
   send: (bytes: Uint8Array) => Promise<void>;
+  /**
+   * Reset only the response direction (stop reading) while keeping the
+   * request half open — the half-broken peer a response-side write
+   * failure test needs.
+   */
+  abandonReads: () => Promise<void>;
   /** FIN the peer's side (a relay withdrawing the request). */
   fin: () => Promise<void>;
 }
@@ -41,9 +47,9 @@ export async function openRawRequest(server: MoqtTransport, message: Uint8Array)
   const received: ControlMessage[] = [];
   let ended = false;
   let failure: unknown;
+  const reader = stream.readable.getReader();
   void (async () => {
     const deframer = new ControlMessageDeframer();
-    const reader = stream.readable.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -63,6 +69,7 @@ export async function openRawRequest(server: MoqtTransport, message: Uint8Array)
     ended: () => ended,
     failure: () => failure,
     send: (bytes) => writer.write(bytes).catch(() => {}),
+    abandonReads: () => reader.cancel().catch(() => {}),
     fin: () => writer.close().catch(() => {}),
   };
 }

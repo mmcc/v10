@@ -228,6 +228,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
 
   #tracks = new Map<string, TrackRecord>();
   #namespaceStreams = new Set<NamespaceStream>();
+  /**
+   * Every inbound request ID ever seen. Reuse is a protocol violation
+   * (§10.1), and because aliases ARE the peer's request IDs, a reused ID
+   * would hand two subscriptions the same alias and make their subgroup
+   * streams indistinguishable — session-fatal, per the draft.
+   */
+  #peerRequestIds = new Set<number>();
   #desiredNamespace: TrackNamespace | undefined;
   #announcedFired = false;
 
@@ -420,9 +427,28 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         this.#callbacks.onAnnounced?.({ namespace });
       })
       .catch(() => {
-        // The stream died with the write — the solicitation stream's own
-        // read loop surfaces the loss through onAnnounceEnded.
+        // The response half died alone (a reset the request half may
+        // never mirror): the entry never reached the peer, so un-record
+        // it — the read loop may stay open forever and cannot be relied
+        // on to surface the loss.
+        stream.announced = stream.announced.filter((existing) => existing !== suffix);
+        this.#reportAnnounceLoss();
       });
+  }
+
+  /**
+   * Fire `onAnnounceEnded` when no solicitation carries the announce
+   * anymore — shared by the read-loop cleanup and the response-write
+   * failure path. Silent while closing, destroyed, or migrating (a
+   * GOAWAY makes the peer's streams ending the orderly drain).
+   */
+  #reportAnnounceLoss(): void {
+    if (this.#destroyed || this.#closing || this.#receivedGoaway) return;
+    const stillCarried = [...this.#namespaceStreams].some((stream) => stream.announced.length > 0);
+    if (stillCarried) return;
+    this.#callbacks.onAnnounceEnded?.({
+      error: new MoqtProtocolError('the namespace solicitation carrying the announce ended'),
+    });
   }
 
   registerTrack(options: RegisterTrackOptions): RegisteredTrack {
@@ -606,6 +632,12 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     const type = await reader.readVarint();
     const message = await this.#readControlFrame(reader, type);
 
+    if (message.kind === 'subscribe' || message.kind === 'subscribe-namespace') {
+      if (this.#peerRequestIds.has(message.requestId)) {
+        throw new MoqtProtocolError(`peer reused request id ${message.requestId}`);
+      }
+      this.#peerRequestIds.add(message.requestId);
+    }
     if (message.kind === 'subscribe') {
       await this.#handleIncomingSubscribe(stream, reader, message);
       return;
@@ -668,6 +700,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         if (message.kind === 'goaway') {
           this.#receivedGoaway = true;
           this.#callbacks.onGoaway?.(message);
+        } else if (message.kind === 'request-update') {
+          // Namespace subscriptions may legally be updated (§10.9); v1
+          // applies no prefix changes, but a legal message must never be
+          // session-fatal — surfaced for observability only.
+          this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
         } else {
           throw new MoqtProtocolError(`unexpected ${message.kind} on an incoming subscribe-namespace stream`);
         }
@@ -681,17 +718,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       // `close()` only visits records still in the set — an unclosed
       // response direction would leak the stream until transport teardown.
       void writer.close().catch(() => {});
-      // Announce loss is only real when no other solicitation still
-      // carries it — a peer may solicit several covering prefixes, and
-      // the announce was written on every match. After a GOAWAY the peer
-      // is migrating: its streams ending is the orderly drain, not a
-      // failure to surface.
-      const stillCarried = [...this.#namespaceStreams].some((stream) => stream.announced.length > 0);
-      if (record.announced.length > 0 && !stillCarried && !this.#destroyed && !this.#closing && !this.#receivedGoaway) {
-        this.#callbacks.onAnnounceEnded?.({
-          error: new MoqtProtocolError('the namespace solicitation carrying the announce ended'),
-        });
-      }
+      if (record.announced.length > 0) this.#reportAnnounceLoss();
     }
   }
 
@@ -798,12 +825,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         const type = await reader.readVarint();
         const message = await this.#readControlFrame(reader, type);
         if (message.kind === 'request-update') {
+          const { forward, subscriberPriority: _priority, ...unsupported } = message.parameters;
           // Forward State toggles ride REQUEST_UPDATE; the binding must
           // follow so data stops (or starts) with the subscription's
           // authorization. Newest-wins keeps this subscriber the track's
           // only live one, so its state IS the binding.
-          if (message.parameters.forward !== undefined) {
-            subscriber.forwarding = message.parameters.forward !== 0;
+          if (forward !== undefined) {
+            subscriber.forwarding = forward !== 0;
             if (!subscriber.finished && subscriber.accepted) {
               this.#callbacks.onTrackBinding?.({
                 trackName: track.trackName,
@@ -812,11 +840,32 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
             }
           }
           this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
-          // The subscribe driver treats REQUEST_OK as the update's
-          // completion (`onUpdateOk`). Strictly reactive: a peer that
-          // never sends REQUEST_UPDATE (moq-lite-rs parks on end-of-
-          // stream after SUBSCRIBE_OK) never sees a trailing byte.
-          if (!subscriber.finished) void writer.write(encodeRequestOk()).catch(() => {});
+          if (!subscriber.finished) {
+            if (Object.keys(unsupported).length > 0) {
+              // Acknowledging an update we did not apply would leave the
+              // peer serving stale expectations (a filter or range it
+              // believes is in effect). Forward State is applied above
+              // and priority is advisory (the known relays discard ours
+              // too); anything else ends this request honestly.
+              subscriber.finished = true;
+              void writer
+                .write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'unsupported subscription update'))
+                .then(() => writer.close())
+                .catch(() => {});
+              if (subscriber.reported) {
+                subscriber.reported = false;
+                this.#callbacks.onSubscribeEnd?.({ requestId: subscribe.requestId });
+                const binding = track.subscribers.filter((s) => !s.finished && s.accepted && s.forwarding).at(-1);
+                this.#callbacks.onTrackBinding?.({ trackName: track.trackName, trackAlias: binding?.trackAlias });
+              }
+            } else {
+              // The subscribe driver treats REQUEST_OK as the update's
+              // completion (`onUpdateOk`). Strictly reactive: a peer that
+              // never sends REQUEST_UPDATE (moq-lite-rs parks on end-of-
+              // stream after SUBSCRIBE_OK) never sees a trailing byte.
+              void writer.write(encodeRequestOk()).catch(() => {});
+            }
+          }
         } else if (message.kind === 'goaway') {
           this.#receivedGoaway = true;
           this.#callbacks.onGoaway?.(message);
