@@ -203,18 +203,24 @@ function setupResolveCatalog({
 
           /**
            * Terminal stop: after this, nothing of the current attempt may
-           * write `state.presentation` until the state re-enters.
-           * Cancelling the handles alone is not that — the settle timer's
-           * callback never checks `isCurrent` and would still drain
-           * buffered objects, and a cancel can itself surface in-flight
-           * onEnd/onReset. So the attempt token is bumped (invalidating
-           * every handler that does check), the timer disarmed, and the
-           * buffer discarded before the handles go.
+           * write `state.presentation` — and no queued restart may reopen
+           * the subscription — until the state re-enters. Cancelling the
+           * handles alone is neither: the settle timer's callback never
+           * checks `isCurrent` and would still drain buffered objects, a
+           * cancel can itself surface in-flight onEnd/onReset, and a
+           * restart already booked by an earlier retryable report of the
+           * same death (an armed retry timer, or an in-flight auth
+           * refresh) would start a fresh attempt right over the terminal
+           * state. So the attempt token is bumped (invalidating every
+           * handler and the refresh restart, which check it), both timers
+           * are disarmed, and the buffer discarded before the handles go.
            */
           const stopCatalog = (): void => {
             attempt++;
             clearTimeout(settleTimer);
             settleTimer = undefined;
+            clearTimeout(retryTimer);
+            retryTimer = undefined;
             bufferedLive.length = 0;
             fetchSettled = true;
             fetchHandle?.cancel();
@@ -349,7 +355,12 @@ function setupResolveCatalog({
                       void actor
                         .refreshAuthToken()
                         .then((refreshed) => {
-                          if (cancelled) return;
+                          // A refresh landing after this attempt was
+                          // superseded — a terminal stop, a timer-driven
+                          // restart, cleanup — must not restart on its
+                          // own: it would undo a terminal freeze, or
+                          // double-start over a live newer attempt.
+                          if (cancelled || !isCurrent()) return;
                           fetchHandle?.cancel();
                           subscription?.cancel();
                           start(refreshed);
@@ -357,12 +368,20 @@ function setupResolveCatalog({
                         .catch((refreshError) => {
                           // TODO(error-management): route to a state-error slot once one exists.
                           console.error('[resolveCatalog] auth refresh failed:', refreshError);
+                          // No usable token is coming: terminal, same
+                          // freeze as the other terminal branches — unless
+                          // the attempt was already superseded, in which
+                          // case the live attempt is not ours to stop.
+                          if (cancelled || !isCurrent()) return;
+                          stopCatalog();
                         });
                       return;
                     }
                     // The refreshed token was rejected too. The generic
                     // retry below would loop forever on a token the relay
-                    // just refused — stop instead.
+                    // just refused — stop instead, freezing the state like
+                    // any other permanent rejection.
+                    stopCatalog();
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog subscribe failed after auth refresh:', error);
                     return;

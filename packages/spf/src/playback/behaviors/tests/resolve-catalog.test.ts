@@ -3,7 +3,11 @@ import { signal } from '../../../core/signals/primitives';
 import { isResolvedPresentation, type MaybeResolvedPresentation } from '../../../media/types';
 import { getTracksByType } from '../../../media/utils/tracks';
 import { utf8Encode } from '../../../network/moqt/bytes';
-import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
+import {
+  type MessageParameters,
+  PUBLISH_DONE_STATUS,
+  REQUEST_ERROR_CODE,
+} from '../../../network/moqt/control-messages';
 import type { FetchHandlers, MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import { resolveCatalog } from '../resolve-catalog';
@@ -211,41 +215,51 @@ describe('resolveCatalog', () => {
 
   // refreshAuthToken always rejects (see moq-session.ts) — a refreshed
   // token has no connection left to attach to. The one-shot retry must
-  // still give up cleanly: log the failure, leave the original
-  // subscription/fetch in place, and never retry again.
+  // give up as a terminal state like any other permanent rejection:
+  // freeze it, so nothing of the dead attempt keeps writing the
+  // presentation and no queued restart reopens the subscription.
   it('gives up cleanly on EXPIRED_AUTH_TOKEN since refreshAuthToken cannot supply a usable token', async () => {
+    vi.useFakeTimers();
     const { actor, subscriptions, fetches, refreshAuthToken } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await flush();
+    expect(subscriptions).toHaveLength(1);
 
-    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    // A live catalog object buffered behind the unsettled joining fetch —
+    // the settle timer's drain path, which never checks the attempt token.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
+
     subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 0,
       reason: 'expired',
     });
-
     await vi.waitFor(() => expect(refreshAuthToken).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
       expect(consoleError).toHaveBeenCalledWith('[resolveCatalog] auth refresh failed:', expect.any(Error))
     );
-    // No retry: the original subscription/fetch are untouched, and the
-    // catalog stays unresolved rather than a pointless second request.
-    expect(subscriptions).toHaveLength(1);
-    expect(subscriptions[0]!.cancelled).toBe(false);
-    expect(fetches).toHaveLength(1);
-    expect(fetches[0]!.cancelled).toBe(false);
-    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
 
-    // A second expiry is log-only too — the retry is one-shot regardless
-    // of whether the first refresh attempt succeeded or failed.
+    // Terminal freezes the state: no retry, handles cancelled, and past
+    // the fetch deadline the buffered object must NOT have drained into
+    // the presentation.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]!.cancelled).toBe(true);
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]!.cancelled).toBe(true);
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // A second expiry from the stopped attempt is stale — no second
+    // refresh, no new subscription.
     subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 0,
       reason: 'expired again',
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(subscriptions).toHaveLength(1);
     expect(refreshAuthToken).toHaveBeenCalledOnce();
     consoleError.mockRestore();
@@ -486,6 +500,123 @@ describe('resolveCatalog', () => {
     expect(subscriptions[0]!.cancelled).toBe(true);
     expect(fetches[0]!.cancelled).toBe(true);
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
+  // One death can reach the behavior as two reports (see scheduleRestart):
+  // a retryable PUBLISH_DONE books the restart, then a permanent error for
+  // the same subscription declares the state terminal. The already-armed
+  // restart timer must not fire afterwards and reopen the subscription
+  // right over the terminal state.
+  it('cancels a booked restart when a terminal report follows a retryable one', async () => {
+    vi.useFakeTimers();
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await flush();
+    expect(subscriptions).toHaveLength(1);
+
+    subscriptions[0]!.handlers.onDone?.(publishDone);
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.UNAUTHORIZED,
+      retryInterval: 0,
+      reason: 'wrong claims',
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(subscriptions).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
+  // The refreshed token being rejected too is a terminal state like any
+  // other permanent rejection: freeze it. The second attempt's settle
+  // timer must not keep draining buffered objects into the presentation.
+  it('freezes the state when the refreshed token is rejected too', async () => {
+    vi.useFakeTimers();
+    const base = createFakeSessionActor();
+    const { subscriptions, fetches } = base;
+    const refreshAuthToken = vi.fn(async () => ({}));
+    const actor: MoqSessionActor = { ...base.actor, refreshAuthToken };
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await flush();
+    expect(subscriptions).toHaveLength(1);
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await flush();
+    expect(subscriptions).toHaveLength(2);
+
+    // A live object buffered behind the refreshed attempt's unsettled
+    // joining fetch — the settle timer's drain path.
+    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
+
+    subscriptions[1]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired again',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshAuthToken).toHaveBeenCalledOnce();
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1]!.cancelled).toBe(true);
+    expect(fetches[1]!.cancelled).toBe(true);
+    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
+  // A refresh that resolves only after the attempt went terminal must not
+  // restart the catalog on its own — the queued start() would undo the
+  // terminal freeze exactly like an armed retry timer would.
+  it('does not let a late auth refresh undo a terminal stop', async () => {
+    vi.useFakeTimers();
+    const base = createFakeSessionActor();
+    const { subscriptions } = base;
+    let resolveRefresh: () => void = () => {};
+    const refreshAuthToken = vi.fn(
+      () =>
+        new Promise<MessageParameters>((resolve) => {
+          resolveRefresh = () => resolve({});
+        })
+    );
+    const actor: MoqSessionActor = { ...base.actor, refreshAuthToken };
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await flush();
+    expect(subscriptions).toHaveLength(1);
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    expect(refreshAuthToken).toHaveBeenCalledOnce();
+
+    // The track goes terminal while the refresh is still in flight.
+    subscriptions[0]!.handlers.onDone?.({
+      statusCode: PUBLISH_DONE_STATUS.UNAUTHORIZED,
+      streamCount: 0,
+      reason: 'unauthorized',
+    });
+
+    resolveRefresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(subscriptions).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
     consoleError.mockRestore();
 
