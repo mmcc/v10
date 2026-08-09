@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
-import { REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
+import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
 import type { MoqtObject } from '../../../network/moqt/object-stream';
 import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
-import { createTrackSubscriberActor } from '../track-subscriber';
+import { createTrackSubscriberActor, DEFAULT_STALL_TIMEOUT_MS } from '../track-subscriber';
 
 // ============================================================================
 // Fakes
@@ -68,6 +68,12 @@ function locObject(groupId: number, objectId: number, timestampUs: number): Moqt
 // ============================================================================
 
 describe('createTrackSubscriberActor', () => {
+  // Only the stall-watchdog tests install a fake clock; restoring here keeps a
+  // failing one from leaking it into the tests that await real microtasks.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('subscribes to the track with the live-edge filter by default', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });
@@ -269,6 +275,8 @@ describe('createTrackSubscriberActor', () => {
     const second = createTrackSubscriberActor({ session, track: TRACK });
     subscriptions[1]!.handlers.onError?.({ errorCode: 0x10, retryInterval: 0, reason: 'gone' });
     expect(second.snapshot.get().context.status).toBe('error');
+    // DOES_NOT_EXIST is transient (the track may appear) — recoverable.
+    expect(second.snapshot.get().context.unrecoverable).toBeFalsy();
     second.destroy();
   });
 
@@ -287,7 +295,8 @@ describe('createTrackSubscriberActor', () => {
     expect(refreshAuth).toHaveBeenCalledOnce();
     expect(subscriber.snapshot.get().context.status).not.toBe('error');
 
-    // A second expiry is terminal (no retry storm).
+    // A second expiry is terminal (no retry storm) — and marked
+    // unrecoverable, so recovery refuses to rebuild the same failure.
     subscriptions[1]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 1,
@@ -295,8 +304,77 @@ describe('createTrackSubscriberActor', () => {
     });
     await vi.waitFor(() => expect(subscriber.snapshot.get().context.status).toBe('error'));
     expect(subscriptions).toHaveLength(2);
+    expect(subscriber.snapshot.get().context.unrecoverable).toBe(true);
 
     subscriber.destroy();
+  });
+
+  it('marks auth failures it cannot refresh past as unrecoverable', async () => {
+    // No refresh seam: the very first expiry is already unrecoverable.
+    const bare = createFakeSession();
+    const noSeam = createTrackSubscriberActor({ session: bare.session, track: TRACK });
+    bare.subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    expect(noSeam.snapshot.get().context.status).toBe('error');
+    expect(noSeam.snapshot.get().context.unrecoverable).toBe(true);
+    noSeam.destroy();
+
+    // The provider gave up: same exhaustion, carrying the refresh error.
+    const giveUp = createFakeSession();
+    const refreshAuth = vi.fn(async () => {
+      throw new Error('no fresh token');
+    });
+    const refused = createTrackSubscriberActor({ session: giveUp.session, track: TRACK, refreshAuth });
+    giveUp.subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await vi.waitFor(() => expect(refused.snapshot.get().context.status).toBe('error'));
+    expect(refused.snapshot.get().context.unrecoverable).toBe(true);
+    expect(String(refused.snapshot.get().context.error)).toMatch(/no fresh token/);
+    refused.destroy();
+  });
+
+  it('marks permanent rejections and auth-shaped ends as unrecoverable', () => {
+    const { session, subscriptions } = createFakeSession();
+
+    // UNAUTHORIZED answers an identical retry identically.
+    const refused = createTrackSubscriberActor({ session, track: TRACK });
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.UNAUTHORIZED,
+      retryInterval: 0,
+      reason: 'wrong claims',
+    });
+    expect(refused.snapshot.get().context.status).toBe('error');
+    expect(refused.snapshot.get().context.unrecoverable).toBe(true);
+    refused.destroy();
+
+    // An auth-shaped PUBLISH_DONE: the replacement would carry the same
+    // credentials the relay just rejected.
+    const authEnded = createTrackSubscriberActor({ session, track: TRACK });
+    subscriptions[1]!.handlers.onDone?.({
+      statusCode: PUBLISH_DONE_STATUS.UNAUTHORIZED,
+      streamCount: 0,
+      reason: 'unauthorized',
+    });
+    expect(authEnded.snapshot.get().context.status).toBe('ended');
+    expect(authEnded.snapshot.get().context.unrecoverable).toBe(true);
+    authEnded.destroy();
+
+    // TRACK_ENDED is the ordinary broadcaster blip — fully recoverable.
+    const blipped = createTrackSubscriberActor({ session, track: TRACK });
+    subscriptions[2]!.handlers.onDone?.({
+      statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+      streamCount: 0,
+      reason: 'broadcast ended',
+    });
+    expect(blipped.snapshot.get().context.status).toBe('ended');
+    expect(blipped.snapshot.get().context.unrecoverable).toBeFalsy();
+    blipped.destroy();
   });
 
   // The outage between the two subscriptions is not delivery time, and both
@@ -409,5 +487,128 @@ describe('createTrackSubscriberActor', () => {
     expect(subscriber.peek()).toMatchObject({ timestampUs: 1_000_000 });
 
     subscriber.destroy();
+  });
+
+  // Data-starvation watchdog. A live MSF media track delivers continuously,
+  // so a subscription that stays silent past the deadline is dead in a way
+  // the wire never said — neither PUBLISH_DONE nor REQUEST_ERROR reports a
+  // relay that lost its publisher or a half-closed path.
+  //
+  // `performance.now()` stays real throughout: the fake clock drives the
+  // deadline, and the arrival measurements it feeds are asserted elsewhere.
+  it('cancels the subscription and errors when the track delivers no objects', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, stallTimeoutMs: 100 });
+
+    // Armed by the subscribe itself, so the deadline also covers a
+    // subscription that OKs and then never delivers.
+    await vi.advanceTimersByTimeAsync(99);
+    expect(subscriber.snapshot.get().context.status).toBe('pending');
+
+    await vi.advanceTimersByTimeAsync(1);
+    const { status, error } = subscriber.snapshot.get().context;
+    expect(status).toBe('error');
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/no objects/);
+    // Cancelled as well as reported: nothing else is going to tear down a
+    // subscription the peer still believes is live.
+    expect(subscriptions[0]!.cancelled).toBe(true);
+
+    subscriber.destroy();
+  });
+
+  it('re-arms the stall deadline on every delivered object', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, stallTimeoutMs: 100 });
+    const { handlers } = subscriptions[0]!;
+
+    await vi.advanceTimersByTimeAsync(60);
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    // 120ms since the subscribe but only 60ms since delivery: the deadline
+    // measures silence, not subscription age.
+    await vi.advanceTimersByTimeAsync(60);
+    expect(subscriber.snapshot.get().context.status).toBe('active');
+    expect(subscriptions[0]!.cancelled).toBe(false);
+
+    // A full deadline of silence after the last object is what trips it.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(subscriber.snapshot.get().context.status).toBe('error');
+    expect(subscriptions[0]!.cancelled).toBe(true);
+
+    subscriber.destroy();
+  });
+
+  // The jitter buffer drops status-only objects, but they are still proof the
+  // path is delivering — so the re-arm happens before any filtering.
+  it('re-arms on status-only objects the jitter buffer ignores', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, stallTimeoutMs: 100 });
+
+    await vi.advanceTimersByTimeAsync(60);
+    subscriptions[0]!.handlers.onObject?.({
+      groupId: 41,
+      objectId: 2,
+      subgroupId: 0,
+      status: 'end-of-group',
+      properties: [],
+      payload: new Uint8Array(0),
+    });
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(subscriber.snapshot.get().context.frameCount).toBe(0);
+    expect(subscriber.snapshot.get().context.status).not.toBe('error');
+    expect(subscriptions[0]!.cancelled).toBe(false);
+
+    subscriber.destroy();
+  });
+
+  it('never arms the watchdog when stallTimeoutMs is 0', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, stallTimeoutMs: 0 });
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEFAULT_STALL_TIMEOUT_MS * 2);
+    expect(subscriber.snapshot.get().context.status).toBe('pending');
+    expect(subscriptions[0]!.cancelled).toBe(false);
+
+    subscriber.destroy();
+  });
+
+  it('disarms the watchdog on PUBLISH_DONE, so an ended track is not reported as stalled', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, stallTimeoutMs: 100 });
+
+    subscriptions[0]!.handlers.onDone?.({ statusCode: 0x2, streamCount: 3, reason: 'track ended' });
+    expect(subscriber.snapshot.get().context.status).toBe('ended');
+    expect(vi.getTimerCount()).toBe(0);
+
+    // A track that said it was finished must not be overwritten with an
+    // error by its own pending deadline.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(subscriber.snapshot.get().context.status).toBe('ended');
+    expect(subscriber.snapshot.get().context.error).toBeUndefined();
+
+    subscriber.destroy();
+  });
+
+  it('disarms the watchdog on destroy, so a torn-down subscriber never transitions late', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, stallTimeoutMs: 100 });
+
+    subscriber.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(subscriber.snapshot.get()).toMatchObject({ value: 'destroyed', context: { status: 'pending' } });
+    expect(subscriptions[0]!.cancelled).toBe(true);
+
+    // Idempotent: a second teardown after the deadline lapsed is a no-op.
+    expect(() => subscriber.destroy()).not.toThrow();
   });
 });

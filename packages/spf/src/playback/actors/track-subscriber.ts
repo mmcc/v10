@@ -16,12 +16,22 @@
  *
  * Auth-expiry retry (MSF §11.4): a REQUEST_ERROR with EXPIRED_AUTH_TOKEN
  * asks `refreshAuth` for fresh parameters and resubscribes once.
+ *
+ * Data-starvation watchdog (`stallTimeoutMs`): a live MSF media track
+ * delivers continuously, so a subscription that stays silent past the
+ * deadline is treated as dead even though the wire never said so —
+ * the subscription is cancelled and the status goes `'error'`, which is
+ * the terminal signal `subscribe-selected-tracks` recovers from.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
 import type { MoqTrack } from '../../media/moq/parse-catalog';
 import type { LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
-import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
+import {
+  isRetryablePublishDoneStatus,
+  isRetryableRequestErrorCode,
+  REQUEST_ERROR_CODE,
+} from '../../network/moqt/control-messages';
 import type { MoqtObject } from '../../network/moqt/object-stream';
 import type { MoqtSession, PublishDone, RequestError, Subscription } from '../../network/moqt/session';
 
@@ -82,6 +92,18 @@ export interface TrackSubscriberContext {
    */
   arrivalJitter?: { minOffsetMs: number; maxOffsetMs: number; sampleCount: number; epoch: number };
   error?: RequestError | unknown;
+  /**
+   * Set with a terminal status when an identical replacement subscription
+   * would die the same way: an auth failure the actor cannot refresh past
+   * (one-shot spent, refresh rejected, or no refresh seam), a permanent
+   * REQUEST_ERROR (`isRetryableRequestErrorCode` false — wrong
+   * credentials, malformed request, unsupported feature), or an
+   * auth-shaped PUBLISH_DONE. `subscribe-selected-tracks` reads this to
+   * keep such deaths out of its rejoin loop — without it, every
+   * replacement actor starts fresh and a permanent rejection is retried
+   * forever at the backoff cadence.
+   */
+  unrecoverable?: boolean;
   done?: PublishDone;
 }
 
@@ -94,6 +116,16 @@ export interface CreateTrackSubscriberOptions {
   parameters?: MessageParameters;
   /** Auth-expiry seam: return refreshed parameters to retry the subscribe with. */
   refreshAuth?(): Promise<MessageParameters>;
+  /**
+   * Data-starvation watchdog: a live MSF media track delivers continuously,
+   * so a subscription this long without a single object is dead in a way
+   * the wire never said — a relay that dropped its publisher without
+   * sending PUBLISH_DONE, or a half-closed path. On expiry the actor
+   * cancels the subscription and reports `status: 'error'`, which is the
+   * signal `subscribe-selected-tracks` recovers from by re-subscribing at
+   * the live edge. `0` disables. Default 10 000 ms.
+   */
+  stallTimeoutMs?: number;
 }
 
 type SubscriberMessage =
@@ -106,8 +138,8 @@ type SubscriberMessage =
       arrivalJitter: TrackSubscriberContext['arrivalJitter'];
     }
   | { type: 'buffer-drained'; frameCount: number; oldestTimestampUs?: number; newestTimestampUs?: number }
-  | { type: 'done'; done: PublishDone }
-  | { type: 'error'; error: RequestError | unknown };
+  | { type: 'done'; done: PublishDone; unrecoverable?: boolean }
+  | { type: 'error'; error: RequestError | unknown; unrecoverable?: boolean };
 
 export interface TrackSubscriberActor
   extends Pick<TransitionActor<TrackSubscriberContext, SubscriberMessage>, 'snapshot'> {
@@ -127,6 +159,9 @@ export interface TrackSubscriberActor
 // =============================================================================
 
 const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'largest-object' };
+
+/** See `CreateTrackSubscriberOptions.stallTimeoutMs`. */
+export const DEFAULT_STALL_TIMEOUT_MS = 10_000;
 
 /**
  * Time constant of the arrival-offset envelope's decay, in milliseconds.
@@ -165,6 +200,38 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   let lastArrivalMs: number | undefined;
   let authRetried = false;
   let subscription: Subscription | undefined;
+
+  // Data-starvation watchdog (see `stallTimeoutMs`): armed per subscribe
+  // attempt, re-armed per arriving object, disarmed once the subscription
+  // is dead by other means (done / error / destroy).
+  const stallTimeoutMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const disarmStallTimer = (): void => {
+    if (stallTimer === undefined) return;
+    clearTimeout(stallTimer);
+    stallTimer = undefined;
+  };
+
+  const armStallTimer = (): void => {
+    if (stallTimeoutMs <= 0 || destroyed) return;
+    // A straggler object still in flight after done/error must not re-arm
+    // the watchdog on a subscription already reported dead — the re-armed
+    // timer would fire a second 'error' at a consumer that moved on.
+    const status = inner.snapshot.get().context.status;
+    if (status === 'ended' || status === 'error') return;
+    disarmStallTimer();
+    stallTimer = setTimeout(() => {
+      stallTimer = undefined;
+      subscription?.cancel();
+      inner.send({
+        type: 'error',
+        error: new Error(
+          `MoQ track "${track.moq.name}" delivered no objects for ${stallTimeoutMs}ms; subscription presumed dead`
+        ),
+      });
+    }, stallTimeoutMs);
+  };
 
   // Decaying arrival-offset envelope (see `arrivalJitter` on the context).
   // Two numbers and no allocation, deliberately: this runs on every
@@ -238,9 +305,9 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             newestTimestampUs: message.newestTimestampUs ?? context.newestTimestampUs,
           };
         case 'done':
-          return { ...context, status: 'ended', done: message.done };
+          return { ...context, status: 'ended', done: message.done, unrecoverable: message.unrecoverable };
         case 'error':
-          return { ...context, status: 'error', error: message.error };
+          return { ...context, status: 'error', error: message.error, unrecoverable: message.unrecoverable };
       }
     }
   );
@@ -261,7 +328,11 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   };
 
   const handleObject = (object: MoqtObject): void => {
-    if (destroyed || object.status !== 'normal') return;
+    if (destroyed) return;
+    // Any object is proof of delivery — including status-only ones the
+    // buffer ignores below — so the watchdog re-arms before any filtering.
+    armStallTimer();
+    if (object.status !== 'normal') return;
     if (isBehindWatermark(object.groupId, object.objectId)) return;
     const timescale = trackTimescale ?? catalogTimescale;
     const loc = toLocFrame(object, timescale !== undefined ? { timescale } : {});
@@ -354,24 +425,46 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
           inner.send({ type: 'subscribed' });
         },
         onObject: handleObject,
-        onDone: (done) => inner.send({ type: 'done', done }),
+        onDone: (done) => {
+          disarmStallTimer();
+          // An auth-shaped end is not worth re-subscribing: the replacement
+          // carries the same credentials the relay just rejected.
+          inner.send({ type: 'done', done, unrecoverable: !isRetryablePublishDoneStatus(done.statusCode) });
+        },
         onError: (error) => {
-          if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN && options.refreshAuth && !authRetried) {
-            authRetried = true;
-            void options
-              .refreshAuth()
-              .then((refreshed) => {
-                if (destroyed) return;
-                resetArrivalBaseline();
-                subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
-              })
-              .catch((refreshError) => inner.send({ type: 'error', error: refreshError }));
+          disarmStallTimer();
+          if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN) {
+            if (options.refreshAuth && !authRetried) {
+              authRetried = true;
+              void options
+                .refreshAuth()
+                .then((refreshed) => {
+                  if (destroyed) return;
+                  resetArrivalBaseline();
+                  subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
+                })
+                .catch((refreshError) =>
+                  // The provider could not supply a fresh token — as
+                  // terminal as a rejected refresh (see `unrecoverable`).
+                  inner.send({ type: 'error', error: refreshError, unrecoverable: true })
+                );
+              return;
+            }
+            // No refresh seam, or the refreshed token was rejected too —
+            // credentials this actor cannot fix (see `unrecoverable`).
+            inner.send({ type: 'error', error, unrecoverable: true });
             return;
           }
-          inner.send({ type: 'error', error });
+          // Permanent rejections (wrong credentials, malformed request,
+          // unsupported feature) answer an identical retry identically.
+          inner.send({ type: 'error', error, unrecoverable: !isRetryableRequestErrorCode(error.errorCode) });
         },
       }
     );
+    // Armed after the subscribe is issued so the deadline also covers a
+    // subscription that OKs and then never delivers — the case PUBLISH_DONE
+    // and REQUEST_ERROR both fail to report.
+    armStallTimer();
   };
 
   subscribe({
@@ -423,6 +516,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
+      disarmStallTimer();
       subscription?.cancel();
       frames.length = 0;
       inner.destroy();
