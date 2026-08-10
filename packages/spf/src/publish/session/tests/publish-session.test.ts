@@ -259,6 +259,41 @@ describe('createMoqtPublishSession', () => {
     subscriber.destroy();
   });
 
+  it('holds the overlap guard across the acceptance write of a racing solicitation', async () => {
+    const endings: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onAnnounceEnded: ({ error }) => endings.push(error),
+    });
+    await session.ready;
+    session.announce(NAMESPACE);
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
+
+    // Both solicitations are in flight before either REQUEST_OK write
+    // settles — request handlers run concurrently, so §10.18's
+    // single-carrier rule must hold across the acceptance await, not
+    // only at the synchronous check.
+    const [broad, narrow] = await Promise.all([
+      solicitNamespace(pair.server, [], 1),
+      solicitNamespace(pair.server, ['live'], 3),
+    ]);
+
+    await vi.waitFor(() => {
+      expect(broad.received.length).toBeGreaterThanOrEqual(1);
+      expect(narrow.received.length).toBeGreaterThanOrEqual(1);
+    });
+    expect([broad.received[0]?.kind, narrow.received[0]?.kind].sort()).toEqual(['request-error', 'request-ok']);
+    const refused = broad.received[0]?.kind === 'request-error' ? broad : narrow;
+    const accepted = refused === broad ? narrow : broad;
+    expect(refused.received[0]).toMatchObject({ errorCode: REQUEST_ERROR_CODE.PREFIX_OVERLAP });
+    await vi.waitFor(() => {
+      expect(accepted.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
+      expect(refused.ended()).toBe(true);
+    });
+    expect(endings).toEqual([]);
+    session.destroy();
+    subscriber.destroy();
+  });
+
   it('answers inbound SUBSCRIBE with the request id as the alias and routes REQUEST_UPDATE', async () => {
     const subscribes: IncomingSubscribe[] = [];
     const updates: { requestId: number }[] = [];
@@ -616,6 +651,35 @@ describe('createMoqtPublishSession', () => {
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
     await vi.waitFor(() => {
       expect(endings).toHaveLength(1);
+    });
+    session.destroy();
+    subscriber.destroy();
+  });
+
+  it('accepts a replacement solicitation after the response half of the carrier dies', async () => {
+    const endings: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onAnnounceEnded: ({ error }) => endings.push(error),
+    });
+    await session.ready;
+
+    const dead = await solicitNamespace(pair.server, [], 1);
+    await vi.waitFor(() => {
+      expect(dead.received.map((m) => m.kind)).toEqual(['request-ok']);
+    });
+    await dead.abandonReads();
+    session.announce(NAMESPACE);
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
+    await vi.waitFor(() => {
+      expect(endings).toHaveLength(1);
+    });
+
+    // The write failure deregistered the dead carrier along with the
+    // loss report, so the relay's retry is a fresh start — not a
+    // PREFIX_OVERLAP refusal against a corpse.
+    const retry = await solicitNamespace(pair.server, [], 3);
+    await vi.waitFor(() => {
+      expect(retry.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
     session.destroy();
     subscriber.destroy();

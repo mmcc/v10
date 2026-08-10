@@ -229,6 +229,14 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   #tracks = new Map<string, TrackRecord>();
   #namespaceStreams = new Set<NamespaceStream>();
   /**
+   * Prefixes whose solicitation is mid-acceptance. Request handlers run
+   * concurrently and registration happens only after the REQUEST_OK
+   * write settles, so an overlapping solicitation racing that await
+   * must be refused off this reservation, not just off the registered
+   * set.
+   */
+  #pendingNamespacePrefixes = new Set<TrackNamespace>();
+  /**
    * Every inbound request ID ever seen. Reuse is a protocol violation
    * (§10.1), and because aliases ARE the peer's request IDs, a reused ID
    * would hand two subscriptions the same alias and make their subgroup
@@ -428,10 +436,15 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       })
       .catch(() => {
         // The response half died alone (a reset the request half may
-        // never mirror): the entry never reached the peer, so un-record
-        // it — the read loop may stay open forever and cannot be relied
-        // on to surface the loss.
+        // never mirror): the entry never reached the peer, no future
+        // write can, and the read loop may stay open forever — the
+        // carrier is dead. Deregister it so the peer's replacement
+        // solicitation is a fresh start rather than a PREFIX_OVERLAP
+        // against a corpse; if another path already swept it, the loss
+        // was reported there.
+        if (!this.#namespaceStreams.delete(stream)) return;
         stream.announced = stream.announced.filter((existing) => existing !== suffix);
+        void stream.writer.close().catch(() => {});
         this.#reportAnnounceLoss();
       });
   }
@@ -697,9 +710,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     // prefix containing the other) is refused with PREFIX_OVERLAP —
     // announcing on both would hand the peer duplicate namespace state
     // with inconsistent withdrawals.
-    const overlaps = [...this.#namespaceStreams].some(
-      (existing) => isNamespacePrefix(existing.prefix, prefix) || isNamespacePrefix(prefix, existing.prefix)
-    );
+    const overlaps =
+      [...this.#namespaceStreams].some(
+        (existing) => isNamespacePrefix(existing.prefix, prefix) || isNamespacePrefix(prefix, existing.prefix)
+      ) ||
+      [...this.#pendingNamespacePrefixes].some(
+        (pending) => isNamespacePrefix(pending, prefix) || isNamespacePrefix(prefix, pending)
+      );
     if (overlaps) {
       try {
         await writer.write(encodeRequestError(REQUEST_ERROR_CODE.PREFIX_OVERLAP, 'overlapping namespace prefix'));
@@ -711,10 +728,20 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       return;
     }
 
+    // Reserve the prefix across the acceptance write; the registration
+    // below happens in the same microtask as the release, so a racing
+    // overlapping solicitation always sees one or the other.
+    this.#pendingNamespacePrefixes.add(prefix);
+    let accepted = false;
     try {
       await writer.write(encodeRequestOk());
+      accepted = true;
     } catch {
       // Peer cancelled before the acceptance landed.
+    } finally {
+      this.#pendingNamespacePrefixes.delete(prefix);
+    }
+    if (!accepted) {
       await reader.cancel();
       return;
     }
