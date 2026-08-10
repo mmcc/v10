@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MoqtTransport } from '../../../../network/moqt/session';
 import { createMoqtSession } from '../../../../network/moqt/session';
+import { solicitNamespace } from '../../../../network/moqt/tests/helpers/raw-peer';
 import { createTransportPair, type TransportPair } from '../../../../network/moqt/tests/helpers/transport-pair';
 import type { ConnectPublishTransport } from '../../../session/publish-session';
 import { MoqPublishMediaMixin, type MoqPublishMediaOptions } from '../adapter';
@@ -35,24 +36,28 @@ function makePublishableMedia(connectTransport: ConnectPublishTransport = pendin
   return media;
 }
 
-/** A subscribe-side peer accepting every PUBLISH, so sessions can go live. */
-function makeAcceptingPeer(pair: TransportPair) {
-  const peer = createMoqtSession(pair.server, {
-    callbacks: { onIncomingPublish: (_publish, respond) => respond.accept() },
-  });
+/** A subscribe-side peer completing SETUP, so sessions can come up. */
+function makePeer(pair: TransportPair) {
+  const peer = createMoqtSession(pair.server, {});
   disposals.push(() => peer.destroy());
   return peer;
 }
 
-/** Drive the engine's real session to `live` by offering an accepted track. */
-async function driveLive(media: TestPublishMedia): Promise<void> {
+/**
+ * Drive the engine's real session to `live` by registering a servable
+ * track (normally `setupTrackPublishers`' job, gated on encodings these
+ * tests do not produce) and soliciting the namespace from the peer side
+ * — announce-and-serve's liveness trigger.
+ */
+async function driveLive(media: TestPublishMedia, pair: TransportPair): Promise<void> {
   const session = await vi.waitFor(() => {
     const actor = media.engine.context.publishSessionActor.get();
     const current = actor?.snapshot.get().context.session;
     expect(current).toBeDefined();
     return current!;
   });
-  session.publishTrack({ trackNamespace: ['live', 'abc123'], trackName: 'video' });
+  session.registerTrack({ trackNamespace: ['live', 'abc123'], trackName: 'catalog' });
+  void solicitNamespace(pair.server, []);
   await vi.waitFor(() => {
     expect(media.publishState).toBe('live');
   });
@@ -463,7 +468,7 @@ describe('MoqPublishMediaMixin', () => {
 
   it('publish() after a session error reconnects and settles on the new outcome', async () => {
     const pair = createTransportPair();
-    makeAcceptingPeer(pair);
+    makePeer(pair);
     let attempts = 0;
     const media = makePublishableMedia(() => {
       attempts += 1;
@@ -478,7 +483,7 @@ describe('MoqPublishMediaMixin', () => {
     // reject with the stale error — it cycles the gate, reconnects, and
     // settles on the second attempt's outcome.
     const retry = media.publish();
-    await driveLive(media);
+    await driveLive(media, pair);
     await expect(retry).resolves.toBeUndefined();
     expect(attempts).toBe(2);
     expect(media.publishError).toBeNull();
@@ -486,7 +491,7 @@ describe('MoqPublishMediaMixin', () => {
 
   it('unpublish() then publish() after a session error starts a fresh session', async () => {
     const pair = createTransportPair();
-    makeAcceptingPeer(pair);
+    makePeer(pair);
     let attempts = 0;
     const media = makePublishableMedia(() => {
       attempts += 1;
@@ -499,7 +504,7 @@ describe('MoqPublishMediaMixin', () => {
 
     // The stale sticky 'error' must not settle the new attempt.
     const retry = media.publish();
-    await driveLive(media);
+    await driveLive(media, pair);
     await expect(retry).resolves.toBeUndefined();
     expect(attempts).toBe(2);
   });

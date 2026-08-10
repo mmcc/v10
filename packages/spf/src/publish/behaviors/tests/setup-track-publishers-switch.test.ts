@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signal } from '../../../core/signals/primitives';
-import { createMoqtSession, type PublishDone } from '../../../network/moqt/session';
+import { createMoqtSession } from '../../../network/moqt/session';
+import { rawSubscribe, solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
 import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
 import { createPublishSessionActor, type PublishSessionActor } from '../../session/publish-session';
 import {
@@ -14,9 +15,9 @@ import {
  * the session + track names, so encoder churn — `activeEncodings`
  * clearing transiently and returning with a fresh identity, as a camera
  * device change (or a screen share starting/stopping mid-session)
- * produces — must not destroy them, re-PUBLISH the tracks, or emit
- * PUBLISH_DONE. A relay treats PUBLISH_DONE as the end of the track;
- * every subscriber would freeze.
+ * produces — must not destroy them or end the served tracks. A relay
+ * treats a subscription-stream FIN as the end of the track; every
+ * subscriber would freeze.
  */
 
 const ENDPOINT = { url: 'https://relay.example.com/moq', namespace: ['live', 'abc123'] };
@@ -29,29 +30,20 @@ const disposals: (() => void)[] = [];
 
 function makeSessionActor() {
   const pair = createTransportPair();
-  const publishes: string[] = [];
-  const peer = createMoqtSession(pair.server, {
-    callbacks: {
-      onIncomingPublish: (publish, respond) => {
-        publishes.push(publish.trackName);
-        respond.accept();
-      },
-    },
-  });
+  const peer = createMoqtSession(pair.server, {});
   disposals.push(() => peer.destroy());
   const actor: PublishSessionActor = createPublishSessionActor({
     endpoint: ENDPOINT,
     connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
   });
   disposals.push(() => actor.destroy());
-  return { actor, peer, publishes };
+  return { actor, peer, server: pair.server };
 }
 
 function setupBehavior() {
   const state = {
     activeEncodings: signal<SetupTrackPublishersState['activeEncodings']>(undefined),
     endpoint: signal<SetupTrackPublishersState['endpoint']>(undefined),
-    publishError: signal<SetupTrackPublishersState['publishError']>(undefined),
   };
   const context = {
     publishSessionActor: signal<SetupTrackPublishersContext['publishSessionActor']>(undefined),
@@ -70,31 +62,31 @@ describe('setupTrackPublishers', () => {
     for (const dispose of disposals.splice(0)) dispose();
   });
 
-  it('keeps the publishers alive across an activeEncodings identity change (no destroy, no PUBLISH_DONE)', async () => {
-    const { actor, peer, publishes } = makeSessionActor();
+  it('keeps the publishers alive across an activeEncodings identity change (no destroy, no track end)', async () => {
+    const { actor, server } = makeSessionActor();
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
     state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     context.publishSessionActor.set(actor);
+    void solicitNamespace(server, []);
 
     await vi.waitFor(() => {
-      expect(publishes).toEqual(['catalog', 'video', 'audio']);
+      expect(context.audioTrackPublisher.get()).toBeDefined();
       expect(actor.snapshot.get().context.status).toBe('live');
     });
     const catalogPublisher = context.catalogTrackPublisher.get()!;
     const videoPublisher = context.videoTrackPublisher.get()!;
     const audioPublisher = context.audioTrackPublisher.get()!;
 
-    // A downstream subscriber would see any PUBLISH_DONE — record them.
-    const dones: PublishDone[] = [];
-    for (const trackName of ['video', 'audio'] as const) {
-      peer.subscribe(
-        { trackNamespace: ENDPOINT.namespace, trackName },
-        { onObject: () => undefined, onDone: (done) => dones.push(done) }
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A downstream subscriber's stream ending IS the track ending — hold
+    // live subscriptions and watch for any churn on them.
+    const video = await rawSubscribe(server, ENDPOINT.namespace, 'video', 11);
+    const audio = await rawSubscribe(server, ENDPOINT.namespace, 'audio', 13);
+    await vi.waitFor(() => {
+      expect(video.received).toHaveLength(1);
+      expect(audio.received).toHaveLength(1);
+    });
 
     // The switch: encodings clear while the new source is probed…
     state.activeEncodings.set(undefined);
@@ -103,20 +95,22 @@ describe('setupTrackPublishers', () => {
     state.activeEncodings.set({ camera: SCREEN_VIDEO_CONFIG, audio: AUDIO_CONFIG });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // Same actors, same tracks, no churn on the wire.
+    // Same actors, same tracks, no churn on the wire: the subscription
+    // streams carry exactly their SUBSCRIBE_OK and stay open.
     expect(context.catalogTrackPublisher.get()).toBe(catalogPublisher);
     expect(context.videoTrackPublisher.get()).toBe(videoPublisher);
     expect(context.audioTrackPublisher.get()).toBe(audioPublisher);
     expect(videoPublisher.snapshot.get().value).toBe('publishing');
     expect(audioPublisher.snapshot.get().value).toBe('publishing');
-    expect(publishes).toEqual(['catalog', 'video', 'audio']);
-    expect(dones).toEqual([]);
+    expect(video.ended()).toBe(false);
+    expect(audio.ended()).toBe(false);
+    expect(video.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expect(audio.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
     expect(actor.snapshot.get().context.status).toBe('live');
-    expect(state.publishError.get()).toBeUndefined();
   });
 
   it('adds a kind that appears mid-session without touching the existing publishers', async () => {
-    const { actor, publishes } = makeSessionActor();
+    const { actor, peer } = makeSessionActor();
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
@@ -124,39 +118,52 @@ describe('setupTrackPublishers', () => {
     context.publishSessionActor.set(actor);
 
     await vi.waitFor(() => {
-      expect(publishes).toEqual(['catalog', 'video']);
+      expect(context.videoTrackPublisher.get()).toBeDefined();
     });
     const videoPublisher = context.videoTrackPublisher.get()!;
     expect(context.audioTrackPublisher.get()).toBeUndefined();
 
     // The mic's independent pipeline finishes acquiring after the camera's:
-    // the audio track is offered additively once it does.
+    // the audio track is registered additively once it does.
     state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     await vi.waitFor(() => {
       expect(context.audioTrackPublisher.get()).toBeDefined();
-      expect(publishes).toEqual(['catalog', 'video', 'audio']);
     });
     expect(context.videoTrackPublisher.get()).toBe(videoPublisher);
     expect(videoPublisher.snapshot.get().value).toBe('publishing');
+
+    const audioAliases: number[] = [];
+    peer.subscribe(
+      { trackNamespace: ENDPOINT.namespace, trackName: 'audio' },
+      { onOk: (ok) => audioAliases.push(ok.trackAlias) }
+    );
+    await vi.waitFor(() => {
+      expect(audioAliases).toHaveLength(1);
+    });
   });
 
   it('keeps a publisher whose kind disappears rather than ending its track mid-session', async () => {
-    const { actor, publishes } = makeSessionActor();
+    const { actor, server } = makeSessionActor();
     const { state, context } = setupBehavior();
 
     state.endpoint.set(ENDPOINT);
     state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
     context.publishSessionActor.set(actor);
     await vi.waitFor(() => {
-      expect(publishes).toEqual(['catalog', 'video', 'audio']);
+      expect(context.audioTrackPublisher.get()).toBeDefined();
     });
     const audioPublisher = context.audioTrackPublisher.get()!;
+    const audio = await rawSubscribe(server, ENDPOINT.namespace, 'audio', 21);
+    await vi.waitFor(() => {
+      expect(audio.received).toHaveLength(1);
+    });
 
     // A mic device error drops the audio encoding: the track goes quiet, not away.
     state.activeEncodings.set({ camera: SCREEN_VIDEO_CONFIG });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(context.audioTrackPublisher.get()).toBe(audioPublisher);
     expect(audioPublisher.snapshot.get().value).toBe('publishing');
-    expect(publishes).toEqual(['catalog', 'video', 'audio']);
+    expect(audio.ended()).toBe(false);
+    expect(audio.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
   });
 });

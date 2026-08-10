@@ -82,9 +82,9 @@ function makePublisher(counters: Partial<TrackPublisherCounters>): TrackPublishe
 function makeSessionActor(subscriberCount: number): PublishSessionActor {
   const snapshot = signal<ActorSnapshot<'active' | 'destroyed', PublishSessionActorContext>>({
     value: 'active',
-    context: { status: 'live', publishedTracks: 1, subscriberCount },
+    context: { status: 'live', subscriberCount, trackBindings: {} },
   });
-  return { snapshot, getAuthParameters: () => ({}), destroy: () => {} };
+  return { snapshot, destroy: () => {} };
 }
 
 describe('mergeVideoCounters', () => {

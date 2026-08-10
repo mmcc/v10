@@ -13,6 +13,20 @@
  * publish (encoder wiring, catalog derivation, track registration) lives
  * in the publish behaviors.
  *
+ * **Data flows only while bound to a subscription.** Announce-and-serve
+ * ingest is pull-through: a subgroup stream is only meaningful under a
+ * track alias the session bound with a SUBSCRIBE_OK, and an unbound
+ * alias is the peer's "unknown track alias" (stream dropped after a 1 s
+ * grace). `{type:'bind'}` carries the current subscription's alias;
+ * frames arriving unbound are dropped without opening streams. Groups
+ * never span bindings — a bind or unbind resets the open group, so a
+ * fresh subscription starts at the next keyframe (`groupPerFrame` tracks
+ * start at the next frame). For tracks whose frames flow only on
+ * *change* rather than on a cadence — the catalog — waiting for the
+ * next frame would stall a new subscription forever, so
+ * `replayLastGroupOnBind` retains the latest frame (bound or not) and
+ * re-emits it as a fresh group on every bind.
+ *
  * Group mapping follows MSF: video starts a new group on every keyframe
  * (`objectId` resets to 0 — the extraction side recovers the keyframe
  * flag from `objectId === 0`); audio and catalog tracks set
@@ -45,15 +59,13 @@ export type TrackPublisherState = TrackPublisherUserState | 'destroyed';
 /** Cumulative publish counters exposed on the actor snapshot. */
 export interface TrackPublisherCounters {
   /**
-   * Groups whose data stream was actually opened — the opened-stream
-   * count (including later-reset ones) that draft-19's PUBLISH_DONE
-   * Stream Count field reports (§10.11). A group dropped while still
-   * queued behind backpressure never opened a stream and is not counted;
-   * reporting it would leave the peer waiting for a stream that never
-   * existed. The boundary is the commit to writing the subgroup header:
-   * an open that resolves into an already-aborted group is reset before
-   * any bytes, so the peer cannot attribute that stream to this track and
-   * it is deliberately excluded too.
+   * Groups whose data stream was actually opened (including later-reset
+   * ones). A group dropped while still queued behind backpressure never
+   * opened a stream and is not counted. The boundary is the commit to
+   * writing the subgroup header: an open that resolves into an
+   * already-aborted group is reset before any bytes, so the peer cannot
+   * attribute that stream to this track and it is deliberately excluded
+   * too.
    */
   openedGroups: number;
   /** Groups written to completion (FIN). */
@@ -80,18 +92,33 @@ export type TrackPublisherMessage =
       keyframe: boolean;
       timestampUs: number;
     }
+  | {
+      /** A subscription now carries the track; subgroups use this alias. */
+      type: 'bind';
+      trackAlias: number;
+    }
+  | {
+      /** No live subscription — stop opening streams, drop frames. */
+      type: 'unbind';
+    }
   | { type: 'end' };
 
 export type TrackPublisherActor = MessageActor<TrackPublisherState, TrackPublisherCounters, TrackPublisherMessage>;
 
 export interface TrackPublisherOptions {
   openUniStream: OpenUniStream;
-  trackAlias: number;
   /**
    * Every frame becomes its own single-object group. The LOC/MSF audio and
    * catalog mapping — every object is a random-access point.
    */
   groupPerFrame?: boolean;
+  /**
+   * Re-emit the most recent frame as a fresh group on every `bind` — for
+   * tracks whose frames flow on change rather than on a cadence (the
+   * catalog), where a new subscription must not wait for the next change.
+   * Only meaningful with `groupPerFrame`.
+   */
+  replayLastGroupOnBind?: boolean;
   /**
    * Groups allowed to queue behind transport backpressure before the drop
    * policy resets them and resumes at the boundary frame. Default 3.
@@ -112,6 +139,8 @@ export const DEFAULT_MAX_QUEUED_GROUPS = 3;
 /** One group's stream plumbing, shared between the queued tasks that serve it. */
 interface GroupCell {
   groupId: number;
+  /** The binding's alias at group start — groups never span bindings. */
+  trackAlias: number;
   writer?: SubgroupWriter;
   aborted: boolean;
 }
@@ -124,8 +153,9 @@ type InternalMessage =
   | { type: 'groups-dropped'; count: number };
 
 export function createTrackPublisherActor(options: TrackPublisherOptions): TrackPublisherActor {
-  const { openUniStream, trackAlias, onError } = options;
+  const { openUniStream, onError } = options;
   const groupPerFrame = options.groupPerFrame === true;
+  const replayLastGroupOnBind = options.replayLastGroupOnBind === true;
   const maxQueuedGroups = options.maxQueuedGroups ?? DEFAULT_MAX_QUEUED_GROUPS;
 
   type Message = TrackPublisherMessage | InternalMessage;
@@ -141,6 +171,10 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
   let endedCell: GroupCell | undefined;
   let nextGroupId = 0;
   let nextObjectId = 0;
+  /** The live subscription's alias; unbound → frames drop, no streams open. */
+  let boundAlias: number | undefined;
+  /** Latest frame, retained for replay-on-bind (bound or not). */
+  let lastFrame: Extract<TrackPublisherMessage, { type: 'frame' }> | undefined;
 
   // Assigned right after createMachineActor returns; the runner tasks only
   // complete asynchronously, well after construction.
@@ -180,13 +214,53 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
     fin.then(() => inner?.send({ type: 'group-finished' }), failCell(cell));
   };
 
+  /**
+   * Await the pending open, but stop waiting the moment the task is
+   * aborted: `SerialRunner.abortAll()` only signals — the chain still
+   * waits for the in-flight task to settle, so a hung open (exhausted
+   * uni-stream credit, a stalling transport) would otherwise hold every
+   * later group hostage past a drop or rebind. Abandonment resolves to
+   * `undefined` (the same silent early-return an abort always was, never
+   * the error path), and a stream that surfaces after it belongs to a
+   * group that no longer exists — aborted on arrival.
+   */
+  const raceOpenAgainstAbort = (
+    opening: Promise<WritableStream<Uint8Array>>,
+    signal: AbortSignal
+  ): Promise<WritableStream<Uint8Array> | undefined> =>
+    new Promise((resolve, reject) => {
+      const abandon = () => {
+        opening.then(
+          (late) => void late.abort().catch(() => {}),
+          () => {}
+        );
+        resolve(undefined);
+      };
+      if (signal.aborted) {
+        abandon();
+        return;
+      }
+      signal.addEventListener('abort', abandon, { once: true });
+      opening.then(
+        (stream) => {
+          signal.removeEventListener('abort', abandon);
+          resolve(stream);
+        },
+        (error) => {
+          signal.removeEventListener('abort', abandon);
+          reject(error);
+        }
+      );
+    });
+
   const scheduleOpen = (cell: GroupCell, frame: Extract<TrackPublisherMessage, { type: 'frame' }>): void => {
     const objectId = 0;
     runner
       .schedule(
         new Task(async (signal) => {
           if (signal.aborted || cell.aborted) return;
-          const stream = await openUniStream();
+          const stream = await raceOpenAgainstAbort(openUniStream(), signal);
+          if (stream === undefined) return;
           // `signal.aborted` again, not just the cell: destroy() leaves the
           // graceful cell un-aborted so an existing writer can FIN, but when
           // the open was still in flight there is no writer to FIN — the
@@ -197,11 +271,11 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
             return;
           }
           // Only now does a data stream exist for this track on the wire —
-          // counting at queue time inflated PUBLISH_DONE's Stream Count
-          // with groups that were dropped before they ever opened one.
+          // counting at queue time inflated the opened-stream count with
+          // groups that were dropped before they ever opened one.
           inner?.send({ type: 'group-opened' });
           cell.writer = createSubgroupWriter(stream, {
-            trackAlias,
+            trackAlias: cell.trackAlias,
             groupId: cell.groupId,
             priority: options.priority,
             hasProperties: true,
@@ -247,13 +321,14 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
   /**
    * The drop policy: reset every queued group (streams abort → pending
    * writes reject → the runner chain unblocks) and resume fresh at the
-   * boundary frame that triggered the check.
+   * boundary frame that triggered the check. Also the unbind sweep, with
+   * its own reason.
    */
-  const dropQueuedGroups = (): number => {
+  const dropQueuedGroups = (reason = 'dropped a stale group under transport backpressure'): number => {
     const dropped = openCells.splice(0);
     for (const cell of dropped) {
       cell.aborted = true;
-      cell.writer?.abort(new Error('moq track publisher: dropped a stale group under transport backpressure'));
+      cell.writer?.abort(new Error(`moq track publisher: ${reason}`));
     }
     runner.abortAll();
     currentCell = undefined;
@@ -275,6 +350,10 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
       publishing: {
         on: {
           frame: (msg, { context, setContext }) => {
+            if (replayLastGroupOnBind) lastFrame = msg;
+            // Unbound: no subscription is reading this track — a stream
+            // opened now would carry an alias the peer never registered.
+            if (boundAlias === undefined) return;
             const startsGroup = groupPerFrame || msg.keyframe;
             if (!startsGroup) {
               // A delta frame can only extend an open group — before the
@@ -295,12 +374,51 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
             let droppedNow = 0;
             if (openCells.length > maxQueuedGroups) droppedNow = dropQueuedGroups();
 
-            const cell: GroupCell = { groupId: nextGroupId++, aborted: false };
+            const cell: GroupCell = { groupId: nextGroupId++, trackAlias: boundAlias, aborted: false };
             openCells.push(cell);
             currentCell = groupPerFrame ? undefined : cell;
             nextObjectId = 1;
             scheduleOpen(cell, msg);
 
+            setContext({
+              ...context,
+              queuedGroups: openCells.length,
+              droppedGroups: context.droppedGroups + droppedNow,
+            });
+          },
+          bind: (msg, { context, setContext }) => {
+            if (boundAlias === msg.trackAlias) return;
+            // Groups never span bindings — and the previous binding's
+            // groups die with it, queued ones included: a queued open
+            // firing later would put a stream on the wire under an alias
+            // whose subscription already ended (the peer's unknown-alias
+            // drop), and stale serial work would delay the new
+            // subscription's first data behind it. Video resumes at its
+            // next keyframe under the new alias.
+            if (boundAlias !== undefined) {
+              const droppedNow = dropQueuedGroups('the subscription was replaced with the group unfinished');
+              if (droppedNow > 0) {
+                setContext({
+                  ...context,
+                  queuedGroups: openCells.length,
+                  droppedGroups: context.droppedGroups + droppedNow,
+                });
+              }
+            }
+            boundAlias = msg.trackAlias;
+            // The new subscription must not wait for the next change-driven
+            // frame; the re-sent frame takes the ordinary path (queued
+            // behind this message, boundAlias already set).
+            if (replayLastGroupOnBind && lastFrame) inner?.send(lastFrame);
+          },
+          unbind: (_, { context, setContext }) => {
+            if (boundAlias === undefined) return;
+            boundAlias = undefined;
+            // Nothing reads the queued groups anymore and the peer resets
+            // whatever is still in flight — drop locally through the
+            // policy path (counted, no error): an unsubscribe is ordinary
+            // pull-through lifecycle, not a failure.
+            const droppedNow = dropQueuedGroups('the subscription ended with the group unfinished');
             setContext({
               ...context,
               queuedGroups: openCells.length,

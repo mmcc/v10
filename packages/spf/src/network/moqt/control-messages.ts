@@ -92,6 +92,21 @@ export const PARAMETER_TYPE = {
   TRACK_NAMESPACE_PREFIX: 0x34,
 } as const;
 
+/**
+ * Track Property types (draft-19 §10.8) — the KVP block trailing
+ * SUBSCRIBE_OK / PUBLISH / FETCH_OK. A registry of its own, distinct from
+ * both Setup Options and message parameters.
+ */
+export const TRACK_PROPERTY = {
+  /**
+   * Units-per-second for the track's object TIMESTAMP extensions.
+   * Declaring it in SUBSCRIBE_OK is what opts the track into timestamp
+   * forwarding on moq-lite-rs relays — without it they parse and discard
+   * the extensions and re-stamp frames on arrival.
+   */
+  TIMESCALE: 0x08,
+} as const;
+
 /** REQUEST_ERROR codes (draft-19 §15.11.2). */
 export const REQUEST_ERROR_CODE = {
   INTERNAL_ERROR: 0x0,
@@ -821,6 +836,27 @@ export function encodePublishNamespace(request: PublishNamespaceRequest): Uint8A
   writeTrackNamespace(body, request.trackNamespace);
   encodeMessageParameters(body, request.parameters);
   return frameMessage(MESSAGE_TYPE.PUBLISH_NAMESPACE, body);
+}
+
+/**
+ * NAMESPACE (§10.19) — announce one namespace on an accepted inbound
+ * SUBSCRIBE_NAMESPACE request stream. The body is the namespace suffix
+ * relative to that stream's subscribed prefix and nothing else: peers
+ * bound-check the tuple against the frame length (moq-lite-rs treats even
+ * a zero parameter count as a malformed entry and kills the announce
+ * stream), so no parameter block is written.
+ */
+export function encodeNamespace(trackNamespaceSuffix: TrackNamespace): Uint8Array {
+  const body = new ByteWriter();
+  writeTrackNamespace(body, trackNamespaceSuffix);
+  return frameMessage(MESSAGE_TYPE.NAMESPACE, body);
+}
+
+/** NAMESPACE_DONE (§10.20) — retract a NAMESPACE announcement (same body shape). */
+export function encodeNamespaceDone(trackNamespaceSuffix: TrackNamespace): Uint8Array {
+  const body = new ByteWriter();
+  writeTrackNamespace(body, trackNamespaceSuffix);
+  return frameMessage(MESSAGE_TYPE.NAMESPACE_DONE, body);
 }
 
 // ============================================================================

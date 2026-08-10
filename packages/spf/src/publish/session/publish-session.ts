@@ -3,22 +3,28 @@
  * sibling of `network/moqt/session.ts`'s subscribe-only driver.
  *
  * Owns the protocol mechanics over an established transport: the SETUP
- * exchange on paired unidirectional control streams (§3.3), the
- * publisher-initiated request streams — PUBLISH per track (§10.10) with
- * PUBLISH_NAMESPACE announcing the namespace first (§10.15) — inbound
- * SUBSCRIBEs for published tracks (answered with SUBSCRIBE_OK carrying
- * the track's alias, §10.8), REQUEST_UPDATE routing, GOAWAY handling, and
- * PUBLISH_DONE on stop (§10.11).
+ * exchange on paired unidirectional control streams (§3.3), and the
+ * announce-and-serve ingest flow — answering the peer's
+ * SUBSCRIBE_NAMESPACE solicitation with REQUEST_OK and a NAMESPACE entry
+ * for the announced namespace (§10.18–19), then serving the per-track
+ * SUBSCRIBEs the peer routes back (answered with SUBSCRIBE_OK carrying a
+ * publisher-assigned track alias, §10.8) for as long as each
+ * subscription's request stream stays open.
  *
- * Flow choice (per the parent branch's draft-19 notes): the primary flow
- * is publisher-initiated PUBLISH per track. PUBLISH carries the full
- * track name and the publisher-chosen Track Alias, so a peer can accept
- * and start routing without any namespace state; PUBLISH_NAMESPACE is
- * sent first as an advisory announce — a peer that rejects it (e.g. a
- * subscribe-only endpoint answering NOT_SUPPORTED) can still accept the
- * PUBLISHes, so announce rejection is surfaced but never fatal. Inbound
- * SUBSCRIBE answering is implemented as well because relays subscribe to
- * the published tracks to pull data toward downstream demand.
+ * Flow choice: the publisher initiates no request streams at all.
+ * moq-relay 0.14.7 removed PUBLISH-based ingest (upstream `de336492`:
+ * every PUBLISH is answered with a request error), and it solicits
+ * namespaces itself — one SUBSCRIBE_NAMESPACE per authorized prefix,
+ * sent immediately after SETUP. Announcing rides the solicitation stream
+ * as NAMESPACE entries (suffix-relative, parameterless — the relay
+ * treats even an empty parameter count as malformed); data flows only on
+ * aliases bound by our own SUBSCRIBE_OKs, per subscription. Three
+ * hard-won peer constraints shape the teardown paths: a subscription
+ * ends by FIN alone (any byte after SUBSCRIBE_OK — a PUBLISH_DONE, say —
+ * makes the relay abort the track for every viewer instead of finishing
+ * it), a client-sent GOAWAY closes the whole session (code 17), and a
+ * track alias bound to two live request IDs closes it too (code 12) — so
+ * aliases are the peer's own request IDs, unique by construction.
  *
  * Deliberately callback-shaped with NO signals, mirroring the subscribe
  * driver — signal awareness enters at the `publish/` behavior layer
@@ -26,41 +32,34 @@
  * so the parent-owned wire layer keeps only additive sibling files.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
+import { MICROSECONDS_PER_SECOND } from '../../media/moq/loc';
 import { StreamReader, utf8Encode } from '../../network/moqt/bytes';
 import {
   type ControlMessage,
   decodeControlMessage,
-  encodeGoaway,
-  encodePublish,
-  encodePublishDone,
-  encodePublishNamespace,
+  encodeNamespace,
+  encodeNamespaceDone,
   encodeRequestError,
+  encodeRequestOk,
   encodeSetup,
   encodeSubscribeOk,
   type KeyValuePair,
   MESSAGE_TYPE,
   type MessageParameters,
   MOQT_PROTOCOL_ID,
-  PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
   SETUP_OPTION,
+  TRACK_PROPERTY,
   type TrackNamespace,
 } from '../../network/moqt/control-messages';
 import { isMoqtProtocolError, MoqtProtocolError, SESSION_ERROR } from '../../network/moqt/errors';
 import { isSubgroupHeaderType, STREAM_TYPE } from '../../network/moqt/object-stream';
-import { type BidirectionalStreamLike, openRequestStream, type RequestStream } from '../../network/moqt/request-stream';
+import type { BidirectionalStreamLike } from '../../network/moqt/request-stream';
 import type { Goaway, MoqtTransport } from '../../network/moqt/session';
 
 // =============================================================================
 // Driver types
 // =============================================================================
-
-/** A publish-side request failure, REQUEST_ERROR-shaped. */
-export interface PublishRequestFailure {
-  errorCode: number;
-  retryInterval: number;
-  reason: string;
-}
 
 export interface IncomingSubscribe {
   requestId: number;
@@ -74,20 +73,35 @@ export interface MoqtPublishSessionCallbacks {
   onReady?(serverOptions: KeyValuePair[]): void;
   /** GOAWAY (control stream or a request stream): stop initiating, migrate. */
   onGoaway?(goaway: Goaway): void;
-  /** A PUBLISH offer settled. */
-  onPublishResult?(result: {
-    trackName: string;
-    trackAlias: number;
-    accepted: boolean;
-    error?: PublishRequestFailure;
-  }): void;
-  /** PUBLISH_NAMESPACE settled. Rejection is advisory — see the module doc. */
-  onNamespaceResult?(result: { accepted: boolean; error?: PublishRequestFailure }): void;
-  /** The peer subscribed to a published track (already answered SUBSCRIBE_OK). */
+  /**
+   * The announced namespace reached the wire on an accepted
+   * SUBSCRIBE_NAMESPACE solicitation — the peer can now route SUBSCRIBEs
+   * to it. NAMESPACE entries have no acknowledgement of their own; this
+   * is the strongest "announced" fact draft-19 offers.
+   */
+  onAnnounced?(info: { namespace: TrackNamespace }): void;
+  /**
+   * The solicitation stream carrying the announce ended while the
+   * session was still live — the peer rejected the announce
+   * (unauthorized suffix) or withdrew its namespace interest. Either
+   * way the ingest path is gone.
+   */
+  onAnnounceEnded?(info: { error?: unknown }): void;
+  /** The peer subscribed to a registered track (already answered SUBSCRIBE_OK). */
   onSubscribe?(subscribe: IncomingSubscribe): void;
   /** A subscriber's request stream ended (FIN, reset, or track done). */
   onSubscribeEnd?(info: { requestId: number }): void;
-  /** REQUEST_UPDATE on a publish or subscribe request stream. */
+  /**
+   * A track's effective alias binding changed. The most recent live
+   * subscription wins the binding (a replaced one is FINed — a clean end
+   * for that request, covering the peer's resubscribe races), and only
+   * while its Forward State permits data (`forward: 0` subscribes
+   * without authorizing it; REQUEST_UPDATE toggles it). `undefined`
+   * means no live forwarding subscription, so no data streams may be
+   * opened for the track.
+   */
+  onTrackBinding?(info: { trackName: string; trackAlias: number | undefined }): void;
+  /** REQUEST_UPDATE on an inbound subscribe request stream. */
   onRequestUpdate?(info: { requestId: number; parameters: MessageParameters }): void;
   /** The session ended — transport closed, or a fatal protocol error. */
   onClosed?(info: { error?: unknown }): void;
@@ -98,57 +112,54 @@ export interface MoqtPublishSessionConfig {
   setupOptions?: KeyValuePair[];
   /** Identifies this implementation in SETUP (§10.3.1.5). */
   implementationName?: string;
-  /**
-   * How long to wait for a PUBLISH / PUBLISH_NAMESPACE response before
-   * failing it — the same bound the subscribe driver applies (§3.5's
-   * CONTROL_MESSAGE_TIMEOUT rationale). Default 10000ms.
-   */
-  requestTimeoutMs?: number;
   callbacks?: MoqtPublishSessionCallbacks;
 }
 
-export interface PublishTrackOptions {
+export interface RegisterTrackOptions {
   trackNamespace: TrackNamespace;
   trackName: string;
-  parameters?: MessageParameters;
 }
 
-export interface PublishedTrack {
-  readonly requestId: number;
-  readonly trackAlias: number;
+export interface RegisteredTrack {
   readonly trackName: string;
   /**
-   * Send PUBLISH_DONE on the PUBLISH request stream and on every inbound
-   * subscription's stream, then FIN them. Idempotent.
+   * End the track: FIN every live subscription's request stream (a FIN
+   * with no trailing bytes is the draft-19 clean track end) and refuse
+   * future SUBSCRIBEs with DOES_NOT_EXIST. Idempotent.
    */
-  done(statusCode?: number, streamCount?: number, reason?: string): void;
+  end(): void;
 }
 
 export interface MoqtPublishSession {
   /** Resolves when the server's SETUP has been received. */
   readonly ready: Promise<void>;
-  /** Announce the namespace (advisory; result via `onNamespaceResult`). */
-  publishNamespace(trackNamespace: TrackNamespace, parameters?: MessageParameters): void;
-  /** Offer one track (PUBLISH); acceptance via `onPublishResult`. */
-  publishTrack(options: PublishTrackOptions): PublishedTrack;
+  /**
+   * Announce the namespace on every matching solicitation — current and
+   * future. The wire write additionally waits for the first
+   * `registerTrack()`: an announce invites immediate SUBSCRIBEs, and an
+   * empty registry would answer them with a terminal DOES_NOT_EXIST.
+   * Result via `onAnnounced` / `onAnnounceEnded`.
+   */
+  announce(trackNamespace: TrackNamespace): void;
+  /** Register one servable track; the peer's SUBSCRIBEs are answered from this registry. */
+  registerTrack(options: RegisterTrackOptions): RegisteredTrack;
   /** Open a unidirectional data stream (for a track publisher's subgroups). */
   openUniStream(): Promise<WritableStream<Uint8Array>>;
   /**
-   * Orderly stop: send PUBLISH_DONE for any still-live track and GOAWAY,
-   * give those control writes a bounded window to reach the wire (closing
-   * a WebTransport discards queued data), then close the transport.
-   * Synchronous callers return immediately; the transport closes within
-   * roughly {@link CLOSE_FLUSH_TIMEOUT_MS}.
+   * Orderly stop: FIN every live subscription's stream and retract the
+   * announce (NAMESPACE_DONE), give those writes a bounded window to
+   * reach the wire (closing a WebTransport discards queued data), then
+   * close the transport. Synchronous callers return immediately; the
+   * transport closes within roughly {@link CLOSE_FLUSH_TIMEOUT_MS}.
    */
   close(closeCode?: number, reason?: string): void;
   destroy(): void;
 }
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_IMPLEMENTATION_NAME = '@videojs/spf moqt publisher';
 /**
- * How long `close()` waits for the PUBLISH_DONE / GOAWAY control writes to
- * drain before closing the transport out from under them.
+ * How long `close()` waits for the subscription FINs / NAMESPACE_DONE
+ * writes to drain before closing the transport out from under them.
  */
 export const CLOSE_FLUSH_TIMEOUT_MS = 250;
 
@@ -156,36 +167,52 @@ export const CLOSE_FLUSH_TIMEOUT_MS = 250;
 // Internal records
 // =============================================================================
 
-interface PublishRecord {
-  requestId: number;
-  trackName: string;
-  trackAlias: number;
-  stream?: RequestStream;
-  settled: boolean;
-  doneSent: boolean;
-}
-
 /** One inbound subscription's stream-side plumbing. */
 interface SubscriberStream {
   requestId: number;
-  send(bytes: Uint8Array): Promise<void>;
+  trackAlias: number;
   fin(): Promise<void>;
   cancel(): Promise<void>;
+  /** SUBSCRIBE_OK reached the wire — only accepted subscriptions may carry the binding. */
+  accepted: boolean;
+  /** `onSubscribe` fired — `onSubscribeEnd` pairs on this, keeping counts balanced. */
+  reported: boolean;
+  /** Forward State (§ SUBSCRIBE `forward`, togglable via REQUEST_UPDATE) — data flows only while true. */
+  forwarding: boolean;
   finished: boolean;
 }
 
 interface TrackRecord {
   key: string;
-  trackAlias: number;
-  publish: PublishRecord;
+  trackName: string;
   subscribers: SubscriberStream[];
   done: boolean;
-  /** Settles when the PUBLISH_DONE writes queued by `#finishTrack` land. */
+  /**
+   * Replacement FINs still in flight (pruned as they settle). `end()`
+   * folds them into `doneFlushed` — a swept predecessor is already
+   * `finished`, so it would otherwise be skipped and its queued FIN
+   * discarded by the transport close, turning the clean replacement into
+   * an abrupt reset.
+   */
+  pendingFins: Promise<void>[];
+  /** Settles when the FINs queued by `end()` land. */
   doneFlushed?: Promise<void>;
+}
+
+/** One accepted inbound SUBSCRIBE_NAMESPACE — the announce carrier. */
+interface NamespaceStream {
+  prefix: TrackNamespace;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  /** Suffixes announced on this stream (for NAMESPACE_DONE at close). */
+  announced: TrackNamespace[];
 }
 
 function trackKey(namespace: TrackNamespace, name: string): string {
   return `${namespace.join('/')}--${name}`;
+}
+
+function isNamespacePrefix(prefix: TrackNamespace, namespace: TrackNamespace): boolean {
+  return prefix.length <= namespace.length && prefix.every((part, i) => namespace[i] === part);
 }
 
 // =============================================================================
@@ -199,19 +226,35 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   #config: MoqtPublishSessionConfig;
   #callbacks: MoqtPublishSessionCallbacks;
 
-  #nextRequestId = 0; // client request IDs: even, starting at 0 (§10.1)
-  #nextTrackAlias = 0;
   #tracks = new Map<string, TrackRecord>();
+  #namespaceStreams = new Set<NamespaceStream>();
+  /**
+   * Prefixes whose solicitation is mid-acceptance. Request handlers run
+   * concurrently and registration happens only after the REQUEST_OK
+   * write settles, so an overlapping solicitation racing that await
+   * must be refused off this reservation, not just off the registered
+   * set.
+   */
+  #pendingNamespacePrefixes = new Set<TrackNamespace>();
+  /**
+   * Every inbound request ID ever seen. Reuse is a protocol violation
+   * (§10.1), and because aliases ARE the peer's request IDs, a reused ID
+   * would hand two subscriptions the same alias and make their subgroup
+   * streams indistinguishable — session-fatal, per the draft.
+   */
+  #peerRequestIds = new Set<number>();
+  #desiredNamespace: TrackNamespace | undefined;
+  #announcedFired = false;
 
   #resolveReady!: () => void;
   #rejectReady!: (error: unknown) => void;
   #controlWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
   #receivedServerSetup = false;
   #receivedControlGoaway = false;
+  /** Any GOAWAY (control or request stream) — the peer is migrating. */
+  #receivedGoaway = false;
   #closing = false;
   #destroyed = false;
-  /** Request-response timeout timers still pending — cleared on close. */
-  readonly #pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(transport: MoqtTransport, config: MoqtPublishSessionConfig = {}) {
     this.#transport = transport;
@@ -280,16 +323,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       this.#rejectReady(error ?? new MoqtProtocolError('session closed before server SETUP'));
     }
     for (const track of this.#tracks.values()) {
-      this.#settlePublish(track.publish);
-      track.publish.stream?.cancel(error);
       for (const subscriber of track.subscribers) void subscriber.cancel();
     }
     this.#tracks.clear();
+    this.#namespaceStreams.clear();
     this.#controlWriter = undefined;
-    // Request timeouts guard responses that can no longer arrive — no
-    // timer may outlive the session.
-    for (const timer of this.#pendingTimers) clearTimeout(timer);
-    this.#pendingTimers.clear();
 
     // Mirror the subscribe driver: a transport that drops before server
     // SETUP is a session failure even when the close itself was clean.
@@ -307,27 +345,31 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
 
   /**
    * Orderly close: closing the transport discards queued data (WebTransport
-   * semantics), so the PUBLISH_DONE / GOAWAY control writes must be given a
-   * bounded window to land first — a real relay should observe every
-   * track's PUBLISH_DONE, not an abrupt transport end.
+   * semantics), so the subscription FINs and NAMESPACE_DONE retractions
+   * must be given a bounded window to land first — a peer should observe
+   * every track ending cleanly, not an abrupt transport end. Neither
+   * GOAWAY nor PUBLISH_DONE is sent: moq-lite-rs closes the session on a
+   * client GOAWAY, and treats any post-SUBSCRIBE_OK byte on a subscribe
+   * stream as an error that aborts the track (see the module doc).
    */
   async #drainAndClose(closeCode: number, reason: string): Promise<void> {
     // One macrotask beat before the last-resort sweep below: track owners
     // tearing down in the same reactive flush (`setupTrackPublishers`'s
     // cleanup runs on a microtask after ours on the unpublish path) get to
-    // send PUBLISH_DONE themselves, with the real per-track stream count.
+    // end their tracks themselves.
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (this.#destroyed) return;
     for (const track of this.#tracks.values()) {
-      this.#finishTrack(track, PUBLISH_DONE_STATUS.TRACK_ENDED, 0, '');
+      this.#endTrack(track);
     }
-    // GOAWAY tells the peer to stop routing new requests to us. Clients
-    // may send it too — with a zero-length New Session URI (§10.4, same
-    // as the subscribe driver's close()).
     const writes: Promise<unknown>[] = [...this.#tracks.values()].map(
       (track) => track.doneFlushed ?? Promise.resolve()
     );
-    writes.push(this.#controlWriter?.write(encodeGoaway(0)).catch(() => {}) ?? Promise.resolve());
+    for (const stream of this.#namespaceStreams) {
+      for (const suffix of stream.announced.splice(0)) {
+        writes.push(stream.writer.write(encodeNamespaceDone(suffix)).catch(() => {}));
+      }
+    }
 
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -355,237 +397,131 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   // ---------------------------------------------------------------------------
-  // Publisher-initiated requests
+  // Announcing and the track registry
   // ---------------------------------------------------------------------------
 
-  #allocateRequestId(): number {
-    const id = this.#nextRequestId;
-    this.#nextRequestId += 2;
-    return id;
-  }
-
-  #settlePublish(record: PublishRecord): void {
-    // The response timers themselves are session-owned (`#pendingTimers`,
-    // cleared by `#openRequest`'s settle paths and on close).
-    record.settled = true;
-  }
-
-  /** Open a request stream, bind the response timeout, and route messages. */
-  #openRequest(
-    message: Uint8Array,
-    onMessage: (message: ControlMessage) => void,
-    onFailure: (failure: PublishRequestFailure) => void,
-    bind?: (stream: RequestStream) => void
-  ): void {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const clearTimer = (): void => {
-      if (timer === undefined) return;
-      clearTimeout(timer);
-      this.#pendingTimers.delete(timer);
-      timer = undefined;
-    };
-    const fail = (failure: PublishRequestFailure): void => {
-      if (settled || this.#destroyed) return;
-      settled = true;
-      clearTimer();
-      onFailure(failure);
-    };
-    const settle = (): void => {
-      settled = true;
-      clearTimer();
-    };
-
-    void (async () => {
-      let stream: BidirectionalStreamLike;
-      try {
-        stream = await this.#transport.createBidirectionalStream();
-      } catch (error) {
-        fail({
-          errorCode: REQUEST_ERROR_CODE.INTERNAL_ERROR,
-          retryInterval: 0,
-          reason: error instanceof Error ? error.message : 'failed to open request stream',
-        });
-        if (!this.#destroyed) this.#fatal(error);
-        return;
-      }
-
-      let requestStream: RequestStream | undefined;
-      const timeout = this.#config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-      if (timeout > 0 && !this.#destroyed) {
-        timer = setTimeout(() => {
-          const failure = {
-            errorCode: REQUEST_ERROR_CODE.TIMEOUT,
-            retryInterval: 0,
-            reason: 'no response before the request timeout',
-          };
-          // The stream dies with the request (the subscribe driver's
-          // timeout contract): left open, a late REQUEST_OK would fire
-          // onMessage after the failure and report a second, contradictory
-          // result for a request already reported dead.
-          requestStream?.cancel(failure);
-          fail(failure);
-        }, timeout);
-        this.#pendingTimers.add(timer);
-      }
-
-      requestStream = openRequestStream(stream, message, {
-        onMessage: (msg) => {
-          if (msg.kind === 'request-ok' || msg.kind === 'request-error') settle();
-          onMessage(msg);
-        },
-        onFin: () =>
-          fail({
-            errorCode: REQUEST_ERROR_CODE.INTERNAL_ERROR,
-            retryInterval: 0,
-            reason: 'request stream closed before a response',
-          }),
-        onError: (error) => {
-          if (isMoqtProtocolError(error)) {
-            this.#fatal(error);
-            return;
-          }
-          fail({
-            errorCode: REQUEST_ERROR_CODE.INTERNAL_ERROR,
-            retryInterval: 0,
-            reason: error instanceof Error ? error.message : 'request stream failed',
-          });
-        },
-      });
-      bind?.(requestStream);
-      if (this.#destroyed) requestStream.cancel();
-    })();
-  }
-
-  publishNamespace(trackNamespace: TrackNamespace, parameters?: MessageParameters): void {
-    if (this.#destroyed) return;
-    const requestId = this.#allocateRequestId();
-    const message = encodePublishNamespace({ requestId, trackNamespace, parameters });
-    this.#openRequest(
-      message,
-      (msg) => {
-        switch (msg.kind) {
-          case 'request-ok':
-            this.#callbacks.onNamespaceResult?.({ accepted: true });
-            break;
-          case 'request-error':
-            this.#callbacks.onNamespaceResult?.({ accepted: false, error: msg });
-            break;
-          case 'goaway':
-            this.#callbacks.onGoaway?.(msg);
-            break;
-          default:
-            this.#fatal(new MoqtProtocolError(`unexpected ${msg.kind} on a publish-namespace request stream`));
-        }
-      },
-      (failure) => this.#callbacks.onNamespaceResult?.({ accepted: false, error: failure })
-    );
-  }
-
-  publishTrack(options: PublishTrackOptions): PublishedTrack {
-    const requestId = this.#allocateRequestId();
-    const trackAlias = this.#nextTrackAlias++;
-    if (this.#destroyed || this.#closing) {
-      // Same guard as publishNamespace(): a closed session must not
-      // repopulate `#tracks` or open request streams — hand back an inert
-      // handle so late callers still get the PublishedTrack shape.
-      return { requestId, trackAlias, trackName: options.trackName, done: () => {} };
+  announce(trackNamespace: TrackNamespace): void {
+    if (this.#destroyed || this.#closing) return;
+    this.#desiredNamespace = trackNamespace;
+    for (const stream of this.#namespaceStreams) {
+      this.#reconcileAnnounce(stream);
     }
-    const record: PublishRecord = {
-      requestId,
-      trackName: options.trackName,
-      trackAlias,
-      settled: false,
-      doneSent: false,
-    };
+  }
+
+  /**
+   * Write the desired namespace onto a solicitation stream whose prefix
+   * covers it. Solicitations, `announce()`, and the first
+   * `registerTrack()` arrive in any order — the relay's
+   * SUBSCRIBE_NAMESPACE races our post-SETUP setup — so all three paths
+   * funnel here. The announce is deferred until at least one track is
+   * registered: an announced namespace invites immediate SUBSCRIBEs, and
+   * answering one with DOES_NOT_EXIST is terminal on moq-lite-rs (the
+   * relay aborts the request rather than retrying), so advertising an
+   * empty registry would permanently break the first viewer in the
+   * pre-registration window.
+   */
+  #reconcileAnnounce(stream: NamespaceStream): void {
+    const namespace = this.#desiredNamespace;
+    if (namespace === undefined || this.#tracks.size === 0) return;
+    if (!isNamespacePrefix(stream.prefix, namespace)) return;
+    const suffix = namespace.slice(stream.prefix.length);
+    if (stream.announced.some((existing) => existing.join('/') === suffix.join('/'))) return;
+    stream.announced.push(suffix);
+    stream.writer
+      .write(encodeNamespace(suffix))
+      .then(() => {
+        if (this.#destroyed || this.#announcedFired) return;
+        this.#announcedFired = true;
+        this.#callbacks.onAnnounced?.({ namespace });
+      })
+      .catch(() => {
+        // The response half died alone (a reset the request half may
+        // never mirror): the entry never reached the peer, no future
+        // write can, and the read loop may stay open forever — the
+        // carrier is dead. Deregister it so the peer's replacement
+        // solicitation is a fresh start rather than a PREFIX_OVERLAP
+        // against a corpse; if another path already swept it, the loss
+        // was reported there.
+        if (!this.#namespaceStreams.delete(stream)) return;
+        stream.announced = stream.announced.filter((existing) => existing !== suffix);
+        void stream.writer.close().catch(() => {});
+        this.#reportAnnounceLoss();
+      });
+  }
+
+  /**
+   * Fire `onAnnounceEnded` when no solicitation carries the announce
+   * anymore — shared by the read-loop cleanup and the response-write
+   * failure path. Silent while closing, destroyed, or migrating (a
+   * GOAWAY makes the peer's streams ending the orderly drain).
+   */
+  #reportAnnounceLoss(): void {
+    if (this.#destroyed || this.#closing || this.#receivedGoaway) return;
+    const stillCarried = [...this.#namespaceStreams].some((stream) => stream.announced.length > 0);
+    if (stillCarried) return;
+    this.#callbacks.onAnnounceEnded?.({
+      error: new MoqtProtocolError('the namespace solicitation carrying the announce ended'),
+    });
+  }
+
+  registerTrack(options: RegisterTrackOptions): RegisteredTrack {
+    if (this.#destroyed || this.#closing) {
+      // A closed session must not repopulate `#tracks` — hand back an
+      // inert handle so late callers still get the RegisteredTrack shape.
+      return { trackName: options.trackName, end: () => {} };
+    }
     const track: TrackRecord = {
       key: trackKey(options.trackNamespace, options.trackName),
-      trackAlias,
-      publish: record,
+      trackName: options.trackName,
       subscribers: [],
       done: false,
+      pendingFins: [],
     };
     this.#tracks.set(track.key, track);
-
-    const message = encodePublish({
-      requestId,
-      trackNamespace: options.trackNamespace,
-      trackName: options.trackName,
-      trackAlias,
-      parameters: options.parameters,
-    });
-
-    this.#openRequest(
-      message,
-      (msg) => {
-        switch (msg.kind) {
-          case 'request-ok':
-            this.#settlePublish(record);
-            this.#callbacks.onPublishResult?.({ trackName: record.trackName, trackAlias, accepted: true });
-            break;
-          case 'request-error':
-            this.#settlePublish(record);
-            this.#tracks.delete(track.key);
-            this.#callbacks.onPublishResult?.({ trackName: record.trackName, trackAlias, accepted: false, error: msg });
-            break;
-          case 'request-update':
-            this.#callbacks.onRequestUpdate?.({ requestId: msg.requestId, parameters: msg.parameters });
-            break;
-          case 'goaway':
-            this.#callbacks.onGoaway?.(msg);
-            break;
-          default:
-            this.#fatal(new MoqtProtocolError(`unexpected ${msg.kind} on a publish request stream`));
-        }
-      },
-      (failure) => {
-        this.#tracks.delete(track.key);
-        this.#callbacks.onPublishResult?.({ trackName: record.trackName, trackAlias, accepted: false, error: failure });
-      },
-      (stream) => {
-        record.stream = stream;
+    // The first registration may be what the deferred announce was
+    // waiting for (see #reconcileAnnounce).
+    if (this.#tracks.size === 1) {
+      for (const stream of this.#namespaceStreams) {
+        this.#reconcileAnnounce(stream);
       }
-    );
-
+    }
     return {
-      requestId,
-      trackAlias,
       trackName: options.trackName,
-      done: (statusCode = PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount = 0, reason = '') => {
-        this.#finishTrack(track, statusCode, streamCount, reason);
-      },
+      end: () => this.#endTrack(track),
     };
   }
 
   /**
-   * PUBLISH_DONE + FIN on every stream carrying this track's request state.
-   * The aggregated write completion lands on `track.doneFlushed` so
-   * `close()` can hold the transport open until the messages reach the wire.
+   * FIN every live subscription's request stream — with no trailing
+   * bytes, which is the clean draft-19 track end — and refuse future
+   * SUBSCRIBEs. The aggregated write completion lands on
+   * `track.doneFlushed` so `close()` can hold the transport open until
+   * the FINs reach the wire.
    */
-  #finishTrack(track: TrackRecord, statusCode: number, streamCount: number, reason: string): void {
+  #endTrack(track: TrackRecord): void {
     if (track.done) return;
     track.done = true;
-    const writes: Promise<void>[] = [];
-    const done = encodePublishDone(statusCode, streamCount, reason);
-    const publish = track.publish;
-    if (publish.stream && !publish.doneSent) {
-      publish.doneSent = true;
-      writes.push(
-        publish.stream
-          .send(done)
-          .then(() => publish.stream?.finWrite())
-          .catch(() => {})
-      );
-    }
+    const writes: Promise<void>[] = [...track.pendingFins];
+    let hadReported = false;
     for (const subscriber of track.subscribers) {
-      if (subscriber.finished) continue;
-      subscriber.finished = true;
-      writes.push(
-        subscriber
-          .send(done)
-          .then(() => subscriber.fin())
-          .catch(() => {})
-      );
+      if (!subscriber.finished) {
+        subscriber.finished = true;
+        writes.push(subscriber.fin().catch(() => {}));
+      }
+      // The local end is authoritative: report each live subscription
+      // ended NOW rather than when the peer eventually closes its
+      // request direction — otherwise `subscriberCount` and the binding
+      // stay live (and publishers keep opening data streams) until the
+      // peer notices the FIN. Clearing `reported` keeps the read loop's
+      // own end notification paired: it fires on the same flag.
+      if (subscriber.reported) {
+        subscriber.reported = false;
+        hadReported = true;
+        if (!this.#destroyed) this.#callbacks.onSubscribeEnd?.({ requestId: subscriber.requestId });
+      }
+    }
+    if (hadReported && !this.#destroyed) {
+      this.#callbacks.onTrackBinding?.({ trackName: track.trackName, trackAlias: undefined });
     }
     track.doneFlushed = Promise.all(writes).then(() => {});
   }
@@ -674,6 +610,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         throw new MoqtProtocolError('received more than one GOAWAY on the control stream');
       }
       this.#receivedControlGoaway = true;
+      this.#receivedGoaway = true;
       this.#callbacks.onGoaway?.(message);
     }
     // A closed control stream ends the session (§3.3).
@@ -683,7 +620,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   // ---------------------------------------------------------------------------
-  // Incoming bidirectional streams (peer-initiated requests — SUBSCRIBE)
+  // Incoming bidirectional streams (peer-initiated requests)
   // ---------------------------------------------------------------------------
 
   async #acceptBidirectionalStreams(): Promise<void> {
@@ -708,8 +645,32 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     const type = await reader.readVarint();
     const message = await this.#readControlFrame(reader, type);
 
+    // Reserve the request ID for EVERY request-initiating kind — the
+    // uniqueness invariant is session-wide, so an ID burned on a
+    // rejected PUBLISH or FETCH must not be reusable by a later
+    // SUBSCRIBE (whose alias it would become).
+    const initiatingRequestId =
+      message.kind === 'fetch'
+        ? message.request.requestId
+        : message.kind === 'subscribe' ||
+            message.kind === 'subscribe-namespace' ||
+            message.kind === 'publish' ||
+            message.kind === 'publish-namespace' ||
+            message.kind === 'track-status'
+          ? message.requestId
+          : undefined;
+    if (initiatingRequestId !== undefined) {
+      if (this.#peerRequestIds.has(initiatingRequestId)) {
+        throw new MoqtProtocolError(`peer reused request id ${initiatingRequestId}`);
+      }
+      this.#peerRequestIds.add(initiatingRequestId);
+    }
     if (message.kind === 'subscribe') {
       await this.#handleIncomingSubscribe(stream, reader, message);
+      return;
+    }
+    if (message.kind === 'subscribe-namespace') {
+      await this.#handleSubscribeNamespace(stream, reader, message);
       return;
     }
 
@@ -726,6 +687,115 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     };
     const errorCode = message.kind === 'publish' ? REQUEST_ERROR_CODE.UNINTERESTED : REQUEST_ERROR_CODE.NOT_SUPPORTED;
     await respond(encodeRequestError(errorCode, 'publish-only endpoint'));
+  }
+
+  /**
+   * A peer's namespace solicitation — the announce carrier. Accepted with
+   * REQUEST_OK, then held open for the session's lifetime: NAMESPACE /
+   * NAMESPACE_DONE entries for every announced namespace under the
+   * prefix ride this stream. A clean requester-side FIN is half-closure,
+   * not withdrawal (§3.3.2); only a reset (or a rejected update, §10.9.1)
+   * ends the carrier, and its loss while the announce is live means the
+   * peer refused or withdrew the ingest path.
+   */
+  async #handleSubscribeNamespace(
+    stream: BidirectionalStreamLike,
+    reader: StreamReader,
+    subscribeNamespace: Extract<ControlMessage, { kind: 'subscribe-namespace' }>
+  ): Promise<void> {
+    const writer = stream.writable.getWriter();
+    const prefix = subscribeNamespace.trackNamespacePrefix;
+
+    // §10.18: a solicitation overlapping an established one (either
+    // prefix containing the other) is refused with PREFIX_OVERLAP —
+    // announcing on both would hand the peer duplicate namespace state
+    // with inconsistent withdrawals.
+    const overlaps =
+      [...this.#namespaceStreams].some(
+        (existing) => isNamespacePrefix(existing.prefix, prefix) || isNamespacePrefix(prefix, existing.prefix)
+      ) ||
+      [...this.#pendingNamespacePrefixes].some(
+        (pending) => isNamespacePrefix(pending, prefix) || isNamespacePrefix(prefix, pending)
+      );
+    if (overlaps) {
+      try {
+        await writer.write(encodeRequestError(REQUEST_ERROR_CODE.PREFIX_OVERLAP, 'overlapping namespace prefix'));
+        await writer.close();
+      } catch {
+        // Peer cancelled.
+      }
+      await reader.cancel();
+      return;
+    }
+
+    // Reserve the prefix across the acceptance write; the registration
+    // below happens in the same microtask as the release, so a racing
+    // overlapping solicitation always sees one or the other.
+    this.#pendingNamespacePrefixes.add(prefix);
+    let accepted = false;
+    try {
+      await writer.write(encodeRequestOk());
+      accepted = true;
+    } catch {
+      // Peer cancelled before the acceptance landed.
+    } finally {
+      this.#pendingNamespacePrefixes.delete(prefix);
+    }
+    if (!accepted) {
+      await reader.cancel();
+      return;
+    }
+
+    const record: NamespaceStream = {
+      prefix,
+      writer,
+      announced: [],
+    };
+    this.#namespaceStreams.add(record);
+    this.#reconcileAnnounce(record);
+
+    // Hold the stream. The known peers write nothing further on it.
+    let failedUpdate = false;
+    try {
+      while (!(await reader.atEnd())) {
+        const type = await reader.readVarint();
+        const message = await this.#readControlFrame(reader, type);
+        if (message.kind === 'goaway') {
+          this.#receivedGoaway = true;
+          this.#callbacks.onGoaway?.(message);
+        } else if (message.kind === 'request-update') {
+          // Namespace subscriptions may legally be updated (§10.9). v1
+          // applies none of it (a prefix change would re-base every
+          // entry), so per §10.9.1 the update is answered with an error
+          // and the request stream closes below — never session-fatal.
+          this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
+          void writer
+            .write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'namespace update not supported'))
+            .catch(() => {});
+          failedUpdate = true;
+          break;
+        } else {
+          throw new MoqtProtocolError(`unexpected ${message.kind} on an incoming subscribe-namespace stream`);
+        }
+      }
+      if (!failedUpdate) {
+        // A clean requester-side FIN is NOT a cancellation (§3.3.2 — the
+        // peer merely commits to sending no updates): the response side
+        // keeps carrying NAMESPACE entries until a reset or the
+        // transport ends, so the carrier stays registered and open.
+        return;
+      }
+    } catch (error) {
+      // A protocol violation is session-fatal; #handleClosed sweeps the
+      // carrier state with everything else.
+      if (isMoqtProtocolError(error)) throw error;
+      // Reset — the peer withdrew the namespace subscription.
+    }
+
+    // Withdrawal (reset) or a failed update: the carrier is over.
+    this.#namespaceStreams.delete(record);
+    void writer.close().catch(() => {});
+    if (record.announced.length > 0) this.#reportAnnounceLoss();
   }
 
   async #handleIncomingSubscribe(
@@ -747,9 +817,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       return;
     }
 
+    // The peer's request IDs are session-unique, so they double as the
+    // track alias — binding one alias to two live request IDs is a
+    // session-fatal Duplicate on moq-lite-rs.
+    const trackAlias = subscribe.requestId;
     const subscriber: SubscriberStream = {
       requestId: subscribe.requestId,
-      send: (bytes) => writer.write(bytes),
+      trackAlias,
       fin: () => writer.close(),
       cancel: async () => {
         subscriber.finished = true;
@@ -760,19 +834,66 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
           // The stream already errored (e.g. the peer reset it first).
         }
       },
+      accepted: false,
+      reported: false,
+      // Forward State defaults to 1; `forward: 0` subscribes without
+      // authorizing data until a REQUEST_UPDATE flips it.
+      forwarding: subscribe.parameters.forward !== 0,
       finished: false,
     };
     track.subscribers.push(subscriber);
 
     try {
-      await writer.write(encodeSubscribeOk(track.trackAlias));
+      // Declaring the track's timescale is what keeps object TIMESTAMP
+      // extensions flowing through moq-lite-rs relays — undeclared, they
+      // parse and discard them and re-stamp frames on arrival, and the
+      // viewer's clocks would sync to relay arrival time instead of
+      // capture time. LOC packaging stamps objects in microseconds.
+      await writer.write(
+        encodeSubscribeOk(trackAlias, {}, [{ type: TRACK_PROPERTY.TIMESCALE, value: MICROSECONDS_PER_SECOND }])
+      );
+      subscriber.accepted = true;
     } catch {
       // Peer cancelled before the response landed.
       track.subscribers = track.subscribers.filter((s) => s !== subscriber);
       await reader.cancel();
       return;
     }
-    this.#callbacks.onSubscribe?.(subscribe);
+    // Overlapping same-track subscriptions settle their SUBSCRIBE_OK
+    // writes independently, so a newer subscription may have replaced
+    // this one (marking it finished) while this acceptance was still in
+    // flight — a stale completion must not steal the binding back onto
+    // an alias whose stream is already ending, and a subscription that
+    // was never live is never reported (`onSubscribeEnd` pairs on the
+    // same flag, keeping subscriber counts balanced).
+    if (!subscriber.finished) {
+      subscriber.reported = true;
+      this.#callbacks.onSubscribe?.(subscribe);
+      // The newest subscription wins the binding, and every live
+      // PREDECESSOR (arrival order — a successor may accept before an
+      // older backpressured write settles, and must not be swept by it)
+      // ends cleanly (FIN) so the peer's bookkeeping resolves. One live
+      // subscription per track is a deliberate v1 constraint: draft-19
+      // permits concurrent same-track subscriptions, but serving them
+      // means writing every group once per alias, and the known peers
+      // (moq-lite-rs relays) hold at most one upstream subscription per
+      // track and fan out on their side — the sweep also covers their
+      // resubscribe races.
+      for (const other of track.subscribers.slice(0, track.subscribers.indexOf(subscriber))) {
+        if (other.finished) continue;
+        other.finished = true;
+        const fin = other.fin().catch(() => {});
+        track.pendingFins.push(fin);
+        void fin.then(() => {
+          const index = track.pendingFins.indexOf(fin);
+          if (index >= 0) track.pendingFins.splice(index, 1);
+        });
+      }
+      this.#callbacks.onTrackBinding?.({
+        trackName: track.trackName,
+        trackAlias: subscriber.forwarding ? trackAlias : undefined,
+      });
+    }
 
     // Keep serving the request stream: REQUEST_UPDATEs arrive here.
     try {
@@ -780,8 +901,49 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         const type = await reader.readVarint();
         const message = await this.#readControlFrame(reader, type);
         if (message.kind === 'request-update') {
+          const { forward, subscriberPriority: _priority, ...unsupported } = message.parameters;
+          // Forward State toggles ride REQUEST_UPDATE; the binding must
+          // follow so data stops (or starts) with the subscription's
+          // authorization. Newest-wins keeps this subscriber the track's
+          // only live one, so its state IS the binding.
+          if (forward !== undefined) {
+            subscriber.forwarding = forward !== 0;
+            if (!subscriber.finished && subscriber.accepted) {
+              this.#callbacks.onTrackBinding?.({
+                trackName: track.trackName,
+                trackAlias: subscriber.forwarding ? subscriber.trackAlias : undefined,
+              });
+            }
+          }
           this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
+          if (!subscriber.finished) {
+            if (Object.keys(unsupported).length > 0) {
+              // Acknowledging an update we did not apply would leave the
+              // peer serving stale expectations (a filter or range it
+              // believes is in effect). Forward State is applied above
+              // and priority is advisory (the known relays discard ours
+              // too); anything else ends this request honestly.
+              subscriber.finished = true;
+              void writer
+                .write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'unsupported subscription update'))
+                .then(() => writer.close())
+                .catch(() => {});
+              if (subscriber.reported) {
+                subscriber.reported = false;
+                this.#callbacks.onSubscribeEnd?.({ requestId: subscribe.requestId });
+                const binding = track.subscribers.filter((s) => !s.finished && s.accepted && s.forwarding).at(-1);
+                this.#callbacks.onTrackBinding?.({ trackName: track.trackName, trackAlias: binding?.trackAlias });
+              }
+            } else {
+              // The subscribe driver treats REQUEST_OK as the update's
+              // completion (`onUpdateOk`). Strictly reactive: a peer that
+              // never sends REQUEST_UPDATE (moq-lite-rs parks on end-of-
+              // stream after SUBSCRIBE_OK) never sees a trailing byte.
+              void writer.write(encodeRequestOk()).catch(() => {});
+            }
+          }
         } else if (message.kind === 'goaway') {
+          this.#receivedGoaway = true;
           this.#callbacks.onGoaway?.(message);
         } else {
           throw new MoqtProtocolError(`unexpected ${message.kind} on an incoming subscribe stream`);
@@ -791,8 +953,23 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       if (isMoqtProtocolError(error)) throw error;
       // Reset — the subscriber cancelled (§3.3.3); ordinary end-of-request.
     } finally {
+      subscriber.finished = true;
       track.subscribers = track.subscribers.filter((s) => s !== subscriber);
-      if (!this.#destroyed) this.#callbacks.onSubscribeEnd?.({ requestId: subscribe.requestId });
+      // The subscription is over both ways — mirror of the namespace
+      // stream's cleanup: when the peer FINed first, an unclosed response
+      // direction would leak a half-open stream per unsubscribe until the
+      // transport closes. Already-FINed/aborted writers reject harmlessly.
+      void writer.close().catch(() => {});
+      if (!this.#destroyed && subscriber.reported) {
+        this.#callbacks.onSubscribeEnd?.({ requestId: subscribe.requestId });
+        // Only accepted, forwarding subscriptions may carry the binding:
+        // one whose SUBSCRIBE_OK is still in flight could yet fail (its
+        // removal would strand `trackBindings` on an alias the peer never
+        // registered), and one with Forward State 0 forbids data. When a
+        // pending one accepts, it emits its own binding.
+        const binding = track.subscribers.filter((s) => !s.finished && s.accepted && s.forwarding).at(-1);
+        this.#callbacks.onTrackBinding?.({ trackName: track.trackName, trackAlias: binding?.trackAlias });
+      }
     }
   }
 }
@@ -804,11 +981,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
  * @example
  * ```ts
  * const session = createMoqtPublishSession(transport, {
- *   callbacks: { onPublishResult: (r) => r.accepted && startWriting(r.trackAlias) },
+ *   callbacks: { onSubscribe: (s) => console.log('serving', s.trackName) },
  * });
  * await session.ready;
- * session.publishNamespace(['live', 'abc123']);
- * const track = session.publishTrack({ trackNamespace: ['live', 'abc123'], trackName: 'video' });
+ * session.announce(['live', 'abc123']);
+ * const track = session.registerTrack({ trackNamespace: ['live', 'abc123'], trackName: 'video' });
  * ```
  */
 export function createMoqtPublishSession(
@@ -829,8 +1006,9 @@ export interface PublishEndpoint {
   /**
    * Relay auth token, sent as a `?jwt=` query parameter on the connect
    * URL — the only carriage the known relay fleet (moq-lite-rs lineage)
-   * accepts; see `authParameters` in the session actor for why the
-   * draft-19 AUTHORIZATION_TOKEN structures stay off the wire for now.
+   * accepts. The announce-and-serve flow attaches no request parameters
+   * anywhere (NAMESPACE entries are parameterless by wire rule), so the
+   * connect URL is the token's one and only ride.
    */
   authToken?: string;
 }
@@ -854,18 +1032,23 @@ export interface PublishSessionActorContext {
   /** Set when the server announced migration. */
   goaway?: Goaway;
   error?: unknown;
-  /** PUBLISH offers the peer accepted. */
-  publishedTracks: number;
-  /** Live inbound subscriptions across the published tracks. */
+  /** Live inbound subscriptions across the registered tracks. */
   subscriberCount: number;
+  /**
+   * Effective per-track alias bindings (`trackName` → alias). A track
+   * with no live subscription maps to `undefined` — its publisher must
+   * not open data streams.
+   */
+  trackBindings: Readonly<Record<string, number | undefined>>;
 }
 
 type SessionMessage =
   | { type: 'connected'; session: MoqtPublishSession }
-  | { type: 'published' }
-  | { type: 'publish-rejected'; error: unknown }
+  | { type: 'announced' }
+  | { type: 'announce-ended'; error: unknown }
   | { type: 'subscribed' }
   | { type: 'unsubscribed' }
+  | { type: 'track-binding'; trackName: string; trackAlias: number | undefined }
   | { type: 'goaway'; goaway: Goaway }
   | { type: 'closed' }
   | { type: 'failed'; error: unknown };
@@ -873,15 +1056,11 @@ type SessionMessage =
 export interface CreatePublishSessionActorOptions {
   endpoint: PublishEndpoint;
   connectTransport?: ConnectPublishTransport;
-  /** Forwarded to the session driver. */
-  requestTimeoutMs?: number;
   implementationName?: string;
 }
 
 export interface PublishSessionActor
   extends Pick<TransitionActor<PublishSessionActorContext, SessionMessage>, 'snapshot'> {
-  /** Request parameters carrying the endpoint's auth token, when one exists. */
-  getAuthParameters(): MessageParameters;
   destroy(): void;
 }
 
@@ -915,13 +1094,18 @@ function connectWebTransport(endpoint: PublishEndpoint): { transport: MoqtTransp
 
 /**
  * Connect to the endpoint's relay and drive the publish-session lifecycle:
- * `'connecting'` → `'ready'` (SETUP complete, namespace announced) →
- * `'live'` (first PUBLISH accepted). GOAWAY moves a live session to
- * `'draining'`; `destroy()` sends PUBLISH_DONE for every still-live track,
- * lets the control writes drain briefly, then closes the transport (the
- * driver's `close()` contract). The connection starts immediately —
- * composition-level gating belongs to the behavior that creates this
- * actor (`open-publish-session`).
+ * `'connecting'` → `'ready'` (SETUP complete) → `'live'` (namespace
+ * announced on an accepted solicitation — the peer can route SUBSCRIBEs
+ * to us; with pull-through peers no data flows until a downstream
+ * subscriber asks, so liveness must not wait on `subscriberCount`).
+ * A peer that never solicits the namespace leaves the session `'ready'`;
+ * losing the announce afterwards is `'failed'` — the ingest path is
+ * gone and nothing reconnects automatically. GOAWAY moves a live
+ * session to `'draining'`; `destroy()` FINs every live subscription,
+ * retracts the announce, lets those writes drain briefly, then closes
+ * the transport (the driver's `close()` contract). The connection starts
+ * immediately — composition-level gating belongs to the behavior that
+ * creates this actor (`open-publish-session`).
  */
 export function createPublishSessionActor(options: CreatePublishSessionActorOptions): PublishSessionActor {
   const { endpoint } = options;
@@ -931,7 +1115,7 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
   let session: MoqtPublishSession | undefined;
 
   const inner = createTransitionActor<PublishSessionActorContext, SessionMessage>(
-    { status: 'connecting', publishedTracks: 0, subscriberCount: 0 },
+    { status: 'connecting', subscriberCount: 0, trackBindings: {} },
     (context, message) => {
       // Terminal states are sticky: a transport-closed callback after a
       // failure must not soften 'failed' back to 'closed'.
@@ -939,16 +1123,19 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
       switch (message.type) {
         case 'connected':
           return { ...context, status: 'ready', session: message.session };
-        case 'published': {
-          const status = context.status === 'ready' ? 'live' : context.status;
-          return { ...context, status, publishedTracks: context.publishedTracks + 1 };
-        }
-        case 'publish-rejected':
+        case 'announced':
+          return { ...context, status: context.status === 'ready' ? 'live' : context.status };
+        case 'announce-ended':
           return { ...context, status: 'failed', error: message.error };
         case 'subscribed':
           return { ...context, subscriberCount: context.subscriberCount + 1 };
         case 'unsubscribed':
           return { ...context, subscriberCount: Math.max(0, context.subscriberCount - 1) };
+        case 'track-binding':
+          return {
+            ...context,
+            trackBindings: { ...context.trackBindings, [message.trackName]: message.trackAlias },
+          };
         case 'goaway':
           return { ...context, status: 'draining', goaway: message.goaway };
         case 'closed':
@@ -958,17 +1145,6 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
       }
     }
   );
-
-  // The endpoint token rides ONLY in the connect URL's `?jwt=` query
-  // parameter (`composePublishConnectUrl`). The known relay fleet
-  // (kixelated-lineage moq-lite-rs, incl. Mux's relay-rs deployments)
-  // does not support draft-19 AUTHORIZATION_TOKEN structures yet and
-  // hard-closes the session (`5 "invalid value"`) when one appears in a
-  // request's parameters — verified against sjc.relay.mux.global: the
-  // same PUBLISH_NAMESPACE gets REQUEST_OK bare and a session kill with
-  // the parameter attached. Re-attach via this seam (encodeAuthTokenUseValue,
-  // §10.2.2) once relays accept draft-19 auth.
-  const authParameters = (): MessageParameters => ({});
 
   const start = async () => {
     let transport: MoqtTransport | undefined;
@@ -981,24 +1157,18 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
         return;
       }
       session = createMoqtPublishSession(transport, {
-        requestTimeoutMs: options.requestTimeoutMs,
         implementationName: options.implementationName,
         callbacks: {
           onGoaway: (goaway) => inner.send({ type: 'goaway', goaway }),
-          onPublishResult: (result) => {
-            if (result.accepted) {
-              inner.send({ type: 'published' });
-            } else {
-              inner.send({
-                type: 'publish-rejected',
-                error: new MoqtProtocolError(
-                  `PUBLISH of ${result.trackName} rejected: ${result.error?.reason ?? 'unknown error'} (code ${result.error?.errorCode ?? '?'})`
-                ),
-              });
-            }
-          },
+          onAnnounced: () => inner.send({ type: 'announced' }),
+          onAnnounceEnded: ({ error }) =>
+            inner.send({
+              type: 'announce-ended',
+              error: error ?? new MoqtProtocolError('the peer ended the namespace announce'),
+            }),
           onSubscribe: () => inner.send({ type: 'subscribed' }),
           onSubscribeEnd: () => inner.send({ type: 'unsubscribed' }),
+          onTrackBinding: ({ trackName, trackAlias }) => inner.send({ type: 'track-binding', trackName, trackAlias }),
           onClosed: ({ error }) => {
             inner.send(error === undefined ? { type: 'closed' } : { type: 'failed', error });
           },
@@ -1006,9 +1176,12 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
       });
       await session.ready;
       if (destroyed) return;
-      // Advisory announce — a rejection is reported by the driver's
-      // callback but never blocks the PUBLISH flow (see the module doc).
-      session.publishNamespace(endpoint.namespace, authParameters());
+      // The relay solicits authorized namespaces right after SETUP; this
+      // registers the desire so the driver answers whichever side of the
+      // race arrives second — and the driver additionally defers the
+      // wire write until `setupTrackPublishers` registers the first
+      // track, so the announce never advertises an empty registry.
+      session.announce(endpoint.namespace);
       inner.send({ type: 'connected', session });
     } catch (error) {
       if (session) {
@@ -1029,8 +1202,6 @@ export function createPublishSessionActor(options: CreatePublishSessionActorOpti
     get snapshot() {
       return inner.snapshot;
     },
-
-    getAuthParameters: authParameters,
 
     destroy(): void {
       if (destroyed) return;

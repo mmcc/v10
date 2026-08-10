@@ -7,10 +7,10 @@
  * and mirrors the actor's lifecycle into `state.sessionStatus`
  * (`connecting → ready → live`, `draining` on GOAWAY, `error` on
  * failure). When the gate collapses — unpublish, capture release, or
- * teardown — the actor is destroyed, which sends PUBLISH_DONE for every
- * still-live track, drains those control writes briefly, and closes the
- * transport; `sessionStatus` settles on `'closed'` (a prior `'error'` is
- * preserved).
+ * teardown — the actor is destroyed, which FINs every live
+ * subscription's stream and retracts the namespace announce, drains
+ * those writes briefly, and closes the transport; `sessionStatus`
+ * settles on `'closed'` (a prior `'error'` is preserved).
  *
  * DOM-free: the session drives a structural `MoqtTransport`, and the
  * `WebTransport` default comes from the WebWorker lib (the same shape the
@@ -36,8 +36,10 @@ import { createPublishSessionActor } from '../session/publish-session';
 /**
  * Publish session lifecycle as engine state.
  *
- * `ready` — transport + setup complete, namespace announced, no accepted
- * track offer yet. `live` — the peer accepted at least one PUBLISH.
+ * `ready` — transport + setup complete, waiting for the peer to solicit
+ * the namespace. `live` — the namespace is announced on an accepted
+ * solicitation, so the peer can route subscriptions to us (ingest is
+ * pull-through: data still flows only per inbound subscription).
  * `draining` — orderly shutdown (unpublish or GOAWAY).
  */
 export type PublishSessionStatus = 'idle' | 'connecting' | 'ready' | 'live' | 'draining' | 'closed' | 'error';
@@ -74,8 +76,6 @@ export interface OpenPublishSessionContext {
 export interface OpenPublishSessionConfig {
   /** Transport seam; default constructs a real `WebTransport`. */
   connectTransport?: ConnectPublishTransport;
-  /** Control-request response bound forwarded to the session driver. */
-  requestTimeoutMs?: number;
 }
 
 type OpenPublishSessionFsmState = 'no-session' | 'session-open';
@@ -143,7 +143,6 @@ function openPublishSessionSetup({
             const actor = createPublishSessionActor({
               endpoint,
               connectTransport: config.connectTransport,
-              requestTimeoutMs: config.requestTimeoutMs,
             });
             context.publishSessionActor.set(actor);
 
