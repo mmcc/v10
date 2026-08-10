@@ -45,8 +45,14 @@
   }
 }
 
-/* Status row — overlay container for badge + timer + connection indicator.
-   Positioned top-left, mirroring the controls inset. */
+/* Status row — overlay capsule for badge + timer + connection indicator.
+   Positioned top-left, mirroring the controls inset.
+
+   The row carries its own ground rather than relying on text shadows: it sits
+   over an arbitrary camera frame, and a bright one leaves bare white text
+   (the timer especially) unreadable. It borrows the surface border/shadow
+   tokens but takes a dark fill instead of the glass one — glass tracks the
+   frame behind it, which is what fails over bright video. */
 .media-default-skin--publisher .media-publish-status {
   --inset-factor: 2;
   --inset: calc(var(--spacing) * var(--inset-factor));
@@ -58,25 +64,41 @@
   display: flex;
   gap: calc(var(--spacing) * 2);
   align-items: center;
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
   color: var(--media-color-primary, oklch(1 0 0));
-  text-shadow: 0 1px 0 var(--media-current-shadow-color);
   pointer-events: none;
+  background-color: var(--media-publish-status-background);
+  border-radius: calc(Infinity * 1px);
+  box-shadow:
+    0 0 0 1px var(--media-surface-outer-border-color),
+    0 1px 3px 0 var(--media-surface-shadow-color),
+    inset 0 1px 0 0 var(--media-surface-inner-border-color);
+  backdrop-filter: var(--media-surface-backdrop-filter);
 
   @container media-root (width > 42rem) {
     --inset-factor: 3;
   }
 }
 
-/* Publish badge — status pill with a leading dot (mirrors the live button's
-   dot in button.css). Pairs with `.media-badge`. */
+/* Publish badge — status text with a leading dot (mirrors the live button's
+   dot in button.css). The status capsule is already its ground, so the badge
+   drops the `.media-badge` fill and only takes a pill back when a state needs
+   to stand on its own: solid red live, tinted red error. Pairs with
+   `.media-badge`. */
 .media-default-skin .media-badge--publish {
   display: inline-flex;
   gap: calc(var(--spacing) * 1.5);
   align-items: center;
-  padding: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+  padding: 0;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  background-color: transparent;
+
+  &[data-publish-state="live"],
+  &[data-publish-state="error"] {
+    padding: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+  }
 
   &::before {
     display: inline-block;

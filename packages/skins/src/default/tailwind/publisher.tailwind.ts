@@ -62,6 +62,10 @@ export const root = (isShadowDOM: boolean) =>
     '[--media-quality-fair-color:oklch(0.8_0.16_85)]',
     '[--media-quality-poor-color:var(--media-publish-live-color)]',
     '[--media-capture-placeholder-background:oklch(0.2_0_0)]',
+    // Ground for the top-left status capsule. Deliberately dark rather than
+    // the glass surface fill: it overlays live camera frames, and a
+    // translucent ground inherits whatever brightness is behind it.
+    '[--media-publish-status-background:oklch(0_0_0/0.6)]',
     // Fullscreen scale
     'min-[1280px]:[&:fullscreen]:[--scale:1.25]',
     'min-[1536px]:[&:fullscreen]:[--scale:1.5]',
@@ -75,6 +79,8 @@ export const root = (isShadowDOM: boolean) =>
     'contrast-more:[--media-surface-inner-border-color:oklch(1_0_0/0.25)]',
     '[@media(prefers-reduced-transparency:reduce)]:[--media-surface-outer-border-color:transparent]',
     'contrast-more:[--media-surface-outer-border-color:transparent]',
+    '[@media(prefers-reduced-transparency:reduce)]:[--media-publish-status-background:oklch(0_0_0)]',
+    'contrast-more:[--media-publish-status-background:oklch(0_0_0)]',
     // Fullscreen
     '[&:fullscreen]:[--media-border-radius:0]',
     {
