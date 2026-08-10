@@ -404,6 +404,13 @@ interface TrackBuffer {
   /** Insertion-ordered groupId → objects; pruned to `MAX_BUFFERED_GROUPS`. */
   groups: Map<number, BufferedObject[]>;
   subscribers: Set<PlayerSubscription>;
+  /**
+   * The publisher FINed the upstream subscription: the track is done,
+   * not late, so DOES_NOT_EXIST answering a later pull is terminal
+   * rather than a reason to poll. Cleared by a fresh SUBSCRIBE_OK (the
+   * publisher re-registered the name) or a new publisher session.
+   */
+  ended: boolean;
 }
 
 // ============================================================================
@@ -463,7 +470,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
   const trackFor = (name: string): TrackBuffer => {
     let track = tracks.get(name);
     if (!track) {
-      track = { name, groups: new Map(), subscribers: new Set() };
+      track = { name, groups: new Map(), subscribers: new Set(), ended: false };
       tracks.set(name, track);
     }
     return track;
@@ -526,7 +533,10 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
     // Per-session state, so a re-publish starts clean (fresh aliases, and
     // group IDs that restart at 0 must not merge into stale buffers).
     const aliasToTrack = new Map<number, TrackBuffer>();
-    for (const track of tracks.values()) track.groups.clear();
+    for (const track of tracks.values()) {
+      track.groups.clear();
+      track.ended = false;
+    }
     stats.publishedTracks = [];
     stats.publisherState = 'connected';
 
@@ -646,7 +656,16 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
             const errorCode = fields.varint();
             fields.varint(); // retry interval
             const reason = fields.string();
-            if (errorCode === ERROR_DOES_NOT_EXIST) {
+            if (errorCode === ERROR_DOES_NOT_EXIST && track.ended) {
+              // Done, not late: the publisher FINed this track and has
+              // not re-registered it, so DOES_NOT_EXIST is terminal —
+              // mirror the real relay, which aborts the request rather
+              // than retrying, by ending the late subscribers. Each
+              // later player subscribe re-probes once, which is how a
+              // re-registered name is discovered.
+              log(`upstream SUBSCRIBE ${track.name}: the track ended — ending its late subscribers`);
+              for (const subscriber of [...track.subscribers]) subscriber.end();
+            } else if (errorCode === ERROR_DOES_NOT_EXIST) {
               // Not registered *yet* — a player can want a track before
               // the publisher brings it up (screen share starting after
               // the viewer joined). The relay hub retries while demand
@@ -683,6 +702,9 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           }
         }
         bindAlias(trackAlias, track);
+        // A fresh acceptance is the re-registration signal: the name is
+        // live again, so a later DOES_NOT_EXIST means late, not done.
+        track.ended = false;
         stats.publishedTracks.push(track.name);
         log(
           `upstream SUBSCRIBE ${track.name} → alias ${trackAlias}${timescale === undefined ? '' : ` (timescale ${timescale})`}`
@@ -707,6 +729,10 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           // with `retryWhileWanted` unset, no retry loop starts (the
           // track is done, not late).
           log(`upstream track ${track.name} ended`);
+          track.ended = true;
+          // The retained GOP is dead media: a late joiner must not be
+          // handed the final frames of a track that is over.
+          track.groups.clear();
           for (const subscriber of [...track.subscribers]) subscriber.end();
         }
       } catch {
