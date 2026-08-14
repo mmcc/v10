@@ -235,3 +235,56 @@ export function parseMoqSource(url: string): MoqSource {
 export function isMoqSourceUrl(url: string): boolean {
   return url.startsWith('moqt://');
 }
+
+// ============================================================================
+// Source composition
+// ============================================================================
+
+export interface ComposeMoqSourceOptions {
+  /** Track to start from — `'catalog'` (the MSF standard entry) when omitted. */
+  trackName?: string;
+  /** Auth token to attach as the `c4m` fragment parameter (MSF §11.4). */
+  token?: string;
+}
+
+/**
+ * Compose an MSF source URL — the inverse of `parseMoqSource` — from a relay
+ * origin, a broadcast namespace, and an optional auth token, so callers with
+ * structured inputs (a relay endpoint plus the path a token was issued for)
+ * never hand-write the `#msf:` fragment encoding.
+ *
+ * The origin may be written as `moqt://`, as `https://` (how relay endpoints
+ * are usually recorded — the scheme the connect URL derives back to), or as a
+ * bare host; schemes are case-insensitive. An existing path and query
+ * survive; a fragment throws, because the fragment is where the composed
+ * `msf:` identifier goes. The namespace is a slash-separated path
+ * (`'customer/room/42'`) or a pre-split tuple for fields containing a
+ * literal `/`.
+ */
+export function composeMoqSource(
+  origin: string,
+  namespace: string | readonly string[],
+  options: ComposeMoqSourceOptions = {}
+): string {
+  let base = origin.trim();
+  if (base.length === 0) throw new Error('relay origin is empty');
+  base = base.replace(/^https:\/\//i, 'moqt://');
+  if (!base.includes('://')) base = `moqt://${base}`;
+  if (base.includes('#')) {
+    throw new Error(`relay origin must not carry a fragment: ${origin}`);
+  }
+  const parsed = new URL(base);
+  if (parsed.protocol !== 'moqt:') {
+    throw new Error(`not a moqt or https relay origin: ${origin}`);
+  }
+  // moqt: is not a URL special scheme, so a bare-authority origin keeps an
+  // empty pathname instead of gaining '/' — normalize before appending.
+  if (parsed.pathname === '') parsed.pathname = '/';
+
+  const tuple = typeof namespace === 'string' ? namespace.split('/').filter((field) => field.length > 0) : namespace;
+  if (tuple.length === 0) throw new Error('broadcast namespace is empty');
+
+  const identifier = encodeNamespaceName(tuple, options.trackName ?? 'catalog');
+  const tokenPart = options.token ? `&c4m=${encodeURIComponent(options.token)}` : '';
+  return `${parsed}#msf:${identifier}${tokenPart}`;
+}

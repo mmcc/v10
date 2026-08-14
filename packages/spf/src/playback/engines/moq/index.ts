@@ -1,5 +1,10 @@
-export type { MoqLocationRange, MoqNumericRange, MoqSource } from '../../../media/moq/parse-source';
-export { encodeNamespaceName, isMoqSourceUrl, parseMoqSource } from '../../../media/moq/parse-source';
+export type {
+  ComposeMoqSourceOptions,
+  MoqLocationRange,
+  MoqNumericRange,
+  MoqSource,
+} from '../../../media/moq/parse-source';
+export { composeMoqSource, encodeNamespaceName, isMoqSourceUrl, parseMoqSource } from '../../../media/moq/parse-source';
 export { isResolvedPresentation } from '../../../media/types';
 export type { RetryBackoffConfig } from '../../../network/retry-backoff';
 export type { CreateMoqTransport, MoqAuthProvider } from '../../actors/moq-session';
