@@ -34,7 +34,7 @@ import '@videojs/html/live-video/player';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import { effect, snapshot, untrack } from '@videojs/spf';
 import {
-  encodeNamespaceName,
+  composeMoqSource,
   isMoqSourceUrl,
   isResolvedPresentation,
   type MoqSource,
@@ -158,29 +158,15 @@ const DEFAULT_RELAY_ORIGIN = 'moqt://relay.mux.dev';
 /**
  * Build an MSF catalog URL from the parts a relay token is issued for: a
  * relay origin, a slash-separated broadcast path (the same shape as the
- * publisher sandbox's `?ns=`), and an optional JWT. The token rides the
- * `c4m` fragment parameter, which the engine composes onto the connect URL
- * as `?jwt=` — the only auth carriage the relay fleet accepts (draft-19
+ * publisher sandbox's `?ns=`), and an optional JWT. Delegates to the
+ * engine's own `composeMoqSource` so the page cannot drift from the
+ * encoding `parseMoqSource` accepts. The token rides the `c4m` fragment
+ * parameter, which the engine composes onto the connect URL as `?jwt=` —
+ * the only auth carriage the relay fleet accepts (draft-19
  * AUTHORIZATION_TOKEN structures hard-close the session).
  */
 function composeMsfSource(origin: string, path: string, token: string): string {
-  let base = origin.trim() || DEFAULT_RELAY_ORIGIN;
-  // Relay endpoints are usually written down as https:// URLs or bare
-  // hosts; the moqt form is derivable from either, so accept all three.
-  base = base.replace(/^https:\/\//, 'moqt://');
-  if (!base.includes('://')) base = `moqt://${base}`;
-  if (base.includes('#')) {
-    throw new Error('the relay origin already has a fragment — pass a bare origin and put the path in the path field');
-  }
-  const parsed = new URL(base);
-  if (parsed.protocol !== 'moqt:') throw new Error(`not a relay origin this engine can dial: ${origin.trim()}`);
-  // moqt: is not a URL special scheme, so an origin without a path keeps an
-  // empty pathname instead of gaining '/' — normalize before appending.
-  if (parsed.pathname === '') parsed.pathname = '/';
-  const namespace = path.split('/').filter(Boolean);
-  if (namespace.length === 0) throw new Error('the broadcast path is empty');
-  const tokenPart = token ? `&c4m=${encodeURIComponent(token)}` : '';
-  return `${parsed}#msf:${encodeNamespaceName(namespace, 'catalog')}${tokenPart}`;
+  return composeMoqSource(origin.trim() || DEFAULT_RELAY_ORIGIN, path, token ? { token } : {});
 }
 
 /**
