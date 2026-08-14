@@ -35,7 +35,8 @@
       }
 
       /* ── Source ── */
-      #source {
+      #source,
+      #compose {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
@@ -53,14 +54,24 @@
       #mode-badge.relay {
         background: #0070f3;
       }
-      #relay-input {
-        flex: 1;
-        min-width: 320px;
+      #source input,
+      #compose input {
         padding: 6px 10px;
         font-family: monospace;
         font-size: 12px;
         border: 1px solid #a1a1aa;
         border-radius: 4px;
+      }
+      #relay-input,
+      #token-input {
+        flex: 1;
+        min-width: 320px;
+      }
+      #host-input {
+        width: 180px;
+      }
+      #path-input {
+        width: 160px;
       }
       button {
         padding: 6px 12px;
@@ -236,8 +247,11 @@
       <code>&lt;simple-moq-video&gt;</code> inside the real
       <code>&lt;live-video-player&gt;</code> shell and skin — the MoQ engine driving actual Video.js controls. Defaults
       to a <strong>loopback relay</strong>: an in-page MSF publisher speaking draft-19 bytes over an in-memory
-      transport, so playback works with no server. Pass <code>?relay=moqt://…%23msf:…</code> to point at a real relay
-      instead — percent-encode the <code>#</code>, or the browser reads it as this page's fragment.
+      transport, so playback works with no server. Point at a real relay with a full MSF URL
+      (<code>?relay=moqt://…%23msf:…</code> — percent-encode the <code>#</code>, or the browser reads it as this
+      page's fragment), or compose one from parts: relay host, broadcast path (what your token was issued for, e.g.
+      <code>mattypoo/room/42</code>), and an optional JWT — the same <code>?relay=&amp;ns=&amp;token=</code> params
+      the publisher sandbox takes.
     </p>
 
     <div id="unsupported" hidden></div>
@@ -248,6 +262,16 @@
       <input id="relay-input" spellcheck="false" placeholder="moqt://relay.example.com/live#msf:live--catalog" />
       <button id="apply-relay" type="button">Load relay</button>
       <button id="use-loopback" type="button">Use loopback</button>
+    </div>
+
+    <div id="compose">
+      <label for="host-input">Host:</label>
+      <input id="host-input" spellcheck="false" placeholder="moqt://relay.mux.dev" />
+      <label for="path-input">Path:</label>
+      <input id="path-input" spellcheck="false" placeholder="mattypoo/room/42" />
+      <label for="token-input">Token:</label>
+      <input id="token-input" spellcheck="false" placeholder="jwt (optional)" />
+      <button id="compose-load" type="button">Compose &amp; load</button>
     </div>
 
     <div id="player-mount"></div>
