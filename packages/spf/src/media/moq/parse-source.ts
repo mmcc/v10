@@ -121,7 +121,12 @@ export function decodeNamespaceName(identifier: string): { namespace: string[]; 
   return { namespace, trackName: decodeNameComponent(namePart) };
 }
 
-/** Encode a namespace tuple + track name into the MSF string form. */
+/**
+ * Encode a namespace tuple + track name into the MSF namespace-name string
+ * (`ns1-ns2--name`, §11.1.2) — the identifier that follows `#msf:` in a
+ * source URL. The inverse of what `parseMoqSource` decodes, for callers
+ * composing a source URL from structured parts.
+ */
 export function encodeNamespaceName(namespace: readonly string[], trackName: string): string {
   return `${namespace.map(encodeNameComponent).join('-')}--${encodeNameComponent(trackName)}`;
 }
