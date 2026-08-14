@@ -159,6 +159,12 @@ describe('composeMoqSource', () => {
     expect(() => composeMoqSource('relay.example.com', [])).toThrow(/empty/);
   });
 
+  it('rejects an empty field in a pre-split tuple instead of composing an unparseable identifier', () => {
+    // ['a', '', 'b'] would encode as 'a--b', colliding with the '--' name
+    // delimiter — and dropping the field would name a different broadcast.
+    expect(() => composeMoqSource('relay.example.com', ['a', '', 'b'])).toThrow(/non-empty/);
+  });
+
   it('percent-encodes token characters the fragment parser decodes back', () => {
     const url = composeMoqSource('relay.example.com', 'a', { token: 'a&b=c#d' });
     expect(parseMoqSource(url).c4mToken).toBe('a&b=c#d');

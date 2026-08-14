@@ -258,8 +258,8 @@ export interface ComposeMoqSourceOptions {
  * bare host; schemes are case-insensitive. An existing path and query
  * survive; a fragment throws, because the fragment is where the composed
  * `msf:` identifier goes. The namespace is a slash-separated path
- * (`'customer/room/42'`) or a pre-split tuple for fields containing a
- * literal `/`.
+ * (`'customer/room/42'`, empty segments dropped) or a pre-split tuple for
+ * fields containing a literal `/` — tuple fields must be non-empty.
  */
 export function composeMoqSource(
   origin: string,
@@ -283,6 +283,12 @@ export function composeMoqSource(
 
   const tuple = typeof namespace === 'string' ? namespace.split('/').filter((field) => field.length > 0) : namespace;
   if (tuple.length === 0) throw new Error('broadcast namespace is empty');
+  // Only reachable via the pre-split form — the string form drops empties as
+  // slash-formatting noise. A tuple is precise input, and an empty field is
+  // unencodable anyway: it would emit a bare '-' that collides with the '--'
+  // name delimiter and compose an identifier the parser rejects. Erroring
+  // beats silently composing a different namespace than the caller named.
+  if (tuple.includes('')) throw new Error('namespace tuple fields must be non-empty');
 
   const identifier = encodeNamespaceName(tuple, options.trackName ?? 'catalog');
   const tokenPart = options.token ? `&c4m=${encodeURIComponent(options.token)}` : '';
