@@ -62,10 +62,15 @@
         border: 1px solid #a1a1aa;
         border-radius: 4px;
       }
-      #relay-input,
-      #token-input {
+      #relay-input {
         flex: 1;
         min-width: 320px;
+      }
+      /* No minimum: on narrow viewports the row wraps and the token input
+         takes its own full-width line instead of overflowing the page. */
+      #token-input {
+        flex: 1;
+        min-width: 0;
       }
       #host-input {
         width: 180px;
