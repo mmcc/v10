@@ -441,7 +441,12 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     // slightly longer freeze. Re-adoption stays immediate — a master back
     // in range is trustworthy the moment it is seen.
     const oldestHeld = decoded[0];
-    if (master !== undefined) {
+    if (master === undefined) {
+      // An absent master breaks the observation: whatever geometry was
+      // accumulating is unverifiable across the gap, so a returning master
+      // earns a fresh confirm window.
+      foreignMasterSinceMs = undefined;
+    } else {
       if (oldestHeld === undefined || oldestHeld.timestamp - master <= DISCONTINUITY_THRESHOLD_US) {
         foreignMasterSinceMs = undefined;
         // Bank no slew budget while the master clock owns presentation: if

@@ -174,9 +174,27 @@ describe('createTrackSubscriberActor', () => {
     // The reset is sticky: subgroups travel on separate streams, so a
     // pre-switch straggler (older group, numerically newer timestamp) can
     // arrive after the switch — it must not flip the edge back onto the
-    // departed timeline.
+    // departed timeline, and its old-domain offset must not be sampled as
+    // jitter.
     handlers.onObject?.(locObject(42, 1, 10_040_000));
     expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(3_020_000);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.sampleCount).toBe(2);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.epoch).toBe(epochBefore + 1);
+
+    // Switching back is a forward step onto another epoch: the edge rises,
+    // the frontier advances with it, and the measurements restart again.
+    handlers.onObject?.(locObject(44, 0, 10_060_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_060_000);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.epoch).toBe(epochBefore + 2);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.sampleCount).toBe(1);
+
+    // A straggler from the epoch in between sits behind the advanced
+    // frontier: it must not re-trigger a backward reset onto its departed
+    // timeline.
+    handlers.onObject?.(locObject(43, 2, 3_040_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_060_000);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.epoch).toBe(epochBefore + 2);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.sampleCount).toBe(1);
 
     subscriber.destroy();
   });

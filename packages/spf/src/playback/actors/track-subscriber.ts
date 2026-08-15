@@ -294,35 +294,63 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   // measurements restart with it (see `trackDeliveryEdge`).
   let newestTimestampUs: number | undefined;
   /**
-   * Group of the frame that last reset the edge onto a new timeline.
-   * Subgroups travel on separate streams, so a pre-switch frame can arrive
-   * after post-switch ones while still ahead of the drain watermark; its
-   * old-timeline timestamp is numerically newer, and without this frontier
-   * it would flip the edge straight back onto the departed timeline — an
-   * oscillation whose stale readings the join anchor turns into dropped
-   * new-timeline audio. Frames from groups behind the frontier stay
-   * admissible to the buffer (they are still playable in order); they are
-   * only barred from moving the edge.
+   * Group of the frame that last moved the edge — its frontier. Subgroups
+   * travel on separate streams, so a straggler can arrive after frames from
+   * newer groups while still ahead of the drain watermark; if it comes from
+   * a departed timeline epoch, its timestamp is a whole step away from the
+   * edge, and comparing raw timestamps would either flip the edge back onto
+   * the old timeline (after a backward reset) or re-trigger a backward
+   * reset (after the publisher switches forward again) — an oscillation
+   * whose stale readings the join anchor turns into dropped new-timeline
+   * audio. Group numbers are the one sequence that stays monotone across
+   * timeline epochs, so the frontier advances with *every* edge movement,
+   * and frames from groups behind it stay admissible to the buffer (they
+   * are still playable in order) but can never move the edge.
    */
-  let edgeEpochGroupId: number | undefined;
+  let edgeGroupId: number | undefined;
 
-  const trackDeliveryEdge = (frame: JitterFrame): void => {
-    if (edgeEpochGroupId !== undefined && frame.groupId < edgeEpochGroupId) return;
+  /**
+   * Fold `frame` into the delivery edge. Returns whether the frame's
+   * timestamps belong to the edge's timeline — `false` marks a departed
+   * epoch's straggler, whose arrival offset must not be sampled.
+   */
+  const trackDeliveryEdge = (frame: JitterFrame): boolean => {
+    if (edgeGroupId !== undefined && frame.groupId < edgeGroupId) {
+      // Behind the frontier: an ordinary cross-stream reorder still carries
+      // this timeline's timestamps (legitimate jitter data); a whole step
+      // away it is the departed epoch's frame.
+      return (
+        newestTimestampUs !== undefined && Math.abs(frame.timestampUs - newestTimestampUs) <= TIMELINE_DISCONTINUITY_US
+      );
+    }
     if (newestTimestampUs === undefined || frame.timestampUs > newestTimestampUs) {
+      // A forward step past the threshold is a new epoch too — a forward
+      // re-anchor (switching back to an earlier source) steps the offset
+      // domain just like a backward one, and a real capture gap merely
+      // re-seeds measurements that were idle for the gap anyway.
+      const stepped =
+        newestTimestampUs !== undefined && frame.timestampUs - newestTimestampUs > TIMELINE_DISCONTINUITY_US;
       newestTimestampUs = frame.timestampUs;
-      return;
+      edgeGroupId = frame.groupId;
+      // `offsetSamples > 0`: a freshly reset envelope (an auth-expiry
+      // resubscribe crossing the same step) has nothing to discard, and a
+      // redundant restart would double-bump the epoch readers key on.
+      if (stepped && offsetSamples > 0) resetArrivalBaseline();
+      return true;
     }
     if (newestTimestampUs - frame.timestampUs > TIMELINE_DISCONTINUITY_US) {
       newestTimestampUs = frame.timestampUs;
-      edgeEpochGroupId = frame.groupId;
+      edgeGroupId = frame.groupId;
       // The arrival-offset envelope measures `arrival wall − media time`,
       // and the media term just stepped by the whole timeline jump: sampled
       // into the old envelope, one source switch reads as seconds of
       // network jitter and pushes the adaptive target toward its ceiling.
       // Restart the measurements exactly as the resubscribe path does —
       // this frame, the first of the new epoch, seeds the fresh envelope.
-      resetArrivalBaseline();
+      // (Unless that path already just did: see the forward branch above.)
+      if (offsetSamples > 0) resetArrivalBaseline();
     }
+    return true;
   };
 
   const inner = createTransitionActor<TrackSubscriberContext, SubscriberMessage>(
@@ -342,7 +370,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             oldestTimestampUs: frames[0]?.timestampUs,
             latestGroupId: Math.max(context.latestGroupId ?? frame.groupId, frame.groupId),
             arrivals: { seq: ++sampleSeq, totalBytes: message.totalBytes, totalDurationMs: message.totalDurationMs },
-            arrivalJitter: message.arrivalJitter,
+            arrivalJitter: message.arrivalJitter ?? context.arrivalJitter,
           };
         }
         case 'buffer-drained':
@@ -390,7 +418,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     // Before the arrival accounting below: adopting a new timeline restarts
     // the measurements, and this frame must seed the fresh baseline rather
     // than be timed and enveloped against the departed one.
-    trackDeliveryEdge(frame);
+    const onEdgeTimeline = trackDeliveryEdge(frame);
 
     const now = performance.now();
     const elapsedMs = lastArrivalMs === undefined ? undefined : now - lastArrivalMs;
@@ -402,19 +430,28 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
       totalDurationMs += elapsedMs;
     }
     lastArrivalMs = now;
-    sampleArrivalOffset(now, frame.timestampUs, elapsedMs);
+    // A departed epoch's straggler is a real arrival (the throughput totals
+    // above keep it) but its media time is on another timeline, so its
+    // offset would register the timeline step as network jitter.
+    if (onEdgeTimeline) sampleArrivalOffset(now, frame.timestampUs, elapsedMs);
     inner.send({
       type: 'frame-buffered',
       frame,
       newestTimestampUs: newestTimestampUs!,
       totalBytes,
       totalDurationMs,
-      arrivalJitter: {
-        minOffsetMs: offsetMinMs!,
-        maxOffsetMs: offsetMaxMs,
-        sampleCount: offsetSamples,
-        epoch: offsetEpoch,
-      },
+      // Empty only when a straggler lands right after an external baseline
+      // reset — nothing has seeded the new envelope yet, so the last
+      // published one stands rather than a hollow zero-sample reading.
+      arrivalJitter:
+        offsetMinMs === undefined
+          ? undefined
+          : {
+              minOffsetMs: offsetMinMs,
+              maxOffsetMs: offsetMaxMs,
+              sampleCount: offsetSamples,
+              epoch: offsetEpoch,
+            },
     });
   };
 
