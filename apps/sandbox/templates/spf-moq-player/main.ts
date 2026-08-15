@@ -11,6 +11,15 @@ import '@app/styles.css';
 //   relay=<moqt url>     Point at a real relay instead of the loopback. The
 //                        '#' needs percent-encoding as %23, or it is read as
 //                        the page fragment (which this page puts back).
+//   ns=<path>            Compose the source instead of hand-writing it: the
+//                        slash-separated broadcast path a relay token is
+//                        issued for (e.g. mattypoo/room/42), whose catalog
+//                        track is played. relay= then holds just the relay
+//                        origin — moqt://, https://, or a bare host
+//                        (default moqt://relay.mux.dev).
+//   token=<jwt>          Relay auth token. Rides the source's c4m fragment
+//                        param, which the engine forwards as the ?jwt=
+//                        connect-URL param the relay fleet expects.
 //   latency=<seconds>    Initial target latency
 //   skin=default|minimal
 //   preload=none|metadata|auto
@@ -24,7 +33,13 @@ import type { Skin } from '@app/types';
 import '@videojs/html/live-video/player';
 import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import { effect, snapshot, untrack } from '@videojs/spf';
-import { isMoqSourceUrl, isResolvedPresentation, type MoqSource, parseMoqSource } from '@videojs/spf/moq';
+import {
+  composeMoqSource,
+  isMoqSourceUrl,
+  isResolvedPresentation,
+  type MoqSource,
+  parseMoqSource,
+} from '@videojs/spf/moq';
 import { createLoopbackRelay, type LoopbackRelay, unsupportedLoopbackCodecs } from './loopback-relay';
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -34,6 +49,10 @@ const modeBadge = document.getElementById('mode-badge') as HTMLSpanElement;
 const relayInput = document.getElementById('relay-input') as HTMLInputElement;
 const applyRelayButton = document.getElementById('apply-relay') as HTMLButtonElement;
 const useLoopbackButton = document.getElementById('use-loopback') as HTMLButtonElement;
+const hostInput = document.getElementById('host-input') as HTMLInputElement;
+const pathInput = document.getElementById('path-input') as HTMLInputElement;
+const tokenInput = document.getElementById('token-input') as HTMLInputElement;
+const composeLoadButton = document.getElementById('compose-load') as HTMLButtonElement;
 const trackAutoButton = document.getElementById('track-auto') as HTMLButtonElement;
 const trackButtons = document.getElementById('track-buttons') as HTMLSpanElement;
 const latencyInput = document.getElementById('latency-input') as HTMLInputElement;
@@ -133,12 +152,56 @@ function relayProblem(url: string): string | undefined {
   return undefined;
 }
 
+/** Default relay origin for composed sources — matches the publisher sandbox. */
+const DEFAULT_RELAY_ORIGIN = 'moqt://relay.mux.dev';
+
+/**
+ * Build an MSF catalog URL from the parts a relay token is issued for: a
+ * relay origin, a slash-separated broadcast path (the same shape as the
+ * publisher sandbox's `?ns=`), and an optional JWT. Delegates to the
+ * engine's own `composeMoqSource` so the page cannot drift from the
+ * encoding `parseMoqSource` accepts. The token rides the `c4m` fragment
+ * parameter, which the engine composes onto the connect URL as `?jwt=` —
+ * the only auth carriage the relay fleet accepts (draft-19
+ * AUTHORIZATION_TOKEN structures hard-close the session).
+ */
+function composeMsfSource(origin: string, path: string, token: string): string {
+  return composeMoqSource(origin.trim() || DEFAULT_RELAY_ORIGIN, path, token ? { token } : {});
+}
+
+/**
+ * Attach a `?token=` page param to a full `?relay=` URL that carries no auth
+ * of its own. Explicit auth already on the URL — a `c4m` fragment param or a
+ * `jwt` connect param — wins over the page param.
+ */
+function withC4mToken(url: string, token: string): string {
+  if (!url.includes('#') || /[#&]c4m=/.test(url)) return url;
+  if (/[?&]jwt=/.test(url.slice(0, url.indexOf('#')))) return url;
+  return `${url}&c4m=${encodeURIComponent(token)}`;
+}
+
 const relayParam = readRelayParam();
-const relayParamProblem = relayParam ? relayProblem(relayParam) : undefined;
+const nsParam = params.get('ns') ?? '';
+const tokenParam = params.get('token') ?? '';
+
+let initialRelaySrc = relayParam;
+let composeProblem: string | undefined;
+if (nsParam) {
+  try {
+    initialRelaySrc = composeMsfSource(relayParam, nsParam, tokenParam);
+  } catch (error) {
+    composeProblem = error instanceof Error ? error.message : String(error);
+    initialRelaySrc = '';
+  }
+} else if (relayParam && tokenParam) {
+  initialRelaySrc = withC4mToken(relayParam, tokenParam);
+}
+
+const relayParamProblem = initialRelaySrc ? relayProblem(initialRelaySrc) : undefined;
 
 const state: PageState = {
-  mode: relayParam && !relayParamProblem ? 'relay' : 'loopback',
-  relaySrc: relayParamProblem ? '' : relayParam,
+  mode: initialRelaySrc && !relayParamProblem ? 'relay' : 'loopback',
+  relaySrc: relayParamProblem ? '' : initialRelaySrc,
   skin: oneOf(params.get('skin'), SKINS, 'default'),
   preload: oneOf(params.get('preload'), PRELOAD_VALUES, 'auto'),
   targetLatency: positiveSeconds(params.get('latency'), 0.5),
@@ -147,6 +210,9 @@ const state: PageState = {
 };
 
 relayInput.value = state.relaySrc;
+hostInput.value = nsParam ? relayParam : '';
+pathInput.value = nsParam;
+tokenInput.value = tokenParam;
 latencyInput.value = String(state.targetLatency);
 preloadSelect.value = state.preload;
 skinSelect.value = state.skin;
@@ -539,6 +605,32 @@ useLoopbackButton.addEventListener('click', () => {
   void render();
 });
 
+composeLoadButton.addEventListener('click', () => {
+  const path = pathInput.value.trim();
+  if (!path) {
+    log('enter a broadcast path first (e.g. mattypoo/room/42)', 'error');
+    return;
+  }
+  let composed: string;
+  try {
+    composed = composeMsfSource(hostInput.value, path, tokenInput.value.trim());
+  } catch (error) {
+    log(`cannot compose a source — ${error instanceof Error ? error.message : String(error)}`, 'error');
+    return;
+  }
+  const problem = relayProblem(composed);
+  if (problem) {
+    log(`composed URL ${problem}`, 'error');
+    return;
+  }
+  // Shown where it can be copied: the composed URL is exactly what 'Load
+  // relay' accepts, so the row doubles as a reference for the MSF format.
+  relayInput.value = composed;
+  state.mode = 'relay';
+  state.relaySrc = composed;
+  void render();
+});
+
 trackAutoButton.addEventListener('click', () => {
   const media = mediaElement();
   if (!media) return;
@@ -594,7 +686,9 @@ async function missingSupport(mode: Mode): Promise<string[]> {
   return missing;
 }
 
-if (relayParamProblem) log(`ignoring ?relay= — it ${relayParamProblem}`, 'error');
+if (composeProblem) log(`ignoring ?ns= — ${composeProblem}`, 'error');
+if (relayParamProblem)
+  log(`ignoring ${nsParam ? 'the composed source' : '?relay='} — it ${relayParamProblem}`, 'error');
 log(
   state.autoplay
     ? 'autoplay — video starts immediately; audio (the master clock) unlocks on the first gesture'

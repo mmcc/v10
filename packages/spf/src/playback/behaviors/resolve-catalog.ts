@@ -26,6 +26,16 @@
  * refreshes the token via the session actor and recreates the catalog
  * subscription + joining fetch once — same pattern as `track-subscriber`.
  *
+ * Failure recovery: a *transient* subscribe error retries with capped
+ * backoff (`subscribeRetry` config, honoring a server-stated Retry
+ * Interval) — the common case is DOES_NOT_EXIST because play was pressed
+ * before the broadcast started — and a retryable PUBLISH_DONE
+ * (broadcaster ended or dropped) re-subscribes the same way. Permanent
+ * rejections and auth-shaped ends stop instead of looping
+ * (`isRetryableRequestErrorCode` / `isRetryablePublishDoneStatus`).
+ * Every recovery restart resets the local catalog base, so a delta from
+ * a restarted publisher can never apply against the pre-outage catalog.
+ *
  * Multi-writer on `state.presentation` with the engine adapter (initial
  * `{ url }` input) — same legitimate split as `resolvePresentation`.
  */
@@ -43,8 +53,19 @@ import { isMoqSourceUrl, parseMoqSource } from '../../media/moq/parse-source';
 import type { MaybeResolvedPresentation } from '../../media/types';
 import { utf8Decode } from '../../network/moqt/bytes';
 import type { MessageParameters } from '../../network/moqt/control-messages';
-import { REQUEST_ERROR_CODE } from '../../network/moqt/control-messages';
+import {
+  isRetryablePublishDoneStatus,
+  isRetryableRequestErrorCode,
+  REQUEST_ERROR_CODE,
+} from '../../network/moqt/control-messages';
 import type { FetchHandle, Subscription } from '../../network/moqt/session';
+import {
+  DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
+  MAX_SERVER_RETRY_INTERVAL_MS,
+  type RetryBackoffConfig,
+  resolveRetryBackoffConfig,
+  retryDelayMs,
+} from '../../network/retry-backoff';
 import type { MoqSessionActor } from '../actors/moq-session';
 
 export interface ResolveCatalogState {
@@ -74,6 +95,16 @@ export interface ResolveCatalogConfig {
    * does for an empty or truncated replay. Default 5000ms.
    */
   catalogFetchTimeoutMs?: number;
+  /**
+   * Retry policy for a catalog subscription that fails or is ended by the
+   * publisher. A failed catalog SUBSCRIBE usually means the track does not
+   * exist *yet* — the viewer pressed play before the broadcast started, or
+   * the broadcaster is mid-reconnect — so the retry cadence is also the
+   * join latency once it appears. Defaults to
+   * {@link DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG}; `maxAttempts: 0`
+   * disables retry.
+   */
+  subscribeRetry?: Partial<RetryBackoffConfig>;
 }
 
 const DEFAULT_CATALOG_FETCH_TIMEOUT_MS = 5000;
@@ -95,6 +126,7 @@ function setupResolveCatalog({
 }): Reactor<ResolveCatalogFsmState | 'destroying' | 'destroyed'> {
   const applyUpdate = config?.applyCatalogUpdate ?? applyMoqCatalogUpdate;
   const fetchTimeoutMs = config?.catalogFetchTimeoutMs ?? DEFAULT_CATALOG_FETCH_TIMEOUT_MS;
+  const retryConfig = resolveRetryBackoffConfig(DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG, config?.subscribeRetry);
 
   const derivedStateSignal = computed<ResolveCatalogFsmState>(() => {
     const presentation = state.presentation.get();
@@ -137,6 +169,8 @@ function setupResolveCatalog({
           let subscription: Subscription | undefined;
           let fetchHandle: FetchHandle | undefined;
           let settleTimer: ReturnType<typeof setTimeout> | undefined;
+          let retryTimer: ReturnType<typeof setTimeout> | undefined;
+          let retryAttempts = 0;
           // Monotonic attempt token: cancelling a subscription/fetch does
           // not stop callbacks already in flight (a cancelled fetch stream
           // can still surface onEnd/onReset), so the auth-expiry retry
@@ -167,6 +201,69 @@ function setupResolveCatalog({
             bufferedLive.length = 0;
           };
 
+          /**
+           * Terminal stop: after this, nothing of the current attempt may
+           * write `state.presentation` — and no queued restart may reopen
+           * the subscription — until the state re-enters. Cancelling the
+           * handles alone is neither: the settle timer's callback never
+           * checks `isCurrent` and would still drain buffered objects, a
+           * cancel can itself surface in-flight onEnd/onReset, and a
+           * restart already booked by an earlier retryable report of the
+           * same death (an armed retry timer, or an in-flight auth
+           * refresh) would start a fresh attempt right over the terminal
+           * state. So the attempt token is bumped (invalidating every
+           * handler and the refresh restart, which check it), both timers
+           * are disarmed, and the buffer discarded before the handles go.
+           */
+          const stopCatalog = (): void => {
+            attempt++;
+            clearTimeout(settleTimer);
+            settleTimer = undefined;
+            clearTimeout(retryTimer);
+            retryTimer = undefined;
+            bufferedLive.length = 0;
+            fetchSettled = true;
+            fetchHandle?.cancel();
+            subscription?.cancel();
+          };
+
+          /**
+           * Recover the catalog subscription: after the backoff (raised to
+           * a server-stated Retry Interval when one is given), tear the
+           * dead attempt down and run `start()` again with fresh auth
+           * parameters. Returns false once the retry budget is spent. A
+           * restart already scheduled is a no-op success — a PUBLISH_DONE
+           * and a stream error reporting the same death book one retry and
+           * burn one attempt, not two.
+           *
+           * The local catalog base resets with the restart. Across a
+           * publisher restart the track's (group, object) numbering starts
+           * over, and a delta applied against the pre-outage base would
+           * silently produce a wrong catalog — dropping deltas until the
+           * next independent object (or the new attempt's joining-fetch
+           * replay) is the safe recovery §5.1.6 prescribes.
+           * `state.presentation` keeps the last resolved value meanwhile,
+           * so playback state doesn't flicker.
+           */
+          const scheduleRestart = (retryIntervalMs = 0): boolean => {
+            if (cancelled || retryTimer !== undefined) return true;
+            const delay = retryDelayMs(retryAttempts, retryConfig);
+            if (delay === undefined) return false;
+            retryAttempts++;
+            retryTimer = setTimeout(
+              () => {
+                retryTimer = undefined;
+                if (cancelled) return;
+                fetchHandle?.cancel();
+                subscription?.cancel();
+                catalog = undefined;
+                start(actor.getAuthParameters());
+              },
+              Math.max(delay, Math.min(retryIntervalMs, MAX_SERVER_RETRY_INTERVAL_MS))
+            );
+            return true;
+          };
+
           const start = (parameters: MessageParameters): void => {
             // Fresh attempt: the new joining fetch replays the current
             // group again, so live deltas must buffer until it settles.
@@ -194,6 +291,16 @@ function setupResolveCatalog({
                 parameters: { ...parameters, locationFilter: { type: 'largest-object' } },
               },
               {
+                onOk: () => {
+                  // The relay accepted the subscription — the outage (if
+                  // any) is over, so the next failure backs off from the
+                  // start again, and the one-shot auth refresh re-arms so
+                  // each *established* subscription gets one (§11.4 expects
+                  // periodic expiry over a long session).
+                  if (!isCurrent()) return;
+                  retryAttempts = 0;
+                  authRetried = false;
+                },
                 onObject: (object) => {
                   if (!isCurrent()) return;
                   if (object.status !== 'normal' || object.payload.length === 0) return;
@@ -204,32 +311,109 @@ function setupResolveCatalog({
                   }
                   apply(text, object.objectId);
                 },
-                onError: (error) => {
-                  // Auth-expiry retry (MSF §11.4), same one-shot pattern as
-                  // track-subscriber: refresh the token and recreate the
-                  // subscription + joining fetch with fresh parameters.
-                  if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN && !authRetried) {
-                    authRetried = true;
-                    // `.catch()` after `.then()` (not a rejection handler on
-                    // the same `.then()`) so a synchronous throw from
-                    // `start()` is contained rather than becoming an
-                    // unhandled rejection.
-                    void actor
-                      .refreshAuthToken()
-                      .then((refreshed) => {
-                        if (cancelled) return;
-                        fetchHandle?.cancel();
-                        subscription?.cancel();
-                        start(refreshed);
-                      })
-                      .catch((refreshError) => {
-                        // TODO(error-management): route to a state-error slot once one exists.
-                        console.error('[resolveCatalog] auth refresh failed:', refreshError);
-                      });
+                onDone: (done) => {
+                  // PUBLISH_DONE: the publisher ended the catalog track — a
+                  // broadcaster disconnect, not a session problem. Poll the
+                  // track back into existence; until the broadcaster
+                  // returns, each attempt fails and re-enters the error
+                  // path's backoff. Auth-shaped ends are the exception: a
+                  // re-subscribe carries the same credentials the relay
+                  // just rejected, so retrying loops forever.
+                  if (!isCurrent()) return;
+                  if (!isRetryablePublishDoneStatus(done.statusCode)) {
+                    // Terminal: freeze the state — a subscription left open
+                    // keeps delivering late objects (and the joining fetch
+                    // its replay) into a presentation we just declared done
+                    // updating. See `stopCatalog` for why cancelling the
+                    // handles alone is not enough.
+                    stopCatalog();
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog track ended with a non-retryable status:', done);
                     return;
                   }
-                  // TODO(error-management): route to a state-error slot once one exists.
-                  console.error('[resolveCatalog] catalog subscribe failed:', error);
+                  if (!scheduleRestart()) {
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog track ended (retry budget spent)');
+                  }
+                },
+                onError: (error) => {
+                  // A superseded attempt's failure is not this attempt's:
+                  // the live attempt hears its own errors — including its
+                  // own auth expiry, if the token really is stale.
+                  if (!isCurrent()) return;
+                  if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN) {
+                    // Auth-expiry retry (MSF §11.4), same one-shot pattern
+                    // as track-subscriber: refresh the token and recreate
+                    // the subscription + joining fetch with fresh
+                    // parameters. `onOk` re-arms the shot.
+                    if (!authRetried) {
+                      authRetried = true;
+                      // `.catch()` after `.then()` (not a rejection handler
+                      // on the same `.then()`) so a synchronous throw from
+                      // `start()` is contained rather than becoming an
+                      // unhandled rejection.
+                      void actor
+                        .refreshAuthToken()
+                        .then((refreshed) => {
+                          // A refresh landing after this attempt was
+                          // superseded — a terminal stop, a timer-driven
+                          // restart, cleanup — must not restart on its
+                          // own: it would undo a terminal freeze, or
+                          // double-start over a live newer attempt.
+                          if (cancelled || !isCurrent()) return;
+                          fetchHandle?.cancel();
+                          subscription?.cancel();
+                          start(refreshed);
+                        })
+                        .catch((refreshError) => {
+                          // TODO(error-management): route to a state-error slot once one exists.
+                          console.error('[resolveCatalog] auth refresh failed:', refreshError);
+                          // No usable token is coming: terminal, same
+                          // freeze as the other terminal branches — unless
+                          // the attempt was already superseded, in which
+                          // case the live attempt is not ours to stop.
+                          if (cancelled || !isCurrent()) return;
+                          stopCatalog();
+                        });
+                      return;
+                    }
+                    // The refreshed token was rejected too. The generic
+                    // retry below would loop forever on a token the relay
+                    // just refused — stop instead, freezing the state like
+                    // any other permanent rejection.
+                    stopCatalog();
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog subscribe failed after auth refresh:', error);
+                    return;
+                  }
+                  // A permanent rejection — wrong credentials, malformed
+                  // request, unsupported feature — answers an identical
+                  // retry identically: stop instead of looping forever, and
+                  // stop the joining fetch with it (its replay must not
+                  // keep writing into a presentation declared terminal).
+                  if (!isRetryableRequestErrorCode(error.errorCode)) {
+                    stopCatalog();
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog subscribe failed (non-retryable):', error);
+                    return;
+                  }
+                  // The usual meaning is "track does not exist yet" — the
+                  // viewer joined before the broadcast, or the broadcaster
+                  // is mid-reconnect. Retry with backoff until the track
+                  // appears (the session's own loss/recovery cycles this
+                  // whole state, so a dead session never loops here).
+                  //
+                  // A transient failure also re-arms the auth refresh: an
+                  // outage can outlive the token, and a retry cycle that
+                  // entered on DOES_NOT_EXIST would otherwise read the
+                  // eventual EXPIRED_AUTH_TOKEN as "the refreshed token
+                  // was rejected" and stop for good. Consecutive expiries
+                  // with nothing in between still hit the stop above.
+                  authRetried = false;
+                  if (!scheduleRestart(error.retryInterval)) {
+                    // TODO(error-management): route to a state-error slot once one exists.
+                    console.error('[resolveCatalog] catalog subscribe failed (retry budget spent):', error);
+                  }
                 },
               }
             );
@@ -274,6 +458,8 @@ function setupResolveCatalog({
             cancelled = true;
             clearTimeout(settleTimer);
             settleTimer = undefined;
+            clearTimeout(retryTimer);
+            retryTimer = undefined;
             fetchHandle?.cancel();
             subscription?.cancel();
           };
