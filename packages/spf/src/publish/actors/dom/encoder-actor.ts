@@ -203,11 +203,16 @@ export function createTrackTimeline(clocks: TrackTimelineClocks = {}): TrackTime
   let lastFrameUs: number | undefined;
   let lastFrameMonotonicUs: number | undefined;
   return {
+    // Both branches round: monotonic clocks are fractional-microsecond
+    // (and injected clocks may be), a fractional offset would make every
+    // published timestamp fractional, and the MOQT varint writer rejects
+    // non-integers at the LOC default timescale (`microsecondsToLocTimestamp`
+    // passes microseconds through unrounded).
     anchorOffsetUs(captureTimestampUs) {
       if (lastFrameUs === undefined || lastFrameMonotonicUs === undefined) {
-        return nowUs() - captureTimestampUs;
+        return Math.round(nowUs() - captureTimestampUs);
       }
-      return lastFrameUs + (monotonicNowUs() - lastFrameMonotonicUs) - captureTimestampUs;
+      return Math.round(lastFrameUs + (monotonicNowUs() - lastFrameMonotonicUs) - captureTimestampUs);
     },
     recordFrame(publishedTimestampUs) {
       lastFrameUs = publishedTimestampUs;
@@ -272,10 +277,10 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   let latestConfig: Uint8Array | undefined;
 
   // Capture-clock → published-domain rebase constant (see the module
-  // doc), pinned by the timeline. Anchored on the first frame that
-  // reaches the codec — the input side, where delivery lags capture by
-  // less than a frame, not the output side, where codec queueing would
-  // fold encode latency into the timeline. Actor lifetime matches
+  // doc), pinned by the timeline. Anchored on the first frame the codec
+  // accepts — the input side, where delivery lags capture by less than a
+  // frame, not the output side, where codec queueing would fold encode
+  // latency into the timeline. Actor lifetime matches
   // capture-stream lifetime (`setupEncoderActors` rebuilds actors per
   // stream), so one anchor per clock domain holds; a mid-stream
   // reconfigure keeps it.
@@ -361,18 +366,26 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
           // Mid-stream reconfigure (WebCodecs allows it on a configured codec).
           configure,
           encode: (msg, { context, setContext }) => {
-            if (timestampOffsetUs === undefined) timestampOffsetUs = timeline.anchorOffsetUs(msg.frame.timestamp);
-            // Recorded before the drop path — a backpressure-dropped frame
-            // still advances the capture clock the next epoch resumes from.
-            timeline.recordFrame(msg.frame.timestamp + timestampOffsetUs);
             const keyFrame = msg.keyFrame === true;
             if (!keyFrame && instance.encodeQueueSize > maxQueueDepth) {
+              // A backpressure-dropped frame still advances the capture
+              // clock the next epoch resumes from — but only an anchored
+              // epoch has a domain to record it in.
+              if (timestampOffsetUs !== undefined) timeline.recordFrame(msg.frame.timestamp + timestampOffsetUs);
               msg.frame.close();
               setContext({ ...context, droppedFrames: context.droppedFrames + 1 });
               return;
             }
             try {
               instance.encode(msg.frame, keyFrame);
+              // Anchored (and recorded) only once the codec ACCEPTS the
+              // frame: a synchronous encode failure must not commit an
+              // anchor — or feed the shared timeline — for a frame that
+              // never entered the stream; the next accepted frame anchors
+              // instead. Codec outputs are queued asynchronously, so the
+              // offset is always in place before this frame's chunk emerges.
+              if (timestampOffsetUs === undefined) timestampOffsetUs = timeline.anchorOffsetUs(msg.frame.timestamp);
+              timeline.recordFrame(msg.frame.timestamp + timestampOffsetUs);
             } catch (error) {
               onError?.(error);
             } finally {

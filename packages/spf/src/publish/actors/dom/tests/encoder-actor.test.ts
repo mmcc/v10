@@ -38,7 +38,12 @@ function descriptionOf(
 const disposals: (() => void)[] = [];
 
 function setupStubbedActor(
-  options: { nowUs?: () => number; track?: 'video' | 'audio'; timeline?: TrackTimeline } = {}
+  options: {
+    nowUs?: () => number;
+    track?: 'video' | 'audio';
+    timeline?: TrackTimeline;
+    encode?: (frame: FakeFrame, keyFrame: boolean) => void;
+  } = {}
 ) {
   const sunk: { packaged: PackagedLocFrame; meta: EncodedChunkSinkMeta }[] = [];
   let output!: (chunk: EncodedChunkLike, metadata?: EncoderOutputMetadata) => void;
@@ -50,7 +55,7 @@ function setupStubbedActor(
       output = callbacks.output;
       const instance: EncoderInstance<{ id: number }, FakeFrame> = {
         configure: () => undefined,
-        encode: () => undefined,
+        encode: options.encode ?? (() => undefined),
         flush: async () => undefined,
         close: () => undefined,
         encodeQueueSize: 0,
@@ -170,6 +175,32 @@ describe('createEncoderActor', () => {
     expect(locTimestampOf(sunk[1]!.packaged)).toBe(1_000_000_033_000);
   });
 
+  it('anchors at the first frame the codec ACCEPTS, not one whose encode threw synchronously', () => {
+    let now = 1_000_000_000_000;
+    let failNext = true;
+    const { actor, sunk, emit } = setupStubbedActor({
+      nowUs: () => now,
+      encode: () => {
+        if (!failNext) return;
+        failNext = false;
+        throw new Error('encoder rejected the frame');
+      },
+    });
+    actor.send({ type: 'configure', config: { id: 1 } });
+
+    // First frame throws synchronously — no anchor may be committed for a
+    // frame that never entered the stream.
+    actor.send({ type: 'encode', frame: makeFrame(500), keyFrame: true });
+    // The next accepted frame anchors: 1 s more capture time, but 5 s more
+    // wallclock (the first delivery was stale). Anchoring on the failed
+    // frame would publish this chunk at 1_000_001_000_000.
+    now = 1_000_005_000_000;
+    actor.send({ type: 'encode', frame: makeFrame(1_000_500), keyFrame: true });
+    emit(makeChunk('key', 1_000_500));
+
+    expect(sunk[0]!.meta.timestampUs).toBe(1_000_005_000_000);
+  });
+
   it('continues one published timeline across an actor rebuild sharing a track timeline', () => {
     let now = 1_000_000_000_000;
     let mono = 0;
@@ -240,5 +271,21 @@ describe('createTrackTimeline', () => {
     now -= 3_600_000_000;
     const nextOffset = timeline.anchorOffsetUs(42);
     expect(42 + nextOffset).toBe(1_000_000_750_000);
+  });
+
+  it('returns integer offsets from fractional clocks (LOC timestamps ride a varint)', () => {
+    // Real monotonic clocks are fractional-microsecond; a fractional offset
+    // would make every published timestamp fractional, which the MOQT
+    // varint writer rejects at the LOC default microsecond timescale.
+    let mono = 100.4;
+    const timeline = createTrackTimeline({ nowUs: () => 1_000_000_000_000.6, monotonicNowUs: () => mono });
+
+    const offset = timeline.anchorOffsetUs(3);
+    expect(Number.isInteger(offset)).toBe(true);
+    timeline.recordFrame(3 + offset);
+
+    mono = 433.9; // a fractional 333.5 µs gap between epochs
+    const nextOffset = timeline.anchorOffsetUs(7);
+    expect(Number.isInteger(nextOffset)).toBe(true);
   });
 });
