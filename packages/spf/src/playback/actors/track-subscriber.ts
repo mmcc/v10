@@ -134,6 +134,7 @@ type SubscriberMessage =
   | {
       type: 'frame-buffered';
       frame: JitterFrame;
+      newestTimestampUs: number;
       totalBytes: number;
       totalDurationMs: number;
       arrivalJitter: TrackSubscriberContext['arrivalJitter'];
@@ -278,17 +279,51 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     lastDrained !== undefined &&
     (groupId < lastDrained.groupId || (groupId === lastDrained.groupId && objectId <= lastDrained.objectId));
 
-  // The delivery edge after a frame lands: rises with newer frames,
-  // tolerates the (group, object)-window reorder a jitter buffer exists to
-  // absorb, and **resets when a frame lands a whole timeline step behind
-  // it**. A publisher that replaces its capture source mid-stream
+  // The delivery edge (published as `newestTimestampUs`): rises with newer
+  // frames, tolerates the (group, object)-window reorder a jitter buffer
+  // exists to absorb, and **resets when a frame lands a whole timeline step
+  // behind it**. A publisher that replaces its capture source mid-stream
   // re-anchors that track's timestamps; an edge held as a lifetime
   // high-water mark would keep serving the departed timeline to every
   // consumer — join anchors, the latency controller's depth — for as long
   // as the new timeline takes to climb past it, which a backward re-anchor
   // never does.
-  const nextNewestTimestampUs = (edgeUs: number | undefined, frameUs: number): number =>
-    edgeUs === undefined || frameUs > edgeUs || edgeUs - frameUs > TIMELINE_DISCONTINUITY_US ? frameUs : edgeUs;
+  //
+  // Owned here rather than computed in the reducer, because adopting a new
+  // timeline carries a side effect the reducer must not have: the arrival
+  // measurements restart with it (see `trackDeliveryEdge`).
+  let newestTimestampUs: number | undefined;
+  /**
+   * Group of the frame that last reset the edge onto a new timeline.
+   * Subgroups travel on separate streams, so a pre-switch frame can arrive
+   * after post-switch ones while still ahead of the drain watermark; its
+   * old-timeline timestamp is numerically newer, and without this frontier
+   * it would flip the edge straight back onto the departed timeline — an
+   * oscillation whose stale readings the join anchor turns into dropped
+   * new-timeline audio. Frames from groups behind the frontier stay
+   * admissible to the buffer (they are still playable in order); they are
+   * only barred from moving the edge.
+   */
+  let edgeEpochGroupId: number | undefined;
+
+  const trackDeliveryEdge = (frame: JitterFrame): void => {
+    if (edgeEpochGroupId !== undefined && frame.groupId < edgeEpochGroupId) return;
+    if (newestTimestampUs === undefined || frame.timestampUs > newestTimestampUs) {
+      newestTimestampUs = frame.timestampUs;
+      return;
+    }
+    if (newestTimestampUs - frame.timestampUs > TIMELINE_DISCONTINUITY_US) {
+      newestTimestampUs = frame.timestampUs;
+      edgeEpochGroupId = frame.groupId;
+      // The arrival-offset envelope measures `arrival wall − media time`,
+      // and the media term just stepped by the whole timeline jump: sampled
+      // into the old envelope, one source switch reads as seconds of
+      // network jitter and pushes the adaptive target toward its ceiling.
+      // Restart the measurements exactly as the resubscribe path does —
+      // this frame, the first of the new epoch, seeds the fresh envelope.
+      resetArrivalBaseline();
+    }
+  };
 
   const inner = createTransitionActor<TrackSubscriberContext, SubscriberMessage>(
     { status: 'pending', hasDecodableFrame: false, frameCount: 0 },
@@ -303,7 +338,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             status: context.status === 'pending' ? 'active' : context.status,
             hasDecodableFrame: context.hasDecodableFrame || frame.isKey,
             frameCount: frames.length,
-            newestTimestampUs: nextNewestTimestampUs(context.newestTimestampUs, frame.timestampUs),
+            newestTimestampUs: message.newestTimestampUs,
             oldestTimestampUs: frames[0]?.timestampUs,
             latestGroupId: Math.max(context.latestGroupId ?? frame.groupId, frame.groupId),
             arrivals: { seq: ++sampleSeq, totalBytes: message.totalBytes, totalDurationMs: message.totalDurationMs },
@@ -352,6 +387,10 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     if (!loc) return;
     const frame: JitterFrame = { groupId: object.groupId, objectId: object.objectId, ...loc };
     insertFrame(frame);
+    // Before the arrival accounting below: adopting a new timeline restarts
+    // the measurements, and this frame must seed the fresh baseline rather
+    // than be timed and enveloped against the departed one.
+    trackDeliveryEdge(frame);
 
     const now = performance.now();
     const elapsedMs = lastArrivalMs === undefined ? undefined : now - lastArrivalMs;
@@ -367,6 +406,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     inner.send({
       type: 'frame-buffered',
       frame,
+      newestTimestampUs: newestTimestampUs!,
       totalBytes,
       totalDurationMs,
       arrivalJitter: {
