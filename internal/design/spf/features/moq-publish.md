@@ -233,7 +233,7 @@ publisher initiates no requests, so there is no response to bound.
 **Out of scope (different architectural layer):**
 
 - The media host (`MoqPublishMedia` in
-  [`packages/media/src/dom/moq-publish/`](../../../../packages/media/src/dom/moq-publish/media.ts))
+  [`packages/spf/src/publish/adapters/moq-publish-video/`](../../../../packages/spf/src/publish/adapters/moq-publish-video/media.ts))
   and the `MediaPublish*` / `MediaCapture*` capability contracts +
   `isMedia*Capable` predicates in `@videojs/media` core.
 - The player surface: the `publisherFeatures` preset (`@videojs/core`),

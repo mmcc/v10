@@ -109,7 +109,7 @@ The adapter forwards `engineConfig` through unchanged.
 Above the engine, the publisher rides the standard player architecture:
 
 - **Media host** — `MoqPublishMedia`
-  ([`packages/media/src/dom/moq-publish/`](../../../../packages/media/src/dom/moq-publish/media.ts)):
+  ([`packages/spf/src/publish/adapters/moq-publish-video/`](../../../../packages/spf/src/publish/adapters/moq-publish-video/media.ts)):
   `publishEndpoint`, `publishNamespace`, `captureSource`
   (`'camera' | 'screen' | null`), `videoInputDeviceId` /
   `audioInputDeviceId`, `cameraMuted` / `micMuted`,
