@@ -293,10 +293,14 @@ describe('createAudioRendererActor', () => {
 
   it('re-anchors instead of inserting silence on a large timestamp jump', async () => {
     const frames = await encodeTestFrames(3);
-    // Latency catch-up: the third frame arrives from far ahead of the
-    // scheduled timeline.
+    // Latency catch-up: everything from the third frame on arrives from far
+    // ahead of the scheduled timeline. The whole tail moves (the encoder's
+    // flush can emit one more output than was fed) — a real skip relocates
+    // the stream, it does not interleave two timelines.
     const JUMP_US = 5_000_000;
-    frames[2] = { ...frames[2]!, timestampUs: JUMP_US };
+    for (let i = 2; i < frames.length; i++) {
+      frames[i] = { ...frames[i]!, timestampUs: JUMP_US + (i - 2) * FRAME_DURATION_US };
+    }
     const audioContext = createFakeAudioContext();
     const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
 
@@ -413,6 +417,120 @@ describe('createAudioRendererActor', () => {
     // re-anchor would have done.
     await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(anchorUs!), { timeout: 5000 });
     expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(newestUs + FRAME_DURATION_US);
+
+    renderer.destroy();
+  });
+
+  // A publisher that replaces its capture source re-anchors that track's
+  // timeline; landing *behind* the old one must be treated as the timeline
+  // reset it is. Butt-joining it (the backward jump slips past a
+  // forward-only check) keeps audio playing seamlessly while the master
+  // clock silently steps backwards by the jump — and the slaved video
+  // renderer then holds every frame it ever receives "early", frozen
+  // exactly the step behind for the rest of the stream.
+  it('re-anchors onto a timeline that stepped backwards instead of continuing the old one', async () => {
+    const frames = await encodeTestFrames(6);
+    const BASE_US = 10_000_000;
+    const STEP_BACK_US = 5_000_000;
+    const TARGET_US = 100_000;
+    const old = frames.slice(0, 3).map((frame, i) => ({ ...frame, timestampUs: BASE_US + i * FRAME_DURATION_US }));
+    const fresh = frames
+      .slice(3)
+      .map((frame, i) => ({ ...frame, timestampUs: BASE_US - STEP_BACK_US + i * FRAME_DURATION_US }));
+    const audioContext = createFakeAudioContext();
+    const queue = [...old];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    let edgeUs = old[old.length - 1]!.timestampUs;
+    const renderer = createAudioRendererActor({
+      audioContext,
+      scheduleMargin: 0.05,
+      getJoinAnchorUs: () => edgeUs - TARGET_US,
+    });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(
+      () =>
+        expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(BASE_US + FRAME_DURATION_US),
+      { timeout: 5000 }
+    );
+    audioContext.currentTime = 0.06;
+    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(BASE_US);
+
+    // The switched source's timeline arrives a whole step behind, delivered
+    // continuously; the subscriber's edge has already reset onto it.
+    queue.push(...fresh);
+    edgeUs = fresh[fresh.length - 1]!.timestampUs;
+
+    // The clock lands on the new timeline at the join anchor — with the fake
+    // context clock frozen inside the old schedule, a butt-join would keep
+    // reading the old timeline here instead.
+    await vi.waitFor(
+      () => {
+        const clock = renderer.getClockTimeUs();
+        expect(clock).toBeDefined();
+        expect(clock!).toBeLessThan(BASE_US);
+        expect(clock!).toBeGreaterThanOrEqual(edgeUs - TARGET_US);
+      },
+      { timeout: 5000 }
+    );
+
+    // …and playout proceeds through the anchor gap into the new audio.
+    audioContext.currentTime = 0.2;
+    await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(fresh[0]!.timestampUs), {
+      timeout: 5000,
+    });
+
+    renderer.destroy();
+  });
+
+  // A discontinuity interrupts playout that already ran at depth, so the
+  // re-join lands *at the join anchor* (the target latency) rather than at
+  // arrival. Landing at arrival collapses playout to the live edge — the
+  // reported "audio jumps to real-time" — which the latency controller then
+  // spends tens of pitch-shifted seconds rebuilding at its ±5% nudge.
+  it('lands a discontinuity re-join at the join anchor instead of racing to the arrival edge', async () => {
+    const frames = await encodeTestFrames(6);
+    const JUMP_US = 5_000_000;
+    const TARGET_US = 200_000;
+    const old = frames.slice(0, 3).map((frame, i) => ({ ...frame, timestampUs: i * FRAME_DURATION_US }));
+    const fresh = frames.slice(3).map((frame, i) => ({ ...frame, timestampUs: JUMP_US + i * FRAME_DURATION_US }));
+    const audioContext = createFakeAudioContext();
+    const queue = [...old];
+    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+    let edgeUs = old[old.length - 1]!.timestampUs;
+    const renderer = createAudioRendererActor({
+      audioContext,
+      scheduleMargin: 0.05,
+      getJoinAnchorUs: () => edgeUs - TARGET_US,
+    });
+
+    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    await vi.waitFor(
+      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(FRAME_DURATION_US),
+      { timeout: 5000 }
+    );
+
+    queue.push(...fresh);
+    edgeUs = fresh[fresh.length - 1]!.timestampUs;
+    const anchorUs = edgeUs - TARGET_US;
+
+    // The clock resumes at the anchor — target depth behind the jumped-to
+    // edge — not at the buffer head the way an at-arrival landing would.
+    await vi.waitFor(
+      () => {
+        const clock = renderer.getClockTimeUs();
+        expect(clock).toBeDefined();
+        expect(clock!).toBeGreaterThanOrEqual(anchorUs);
+        expect(clock!).toBeLessThan(fresh[0]!.timestampUs);
+      },
+      { timeout: 5000 }
+    );
+
+    // Advancing the context clock through the anchor gap reaches the head.
+    audioContext.currentTime = 0.3;
+    await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(fresh[0]!.timestampUs), {
+      timeout: 5000,
+    });
 
     renderer.destroy();
   });

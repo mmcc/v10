@@ -24,6 +24,7 @@
  * frame (make-before-break handoffs guarantee one is already buffered).
  */
 import { createTransitionActor, type TransitionActor } from '../../../core/actors/create-transition-actor';
+import { TIMELINE_DISCONTINUITY_US } from '../../../media/moq/timeline';
 import type { JitterFrame } from '../track-subscriber';
 
 // =============================================================================
@@ -125,11 +126,24 @@ export interface VideoRendererActor extends Pick<TransitionActor<VideoRendererCo
 const DEFAULT_DECODE_AHEAD = 8;
 const DEFAULT_TICK_INTERVAL_MS = 8;
 /**
- * Media-time jump beyond which buffered frames are a timeline reset
- * (latency catch-up skipped groups) rather than frames the self-clock
- * should wait out in real time.
+ * Media-time jump beyond which two readings are on different timelines
+ * (see `TIMELINE_DISCONTINUITY_US`). Applied twice here: buffered frames
+ * this far ahead of the self-clock are a timeline reset (latency catch-up
+ * skipped groups) rather than frames to wait out in real time, and a
+ * master clock this far behind every held frame is a foreign timeline to
+ * stand down from rather than a position to hold for.
  */
-const DISCONTINUITY_THRESHOLD_US = 1_000_000;
+const DISCONTINUITY_THRESHOLD_US = TIMELINE_DISCONTINUITY_US;
+/**
+ * How long the foreign-master geometry must persist before the renderer
+ * stands down to its self-clock. A same-timeline catch-up skip shows the
+ * same gap transiently: it jumps both jitter buffers, but the master
+ * follows only once the audio renderer's schedule horizon (~4 × its 50ms
+ * margin) reopens and it re-anchors onto the skipped-to timeline. 250ms
+ * outlives that window; a genuine timeline step persists indefinitely and
+ * only pays this as a slightly longer freeze before recovery.
+ */
+const FOREIGN_MASTER_CONFIRM_MS = 250;
 const DEFAULT_CLOCK_SLEW_RATE = 0.05;
 const DEFAULT_CLOCK_SLEW_TOLERANCE_US = 50_000;
 /**
@@ -242,6 +256,11 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
    * tolerance band banks budget and the next correction lands as a jump.
    */
   let lastSlewWallMs: number | null = null;
+  /**
+   * Wall time the foreign-master geometry was first observed, `undefined`
+   * while the master is adopted (or absent). See `FOREIGN_MASTER_CONFIRM_MS`.
+   */
+  let foreignMasterSinceMs: number | undefined;
 
   const closeDecoder = (): void => {
     if (decoder && decoder.state !== 'closed') decoder.close();
@@ -390,13 +409,59 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
 
   const clockTimeUs = (): number | undefined => {
     const master = options.getClockTimeUs?.();
-    if (master !== undefined) {
-      // Bank no slew budget while the master clock owns presentation: if it
-      // later goes away (audio ends mid-stream), the first self-clock
-      // evaluation would otherwise cash in the whole master-clock interval
-      // as one correction.
-      lastSlewWallMs = null;
-      return master;
+    // A master clock a whole timeline step **behind every frame this
+    // renderer holds** is not earlier on the same timeline — it is on a
+    // different one (a publisher re-anchors a track's timeline when its
+    // capture source is replaced, and only the switched track steps).
+    // Presenting against it would hold every frame "early" for the life of
+    // the stream: the clock and the frames' timeline both advance at 1×, so
+    // the gap never closes — video freezes exactly the step behind while
+    // audio plays live. Treat a foreign master as absent: the self-clock
+    // below anchors onto this track's own delivery edge, which is the best
+    // available approximation of sync once the shared timeline is gone. A
+    // read that finds the master back within a step re-adopts it.
+    //
+    // `decoded[0]` rather than the delivery edge, because the frozen
+    // geometry is "the *oldest* pending frame is a step ahead" — during a
+    // healthy same-timeline catch-up the oldest pending frame is at/behind
+    // the clock however far the newest runs ahead. The mirror geometry
+    // (master ahead of every held frame) stays slaved: it is
+    // indistinguishable mid-race from a same-timeline catch-up, and that
+    // race self-terminates at the edge instead of freezing.
+    //
+    // **Corroborated over `FOREIGN_MASTER_CONFIRM_MS` before standing
+    // down.** The one same-timeline geometry that can also show this gap is
+    // a catch-up skip: it jumps both jitter buffers, and the master follows
+    // the audio buffer's jump only once the audio renderer's schedule
+    // horizon reopens — until then the freshly skipped-to video frames sit
+    // a whole step past a master that is about to move. Abandoning the
+    // master inside that window trades a clean drop-late race for a clock
+    // hop, so the gap must outlive it; a real timeline step persists
+    // (both sides advance at 1×) and only pays the confirm window as a
+    // slightly longer freeze. Re-adoption stays immediate — a master back
+    // in range is trustworthy the moment it is seen.
+    const oldestHeld = decoded[0];
+    if (master === undefined) {
+      // An absent master breaks the observation: whatever geometry was
+      // accumulating is unverifiable across the gap, so a returning master
+      // earns a fresh confirm window.
+      foreignMasterSinceMs = undefined;
+    } else {
+      if (oldestHeld === undefined || oldestHeld.timestamp - master <= DISCONTINUITY_THRESHOLD_US) {
+        foreignMasterSinceMs = undefined;
+        // Bank no slew budget while the master clock owns presentation: if
+        // it later goes away (audio ends mid-stream), the first self-clock
+        // evaluation would otherwise cash in the whole master-clock
+        // interval as one correction.
+        lastSlewWallMs = null;
+        return master;
+      }
+      const sinceMs = performance.now();
+      foreignMasterSinceMs ??= sinceMs;
+      if (sinceMs - foreignMasterSinceMs < FOREIGN_MASTER_CONFIRM_MS) {
+        lastSlewWallMs = null;
+        return master;
+      }
     }
     const rate = options.getPlaybackRate?.() ?? 1;
     const now = performance.now();
@@ -506,6 +571,7 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
       awaitingKeyframe = true;
       selfAnchor = null;
       lastSlewWallMs = null;
+      foreignMasterSinceMs = undefined;
       appliedDescription = null;
       closeDecoder();
       // `'track'` rather than `'status'`: it also ends the published playout

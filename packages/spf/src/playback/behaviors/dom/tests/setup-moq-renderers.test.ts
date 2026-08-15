@@ -150,6 +150,39 @@ describe('setupAudioRenderer', () => {
     reactor.destroy();
   });
 
+  // The forward clamp assumes one shared timeline. A publisher that
+  // re-anchors the audio timeline on a capture-source switch breaks that:
+  // the video clock — still on the departed timeline — then sits past
+  // everything the new timeline will deliver, and clamping onto it would
+  // discard every arriving audio frame unheard.
+  it('ignores a video clock a whole timeline step past the audio edge', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const { context, reactor } = setupSetupAudioRenderer();
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+    const { getJoinAnchorUs } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
+
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000));
+    const videoRenderer = (videoClockUs: number) =>
+      ({
+        snapshot: signal({ context: {} }),
+        getClockTimeUs: () => videoClockUs,
+        setTrack: vi.fn(),
+        destroy: vi.fn(),
+      }) as unknown as VideoRendererActor;
+
+    // Same timeline: a video clock at/inside a step past the edge clamps.
+    context.videoRendererActor.set(videoRenderer(11_000_000));
+    expect(getJoinAnchorUs!()).toBe(11_000_000);
+
+    // Foreign timeline: a video clock past the edge by more than a step is
+    // ignored, and the audio edge anchors alone.
+    context.videoRendererActor.set(videoRenderer(11_000_001));
+    expect(getJoinAnchorUs!()).toBe(9_500_000);
+
+    reactor.destroy();
+  });
+
   // The gap this exists for: the anchor is the renderer's drop threshold, so
   // returning `undefined` while the subscriber has published no edge means no trim
   // at all — audio behind the running video clock gets played rather than dropped.

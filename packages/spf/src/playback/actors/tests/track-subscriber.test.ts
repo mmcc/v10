@@ -134,6 +134,71 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  // The edge is what join anchors and the latency controller's depth are
+  // computed from. A publisher that replaces its capture source mid-stream
+  // re-anchors that track's timestamps; if the re-anchor lands *behind* the
+  // old timeline, a lifetime high-water mark would keep serving the departed
+  // timeline's edge forever (the new timeline never climbs past it).
+  it('resets the delivery edge when a frame lands a whole timeline step behind it', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onObject?.(locObject(41, 0, 10_000_000));
+    handlers.onObject?.(locObject(41, 1, 10_020_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_020_000);
+
+    // Jitter-window reorder: a slightly older frame does not move the edge.
+    handlers.onObject?.(locObject(42, 0, 10_010_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_020_000);
+
+    const epochBefore = subscriber.snapshot.get().context.arrivalJitter!.epoch;
+
+    // Timeline reset: a frame a whole discontinuity step behind adopts the
+    // new timeline as the edge instead of being absorbed as a reorder.
+    handlers.onObject?.(locObject(43, 0, 3_000_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(3_000_000);
+
+    // Adopting the new timeline restarts the arrival measurements: the
+    // offset domain stepped with it, and sampling the step into the old
+    // envelope would read as seconds of network jitter. The reset frame
+    // seeds the fresh envelope.
+    const jitter = subscriber.snapshot.get().context.arrivalJitter!;
+    expect(jitter.epoch).toBe(epochBefore + 1);
+    expect(jitter.sampleCount).toBe(1);
+
+    // …and the edge rises normally on the new timeline from there.
+    handlers.onObject?.(locObject(43, 1, 3_020_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(3_020_000);
+
+    // The reset is sticky: subgroups travel on separate streams, so a
+    // pre-switch straggler (older group, numerically newer timestamp) can
+    // arrive after the switch — it must not flip the edge back onto the
+    // departed timeline, and its old-domain offset must not be sampled as
+    // jitter.
+    handlers.onObject?.(locObject(42, 1, 10_040_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(3_020_000);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.sampleCount).toBe(2);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.epoch).toBe(epochBefore + 1);
+
+    // Switching back is a forward step onto another epoch: the edge rises,
+    // the frontier advances with it, and the measurements restart again.
+    handlers.onObject?.(locObject(44, 0, 10_060_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_060_000);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.epoch).toBe(epochBefore + 2);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.sampleCount).toBe(1);
+
+    // A straggler from the epoch in between sits behind the advanced
+    // frontier: it must not re-trigger a backward reset onto its departed
+    // timeline.
+    handlers.onObject?.(locObject(43, 2, 3_040_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_060_000);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.epoch).toBe(epochBefore + 2);
+    expect(subscriber.snapshot.get().context.arrivalJitter!.sampleCount).toBe(1);
+
+    subscriber.destroy();
+  });
+
   it('skips to the latest keyframe-led group on catch-up', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });
