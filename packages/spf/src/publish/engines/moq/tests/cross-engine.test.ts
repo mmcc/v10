@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// The real playback engine, from the `@videojs/spf/moq` entry module —
-// parent-owned reference implementation; used, never modified.
-import { createMoqEngine, type MoqEngineSignals } from '../../../../playback/engines/moq/index';
 import { createRelayHub } from '../../../tests/helpers/relay-hub';
 import { createMoqPublishEngine } from '../engine';
+import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-harness';
 
 /**
  * Cross-engine regression suite: the real publish engine (DEFAULT encoder
@@ -36,34 +34,6 @@ const disposals: (() => void)[] = [];
 const CAMERA_SIZE = { width: 320, height: 240 } as const;
 const SCREEN_SIZE = { width: 480, height: 360 } as const;
 
-/** An animated canvas track, optionally with oscillator audio, standing in for a device. */
-function makeSyntheticStream(size: { width: number; height: number }, withAudio: boolean): MediaStream {
-  const canvas = document.createElement('canvas');
-  canvas.width = size.width;
-  canvas.height = size.height;
-  const context = canvas.getContext('2d')!;
-  let hue = 0;
-  const paint = setInterval(() => {
-    hue = (hue + 11) % 360;
-    context.fillStyle = `hsl(${hue}, 80%, 50%)`;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-  }, 33);
-  disposals.push(() => clearInterval(paint));
-  const stream = canvas.captureStream(30);
-
-  if (withAudio) {
-    const audioContext = new AudioContext({ sampleRate: 48_000 });
-    disposals.push(() => void audioContext.close().catch(() => undefined));
-    const oscillator = audioContext.createOscillator();
-    const destination = audioContext.createMediaStreamDestination();
-    oscillator.connect(destination);
-    oscillator.start();
-    void audioContext.resume().catch(() => undefined);
-    for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
-  }
-  return stream;
-}
-
 /**
  * Stub capture: camera and mic each get their own video-only / audio-only
  * stream (dispatched on which of `video`/`audio` the constraints ask for —
@@ -72,36 +42,15 @@ function makeSyntheticStream(size: { width: number; height: number }, withAudio:
  */
 function installCaptureStubs(): void {
   vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints?: MediaStreamConstraints) => {
-    if (constraints?.audio) return makeSyntheticStream(CAMERA_SIZE, true); // audio-only ask: the mic pipeline
-    return makeSyntheticStream(CAMERA_SIZE, false); // video-only ask: the camera pipeline
+    if (constraints?.audio) return makeSyntheticStream(CAMERA_SIZE, true, disposals); // audio-only ask: the mic pipeline
+    return makeSyntheticStream(CAMERA_SIZE, false, disposals); // video-only ask: the camera pipeline
   });
   const mediaDevices = navigator.mediaDevices as MediaDevices & {
     getDisplayMedia: (constraints?: unknown) => Promise<MediaStream>;
   };
-  vi.spyOn(mediaDevices, 'getDisplayMedia').mockImplementation(async () => makeSyntheticStream(SCREEN_SIZE, false));
-}
-
-/** A playback engine subscribed to the catalog, with a canvas + audio context wired up. */
-function createSubscriber(hub: ReturnType<typeof createRelayHub>) {
-  let signals!: MoqEngineSignals;
-  const player = createMoqEngine({
-    createMoqTransport: () => hub.connectSubscriber(),
-    onSignalsReady: (refs) => {
-      signals = refs;
-    },
-  });
-  disposals.push(() => void player.destroy());
-
-  const canvas = document.createElement('canvas');
-  const audioContext = new AudioContext({ sampleRate: 48_000 });
-  disposals.push(() => void audioContext.close().catch(() => undefined));
-  void audioContext.resume().catch(() => undefined);
-  signals.context.renderSurface.set(canvas);
-  signals.context.audioContext.set(audioContext);
-  signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-  signals.state.loadActivated.set(true);
-
-  return { player, signals, canvas };
+  vi.spyOn(mediaDevices, 'getDisplayMedia').mockImplementation(async () =>
+    makeSyntheticStream(SCREEN_SIZE, false, disposals)
+  );
 }
 
 describe('publish engine ↔ playback engine (relay hub)', () => {
@@ -149,7 +98,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     );
 
     // ── Late join: the real playback engine, subscribed to the catalog ───
-    const { canvas: renderCanvas, signals } = createSubscriber(hub);
+    const { canvas: renderCanvas, signals } = createSubscriber(hub, disposals);
 
     // Bug regression: the late joiner must reach decoded, PRESENTED video
     // from a post-join keyframe with the default codec config.

@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// The real playback engine, from the `@videojs/spf/moq` entry module —
-// parent-owned reference implementation; used, never modified.
-import { createMoqEngine, type MoqEngineSignals } from '../../../../playback/engines/moq/index';
 import { createRelayHub } from '../../../tests/helpers/relay-hub';
 import { createMoqPublishEngine } from '../engine';
+import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-harness';
 
 /**
  * Cross-engine regression for the mic-switch A/V divergence: switching
@@ -29,34 +27,6 @@ const disposals: (() => void)[] = [];
 
 const CAMERA_SIZE = { width: 320, height: 240 } as const;
 
-/** An animated canvas track, optionally with oscillator audio, standing in for a device. */
-function makeSyntheticStream(withAudio: boolean): MediaStream {
-  const canvas = document.createElement('canvas');
-  canvas.width = CAMERA_SIZE.width;
-  canvas.height = CAMERA_SIZE.height;
-  const context = canvas.getContext('2d')!;
-  let hue = 0;
-  const paint = setInterval(() => {
-    hue = (hue + 11) % 360;
-    context.fillStyle = `hsl(${hue}, 80%, 50%)`;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-  }, 33);
-  disposals.push(() => clearInterval(paint));
-  const stream = canvas.captureStream(30);
-
-  if (withAudio) {
-    const audioContext = new AudioContext({ sampleRate: 48_000 });
-    disposals.push(() => void audioContext.close().catch(() => undefined));
-    const oscillator = audioContext.createOscillator();
-    const destination = audioContext.createMediaStreamDestination();
-    oscillator.connect(destination);
-    oscillator.start();
-    void audioContext.resume().catch(() => undefined);
-    for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
-  }
-  return stream;
-}
-
 /**
  * Stub capture: every mic acquisition — the initial one and each
  * device-switch re-acquisition — gets a FRESH audio-only stream on its own
@@ -64,8 +34,8 @@ function makeSyntheticStream(withAudio: boolean): MediaStream {
  */
 function installCaptureStubs(): void {
   vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints?: MediaStreamConstraints) => {
-    if (constraints?.audio) return makeSyntheticStream(true); // audio-only ask: the mic pipeline
-    return makeSyntheticStream(false); // video-only ask: the camera pipeline
+    if (constraints?.audio) return makeSyntheticStream(CAMERA_SIZE, true, disposals); // audio-only ask: the mic pipeline
+    return makeSyntheticStream(CAMERA_SIZE, false, disposals); // video-only ask: the camera pipeline
   });
 }
 
@@ -105,24 +75,7 @@ describe('publish engine ↔ playback engine (mic-switch timeline continuity)', 
     );
 
     // The real playback engine, joined to the live broadcast.
-    let signals!: MoqEngineSignals;
-    const player = createMoqEngine({
-      createMoqTransport: () => hub.connectSubscriber(),
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
-    });
-    disposals.push(() => void player.destroy());
-
-    const renderCanvas = document.createElement('canvas');
-    const playerAudioContext = new AudioContext({ sampleRate: 48_000 });
-    disposals.push(() => void playerAudioContext.close().catch(() => undefined));
-    void playerAudioContext.resume().catch(() => undefined);
-    signals.context.renderSurface.set(renderCanvas);
-    signals.context.audioContext.set(playerAudioContext);
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
-
+    const { signals } = createSubscriber(hub, disposals);
     await vi.waitFor(
       () => {
         expect(signals.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(
@@ -144,10 +97,12 @@ describe('publish engine ↔ playback engine (mic-switch timeline continuity)', 
       if (Number.isFinite(ts) && ts !== wireTimestamps[wireTimestamps.length - 1]) wireTimestamps.push(ts);
     }, 10);
     disposals.push(() => clearInterval(sampler));
+    await vi.waitFor(() => expect(wireTimestamps.length).toBeGreaterThan(0), { timeout: 15_000 });
 
     // ── The regression: wallclock steps 30 s BACK, then the mic switches ──
     const audioActorBefore = publisher.context.audioEncoderActor.get();
     const audioObjectsBefore = hub.objectCount('audio');
+    const samplesBeforeSwitch = wireTimestamps.length;
     const realNow = Date.now.bind(Date);
     vi.spyOn(Date, 'now').mockImplementation(() => realNow() - 30_000);
 
@@ -168,6 +123,11 @@ describe('publish engine ↔ playback engine (mic-switch timeline continuity)', 
       },
       { timeout: 15_000, interval: 100 }
     );
+
+    // The sampler really spans both epochs — without post-switch samples
+    // the monotonicity assertions below would pass vacuously.
+    expect(samplesBeforeSwitch).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(wireTimestamps.length).toBeGreaterThan(samplesBeforeSwitch), { timeout: 15_000 });
 
     // …and the published timeline never stepped: on-wire timestamps stay
     // monotone across the epoch boundary (a fresh anchor would land them

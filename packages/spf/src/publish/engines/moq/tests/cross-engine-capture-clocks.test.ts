@@ -1,10 +1,8 @@
 /// <reference path="../../../behaviors/dom/mediastream-track-processor.d.ts" />
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// The real playback engine, from the `@videojs/spf/moq` entry module —
-// parent-owned reference implementation; used, never modified.
-import { createMoqEngine, type MoqEngineSignals } from '../../../../playback/engines/moq/index';
 import { createRelayHub } from '../../../tests/helpers/relay-hub';
 import { createMoqPublishEngine } from '../engine';
+import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-harness';
 
 /**
  * Cross-engine regression for the field late-join failure against
@@ -46,32 +44,6 @@ const VIDEO_AHEAD_US = 2 * 60 * 60 * 1_000_000;
 // The publish-engines project runs in Chromium, where the API exists.
 const RealTrackProcessor = MediaStreamTrackProcessor!;
 
-/** An animated canvas track + oscillator audio, standing in for a device. */
-function makeSyntheticStream(size: { width: number; height: number }): MediaStream {
-  const canvas = document.createElement('canvas');
-  canvas.width = size.width;
-  canvas.height = size.height;
-  const context = canvas.getContext('2d')!;
-  let hue = 0;
-  const paint = setInterval(() => {
-    hue = (hue + 11) % 360;
-    context.fillStyle = `hsl(${hue}, 80%, 50%)`;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-  }, 33);
-  disposals.push(() => clearInterval(paint));
-  const stream = canvas.captureStream(30);
-
-  const audioContext = new AudioContext({ sampleRate: 48_000 });
-  disposals.push(() => void audioContext.close().catch(() => undefined));
-  const oscillator = audioContext.createOscillator();
-  const destination = audioContext.createMediaStreamDestination();
-  oscillator.connect(destination);
-  oscillator.start();
-  void audioContext.resume().catch(() => undefined);
-  for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
-  return stream;
-}
-
 /**
  * Read one frame off each capture pipeline to measure this environment's
  * video-vs-audio capture-clock offset, so the injected skew lands video
@@ -79,7 +51,7 @@ function makeSyntheticStream(size: { width: number; height: number }): MediaStre
  * are.
  */
 async function measureAudioMinusVideoBaseUs(): Promise<number> {
-  const stream = makeSyntheticStream(CAMERA_SIZE);
+  const stream = makeSyntheticStream(CAMERA_SIZE, true, disposals);
   const videoReader = new RealTrackProcessor<VideoFrame>({
     track: stream.getVideoTracks()[0]!,
   }).readable.getReader();
@@ -133,7 +105,9 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
   });
 
   it('late-joining playback presents video aligned with the audio master clock despite skewed capture clocks', async () => {
-    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async () => makeSyntheticStream(CAMERA_SIZE));
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async () =>
+      makeSyntheticStream(CAMERA_SIZE, true, disposals)
+    );
     // Video capture two hours ahead of audio capture — the field polarity:
     // decoded video sits "in the future" of the audio master clock.
     installSkewedTrackProcessor((await measureAudioMinusVideoBaseUs()) + VIDEO_AHEAD_US);
@@ -168,23 +142,7 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
       { timeout: 15_000, interval: 100 }
     );
 
-    let signals!: MoqEngineSignals;
-    const player = createMoqEngine({
-      createMoqTransport: () => hub.connectSubscriber(),
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
-    });
-    disposals.push(() => void player.destroy());
-
-    const renderCanvas = document.createElement('canvas');
-    const playerAudioContext = new AudioContext({ sampleRate: 48_000 });
-    disposals.push(() => void playerAudioContext.close().catch(() => undefined));
-    void playerAudioContext.resume().catch(() => undefined);
-    signals.context.renderSurface.set(renderCanvas);
-    signals.context.audioContext.set(playerAudioContext);
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    const { canvas: renderCanvas, signals } = createSubscriber(hub, disposals);
 
     // The audio leg comes up first (largest-object join) and owns the
     // master clock from then on — the exact regime that starved video in
