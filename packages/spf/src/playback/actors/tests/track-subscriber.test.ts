@@ -134,6 +134,36 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  // The edge is what join anchors and the latency controller's depth are
+  // computed from. A publisher that replaces its capture source mid-stream
+  // re-anchors that track's timestamps; if the re-anchor lands *behind* the
+  // old timeline, a lifetime high-water mark would keep serving the departed
+  // timeline's edge forever (the new timeline never climbs past it).
+  it('resets the delivery edge when a frame lands a whole timeline step behind it', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onObject?.(locObject(41, 0, 10_000_000));
+    handlers.onObject?.(locObject(41, 1, 10_020_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_020_000);
+
+    // Jitter-window reorder: a slightly older frame does not move the edge.
+    handlers.onObject?.(locObject(42, 0, 10_010_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(10_020_000);
+
+    // Timeline reset: a frame a whole discontinuity step behind adopts the
+    // new timeline as the edge instead of being absorbed as a reorder.
+    handlers.onObject?.(locObject(43, 0, 3_000_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(3_000_000);
+
+    // …and the edge rises normally on the new timeline from there.
+    handlers.onObject?.(locObject(43, 1, 3_020_000));
+    expect(subscriber.snapshot.get().context.newestTimestampUs).toBe(3_020_000);
+
+    subscriber.destroy();
+  });
+
   it('skips to the latest keyframe-led group on catch-up', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });

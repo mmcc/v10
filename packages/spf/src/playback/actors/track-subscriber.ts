@@ -26,6 +26,7 @@
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
 import type { MoqTrack } from '../../media/moq/parse-catalog';
+import { TIMELINE_DISCONTINUITY_US } from '../../media/moq/timeline';
 import type { LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
 import {
   isRetryablePublishDoneStatus,
@@ -277,6 +278,18 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     lastDrained !== undefined &&
     (groupId < lastDrained.groupId || (groupId === lastDrained.groupId && objectId <= lastDrained.objectId));
 
+  // The delivery edge after a frame lands: rises with newer frames,
+  // tolerates the (group, object)-window reorder a jitter buffer exists to
+  // absorb, and **resets when a frame lands a whole timeline step behind
+  // it**. A publisher that replaces its capture source mid-stream
+  // re-anchors that track's timestamps; an edge held as a lifetime
+  // high-water mark would keep serving the departed timeline to every
+  // consumer — join anchors, the latency controller's depth — for as long
+  // as the new timeline takes to climb past it, which a backward re-anchor
+  // never does.
+  const nextNewestTimestampUs = (edgeUs: number | undefined, frameUs: number): number =>
+    edgeUs === undefined || frameUs > edgeUs || edgeUs - frameUs > TIMELINE_DISCONTINUITY_US ? frameUs : edgeUs;
+
   const inner = createTransitionActor<TrackSubscriberContext, SubscriberMessage>(
     { status: 'pending', hasDecodableFrame: false, frameCount: 0 },
     (context, message) => {
@@ -290,7 +303,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             status: context.status === 'pending' ? 'active' : context.status,
             hasDecodableFrame: context.hasDecodableFrame || frame.isKey,
             frameCount: frames.length,
-            newestTimestampUs: Math.max(context.newestTimestampUs ?? frame.timestampUs, frame.timestampUs),
+            newestTimestampUs: nextNewestTimestampUs(context.newestTimestampUs, frame.timestampUs),
             oldestTimestampUs: frames[0]?.timestampUs,
             latestGroupId: Math.max(context.latestGroupId ?? frame.groupId, frame.groupId),
             arrivals: { seq: ++sampleSeq, totalBytes: message.totalBytes, totalDurationMs: message.totalDurationMs },

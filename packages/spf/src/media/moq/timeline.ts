@@ -212,3 +212,24 @@ export function preferredTargetLatencySeconds(
 export function joinAnchorUs(newestTimestampUs: number, targetLatencySeconds: number): number {
   return newestTimestampUs - targetLatencySeconds * MICROSECONDS_PER_SECOND;
 }
+
+/**
+ * Media-time step beyond which two readings of one broadcast are on
+ * different timelines — a timeline reset — rather than a gap, a reorder,
+ * or ordinary cross-track skew within one.
+ *
+ * Nothing in MoQ/LOC promises a track's timestamps are continuous for the
+ * life of a subscription: a publisher whose capture source is replaced
+ * mid-stream re-anchors that track's timeline (its encoder anchors
+ * capture time to wallclock once per capture pipeline), a latency
+ * catch-up skips groups, and wallclock anchoring itself can step. Every
+ * consumer that compares media times across such a step — renderer
+ * clocks, delivery edges, join anchors — needs the same notion of "too
+ * far to be the same timeline", or one of them re-anchors while another
+ * keeps serving numbers from the departed timeline.
+ *
+ * One second: comfortably above jitter-buffer reorder and cross-track
+ * delivery skew (~a group), comfortably below the multi-second steps a
+ * source switch or clock step produces.
+ */
+export const TIMELINE_DISCONTINUITY_US = 1_000_000;
