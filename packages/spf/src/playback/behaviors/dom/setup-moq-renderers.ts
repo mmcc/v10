@@ -49,7 +49,12 @@ import { createMachineReactor } from '../../../core/reactors/create-machine-reac
 import { computed, peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import { toAudioDecoderConfig, toVideoDecoderConfig } from '../../../media/moq/codec-mapping';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
-import { joinAnchorUs, preferredTargetLatencySeconds, resolveTargetLatencySeconds } from '../../../media/moq/timeline';
+import {
+  joinAnchorUs,
+  preferredTargetLatencySeconds,
+  resolveTargetLatencySeconds,
+  TIMELINE_DISCONTINUITY_US,
+} from '../../../media/moq/timeline';
 import {
   type AudioContextLike,
   type AudioRendererActor,
@@ -170,6 +175,17 @@ function makeEdgeTargetUs(
  * With no video clock — an audio-only broadcast — the anchor stays absent and the
  * oldest-buffered default stands, which is right: nothing else is steering, and
  * there is no second timeline to agree with.
+ *
+ * **Unless the video clock is a whole timeline step ahead of the audio
+ * delivery edge.** The forward clamp assumes the two tracks share a
+ * timeline; a publisher that re-anchors the audio timeline on a capture
+ * source switch breaks that, and the video clock — still on the departed
+ * timeline — then sits past everything the new timeline will deliver for
+ * a long time (a backward re-anchor: forever). Clamping onto it would
+ * discard every arriving audio frame unheard. A video clock more than
+ * `TIMELINE_DISCONTINUITY_US` past the audio *edge* (the newest frame
+ * delivered, so the furthest any same-timeline clock could plausibly
+ * read) is therefore ignored, and the audio edge anchors alone.
  */
 function makeAudioJoinAnchor(
   subscriberSignal: ReadonlySignal<TrackSubscriberActor | undefined>,
@@ -178,13 +194,23 @@ function makeAudioJoinAnchor(
   latency: LatencyControlConfig,
   videoRendererSignal: ReadonlySignal<VideoRendererActor | undefined>
 ): (() => number | undefined) | undefined {
-  const edgeTargetUs = makeEdgeTargetUs(subscriberSignal, targetLatencySignal, adaptiveTargetLatencySignal, latency);
-  if (!edgeTargetUs) return undefined;
+  if (!latency.joinAtEdge) return undefined;
   return () => {
-    const anchorUs = edgeTargetUs();
+    const subscriber = peek(subscriberSignal);
+    const newestTimestampUs = subscriber?.snapshot.get().context.newestTimestampUs;
     const videoClockUs = peek(videoRendererSignal)?.getClockTimeUs();
-    if (anchorUs === undefined) return videoClockUs;
-    return videoClockUs !== undefined && videoClockUs > anchorUs ? videoClockUs : anchorUs;
+    if (newestTimestampUs === undefined) return videoClockUs;
+    // Same resolution `syncLatency` and `makeEdgeTargetUs` perform, from
+    // the same input slots — the clocks and the controller aim at one number.
+    const targetSeconds = resolveTargetLatencySeconds(
+      preferredTargetLatencySeconds(peek(targetLatencySignal), peek(adaptiveTargetLatencySignal)),
+      subscriber?.track.moq.targetLatency,
+      latency.defaultTargetLatency
+    );
+    const anchorUs = joinAnchorUs(newestTimestampUs, targetSeconds);
+    if (videoClockUs === undefined) return anchorUs;
+    if (videoClockUs - newestTimestampUs > TIMELINE_DISCONTINUITY_US) return anchorUs;
+    return videoClockUs > anchorUs ? videoClockUs : anchorUs;
   };
 }
 

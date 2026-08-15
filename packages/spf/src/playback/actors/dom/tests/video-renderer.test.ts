@@ -394,6 +394,75 @@ describe('createVideoRendererActor', () => {
     renderer.destroy();
   });
 
+  // A publisher re-anchors a track's timeline when its capture source is
+  // replaced; only the switched track steps, so the audio master clock can
+  // land a whole timeline step behind every video frame — and stay there,
+  // both advancing at 1×. Holding for it would freeze video exactly the
+  // step behind live for the rest of the stream while audio plays on.
+  it('stands down from a master clock a timeline step behind the frames it holds', async () => {
+    const frames = await encodeTestFrames(10);
+    const EDGE_US = frames[frames.length - 1]!.timestampUs;
+    const TARGET_BACK_US = 100_000;
+    // A foreign timeline far behind every frame (frames run 0..~300ms).
+    const MASTER_US = -5_000_000;
+
+    const canvas = document.createElement('canvas');
+    const renderer = createVideoRendererActor({
+      canvas,
+      getClockTimeUs: () => MASTER_US,
+      getTargetClockUs: () => EDGE_US - TARGET_BACK_US,
+    });
+
+    renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+
+    // The foreign master is treated as absent: the self-clock anchors at
+    // this track's own delivery edge and presentation proceeds, instead of
+    // every frame holding "early" forever against the departed timeline.
+    await vi.waitFor(
+      () => {
+        const { lastPresentedTimestampUs } = renderer.snapshot.get().context;
+        expect(lastPresentedTimestampUs).toBeDefined();
+        expect(lastPresentedTimestampUs!).toBeGreaterThanOrEqual(EDGE_US - TARGET_BACK_US - FRAME_DURATION_US);
+      },
+      { timeout: 5000 }
+    );
+    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(EDGE_US - TARGET_BACK_US - FRAME_DURATION_US);
+
+    renderer.destroy();
+  });
+
+  // A same-timeline catch-up skip can show the foreign-master gap
+  // transiently: it jumps both jitter buffers, and the master follows only
+  // once the audio renderer's schedule horizon reopens. Standing down
+  // inside that window would trade a clean drop-late race under the
+  // re-anchored master for a clock hop.
+  it('holds through a transient foreign-master window instead of standing down', async () => {
+    const frames = await encodeTestFrames(10);
+    const canvas = document.createElement('canvas');
+    // The freshly skipped-to frames sit a whole step past the master…
+    let masterUs = -5_000_000;
+    const renderer = createVideoRendererActor({ canvas, getClockTimeUs: () => masterUs });
+
+    renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
+    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesDecoded).toBeGreaterThan(0), {
+      timeout: 5000,
+    });
+
+    // …but inside the confirm window the frames keep holding for it.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(renderer.snapshot.get().context.lastPresentedTimestampUs).toBeUndefined();
+
+    // The master lands on the frames' timeline (the audio side re-anchored
+    // after the joint skip): slaved presentation resumes directly.
+    masterUs = frames[1]!.timestampUs + 1;
+    await vi.waitFor(
+      () => expect(renderer.snapshot.get().context.lastPresentedTimestampUs).toBe(frames[1]!.timestampUs),
+      { timeout: 5000 }
+    );
+
+    renderer.destroy();
+  });
+
   it('self-clock re-anchors at the delivery edge across a catch-up discontinuity', async () => {
     const frames = await encodeTestFrames(6);
     // The catch-up skip kept a keyframe-led group starting at JUMP_US and
