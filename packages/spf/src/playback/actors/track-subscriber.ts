@@ -245,9 +245,18 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   // its own cadence can recognise a new measurement — see `arrivalJitter`
   // and `resetArrivalBaseline`.
   let offsetEpoch = 0;
+  // Wall time of the envelope's own last sample. Not `lastArrivalMs`: the
+  // throughput baseline advances on *every* admitted arrival, including
+  // departed-epoch stragglers the envelope skips, and decaying by the
+  // straggler-to-frame sliver instead of the whole inter-sample interval
+  // would hold stale bounds (and the adaptive target) up longer than the
+  // path deserves.
+  let offsetLastSampleMs: number | undefined;
 
-  const sampleArrivalOffset = (nowMs: number, timestampUs: number, elapsedMs: number | undefined): void => {
+  const sampleArrivalOffset = (nowMs: number, timestampUs: number): void => {
     const offsetMs = nowMs - timestampUs / 1000;
+    const elapsedMs = offsetLastSampleMs === undefined ? 0 : nowMs - offsetLastSampleMs;
+    offsetLastSampleMs = nowMs;
     if (offsetMinMs === undefined) {
       offsetMinMs = offsetMs;
       offsetMaxMs = offsetMs;
@@ -257,7 +266,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     // Relax both bounds toward the sample, then let the sample itself
     // push whichever bound it is outside of. Relaxing first keeps a bound
     // from being pinned by a value it has already been pulled past.
-    const relax = 1 - Math.exp(-(elapsedMs ?? 0) / ARRIVAL_ENVELOPE_TAU_MS);
+    const relax = 1 - Math.exp(-elapsedMs / ARRIVAL_ENVELOPE_TAU_MS);
     offsetMinMs += (offsetMs - offsetMinMs) * relax;
     offsetMaxMs += (offsetMs - offsetMaxMs) * relax;
     if (offsetMs < offsetMinMs) offsetMinMs = offsetMs;
@@ -433,7 +442,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     // A departed epoch's straggler is a real arrival (the throughput totals
     // above keep it) but its media time is on another timeline, so its
     // offset would register the timeline step as network jitter.
-    if (onEdgeTimeline) sampleArrivalOffset(now, frame.timestampUs, elapsedMs);
+    if (onEdgeTimeline) sampleArrivalOffset(now, frame.timestampUs);
     inner.send({
       type: 'frame-buffered',
       frame,
@@ -500,6 +509,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
    */
   const resetArrivalBaseline = (): void => {
     lastArrivalMs = undefined;
+    offsetLastSampleMs = undefined;
     offsetMinMs = undefined;
     offsetMaxMs = 0;
     offsetSamples = 0;
