@@ -30,7 +30,7 @@ import { SimpleMoqVideoElement } from '@videojs/html/media/simple-moq-video';
 import type { MediaPublishStats } from '@videojs/media';
 import { CustomMediaElement } from '@videojs/media/dom/custom-media-element';
 import type { MoqPublishMediaOptions } from '@videojs/spf/moq-publish';
-import { MoqPublishMedia } from '@videojs/spf/moq-publish';
+import { MoqPublishMedia } from '@videojs/spf/moq-publish-video';
 import { FakePublishMedia } from './fake-media';
 import { createPublisherLoopbackRelay, type PublisherLoopbackRelay } from './loopback-relay';
 

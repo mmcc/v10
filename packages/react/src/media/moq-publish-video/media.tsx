@@ -1,7 +1,8 @@
 'use client';
 
 import type { MoqPublishMediaProps } from '@videojs/spf/moq-publish';
-import { MoqPublishMedia, moqPublishMediaDefaultProps } from '@videojs/spf/moq-publish';
+import { moqPublishMediaDefaultProps } from '@videojs/spf/moq-publish';
+import { MoqPublishMedia } from '@videojs/spf/moq-publish-video';
 import type { ReactNode, VideoHTMLAttributes } from 'react';
 import { forwardRef } from 'react';
 import { useAttachMedia } from '../../utils/use-attach-media';

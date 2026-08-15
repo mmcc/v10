@@ -1,0 +1,11 @@
+{
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "exactOptionalPropertyTypes": false,
+    "declarationDir": "../../../types/publish/adapters"
+  },
+  "references": [{ "path": "../../../../utils" }, { "path": "../../../../media" }, { "path": "../engines/moq" }],
+  "include": ["./**/*.ts"]
+}

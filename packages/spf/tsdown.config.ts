@@ -11,6 +11,7 @@ const createConfig = (mode: PackageBuildMode): UserConfig => ({
     'media-tracks': 'src/media/media-tracks/index.ts',
     moq: 'src/playback/engines/moq/index.ts',
     'moq-publish': 'src/publish/engines/moq/index.ts',
+    'moq-publish-video': 'src/publish/adapters/moq-publish-video/index.ts',
     'hls-audio': 'src/playback/adapters/hls-audio/index.ts',
     'hls-background-video': 'src/playback/adapters/hls-background-video/index.ts',
     'hls-video': 'src/playback/adapters/hls-video/index.ts',

@@ -1,5 +1,5 @@
 import { HTMLVideoElementHost } from '@videojs/media/dom/video-host';
-import { MoqPublishMediaMixin } from './adapter';
+import { MoqPublishMediaMixin } from '../../engines/moq/adapter';
 
 const MoqPublishMediaBase = MoqPublishMediaMixin(HTMLVideoElementHost);
 

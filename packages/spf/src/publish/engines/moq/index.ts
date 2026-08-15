@@ -33,4 +33,3 @@ export type {
   VideoEncodeTuning,
 } from './engine';
 export { createMoqPublishEngine } from './engine';
-export { MoqPublishMedia } from './media';

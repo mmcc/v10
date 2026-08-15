@@ -48,6 +48,11 @@
       "development": "./dist/dev/moq-publish.js",
       "default": "./dist/default/moq-publish.js"
     },
+    "./moq-publish-video": {
+      "types": "./dist/dev/moq-publish-video.d.ts",
+      "development": "./dist/dev/moq-publish-video.js",
+      "default": "./dist/default/moq-publish-video.js"
+    },
     "./hls-background-video": {
       "types": "./dist/dev/hls-background-video.d.ts",
       "development": "./dist/dev/hls-background-video.js",
