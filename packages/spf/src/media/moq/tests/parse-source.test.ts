@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { decodeNamespaceName, encodeNamespaceName, isMoqSourceUrl, parseMoqSource } from '../parse-source';
+import {
+  composeMoqSource,
+  decodeNamespaceName,
+  encodeNamespaceName,
+  isMoqSourceUrl,
+  parseMoqSource,
+} from '../parse-source';
 
 describe('parseMoqSource', () => {
   it('parses the msf-01 §11.1.3 catalog example', () => {
@@ -104,5 +110,63 @@ describe('isMoqSourceUrl', () => {
   it('matches only moqt URLs', () => {
     expect(isMoqSourceUrl('moqt://example.com/live#msf:a--catalog')).toBe(true);
     expect(isMoqSourceUrl('https://example.com/live.m3u8')).toBe(false);
+  });
+});
+
+describe('composeMoqSource', () => {
+  it('composes a catalog source that round-trips through parseMoqSource', () => {
+    const url = composeMoqSource('https://relay.example.com', 'customer/room/42', { token: 'tok.abc_1-2' });
+    expect(url).toBe('moqt://relay.example.com/#msf:customer-room-42--catalog&c4m=tok.abc_1-2');
+    expect(parseMoqSource(url)).toMatchObject({
+      connectUrl: 'https://relay.example.com/',
+      namespace: ['customer', 'room', '42'],
+      trackName: 'catalog',
+      c4mToken: 'tok.abc_1-2',
+    });
+  });
+
+  it('accepts moqt origins, bare hosts, and case-insensitive schemes', () => {
+    expect(composeMoqSource('moqt://relay.example.com', 'a/b')).toBe('moqt://relay.example.com/#msf:a-b--catalog');
+    expect(composeMoqSource('relay.example.com:4443', 'a/b')).toBe('moqt://relay.example.com:4443/#msf:a-b--catalog');
+    expect(composeMoqSource('HTTPS://relay.example.com', 'a/b')).toBe('moqt://relay.example.com/#msf:a-b--catalog');
+  });
+
+  it('preserves the origin path and query the session identity includes', () => {
+    expect(composeMoqSource('https://relay.example.com/live?region=sjc', 'a/b')).toBe(
+      'moqt://relay.example.com/live?region=sjc#msf:a-b--catalog'
+    );
+  });
+
+  it('escapes namespace fields and tracks outside the literal set', () => {
+    const url = composeMoqSource('relay.example.com', 'customer/room-2', { trackName: 'hi res' });
+    expect(url).toBe('moqt://relay.example.com/#msf:customer-room.2d2--hi.20res');
+    expect(parseMoqSource(url)).toMatchObject({
+      namespace: ['customer', 'room-2'],
+      trackName: 'hi res',
+    });
+  });
+
+  it('accepts a pre-split tuple for fields containing a literal slash', () => {
+    const url = composeMoqSource('relay.example.com', ['a/b', 'c']);
+    expect(parseMoqSource(url).namespace).toEqual(['a/b', 'c']);
+  });
+
+  it('rejects empty origins, non-derivable schemes, fragments, and empty namespaces', () => {
+    expect(() => composeMoqSource('', 'a/b')).toThrow(/empty/);
+    expect(() => composeMoqSource('http://relay.example.com', 'a/b')).toThrow(/not a moqt or https/);
+    expect(() => composeMoqSource('moqt://relay.example.com/#msf:a--catalog', 'a/b')).toThrow(/fragment/);
+    expect(() => composeMoqSource('relay.example.com', '//')).toThrow(/empty/);
+    expect(() => composeMoqSource('relay.example.com', [])).toThrow(/empty/);
+  });
+
+  it('rejects an empty field in a pre-split tuple instead of composing an unparseable identifier', () => {
+    // ['a', '', 'b'] would encode as 'a--b', colliding with the '--' name
+    // delimiter — and dropping the field would name a different broadcast.
+    expect(() => composeMoqSource('relay.example.com', ['a', '', 'b'])).toThrow(/non-empty/);
+  });
+
+  it('percent-encodes token characters the fragment parser decodes back', () => {
+    const url = composeMoqSource('relay.example.com', 'a', { token: 'a&b=c#d' });
+    expect(parseMoqSource(url).c4mToken).toBe('a&b=c#d');
   });
 });
