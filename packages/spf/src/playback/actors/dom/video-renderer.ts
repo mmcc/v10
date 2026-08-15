@@ -134,6 +134,16 @@ const DEFAULT_TICK_INTERVAL_MS = 8;
  * stand down from rather than a position to hold for.
  */
 const DISCONTINUITY_THRESHOLD_US = TIMELINE_DISCONTINUITY_US;
+/**
+ * How long the foreign-master geometry must persist before the renderer
+ * stands down to its self-clock. A same-timeline catch-up skip shows the
+ * same gap transiently: it jumps both jitter buffers, but the master
+ * follows only once the audio renderer's schedule horizon (~4 × its 50ms
+ * margin) reopens and it re-anchors onto the skipped-to timeline. 250ms
+ * outlives that window; a genuine timeline step persists indefinitely and
+ * only pays this as a slightly longer freeze before recovery.
+ */
+const FOREIGN_MASTER_CONFIRM_MS = 250;
 const DEFAULT_CLOCK_SLEW_RATE = 0.05;
 const DEFAULT_CLOCK_SLEW_TOLERANCE_US = 50_000;
 /**
@@ -246,6 +256,11 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
    * tolerance band banks budget and the next correction lands as a jump.
    */
   let lastSlewWallMs: number | null = null;
+  /**
+   * Wall time the foreign-master geometry was first observed, `undefined`
+   * while the master is adopted (or absent). See `FOREIGN_MASTER_CONFIRM_MS`.
+   */
+  let foreignMasterSinceMs: number | undefined;
 
   const closeDecoder = (): void => {
     if (decoder && decoder.state !== 'closed') decoder.close();
@@ -413,17 +428,35 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
     // (master ahead of every held frame) stays slaved: it is
     // indistinguishable mid-race from a same-timeline catch-up, and that
     // race self-terminates at the edge instead of freezing.
+    //
+    // **Corroborated over `FOREIGN_MASTER_CONFIRM_MS` before standing
+    // down.** The one same-timeline geometry that can also show this gap is
+    // a catch-up skip: it jumps both jitter buffers, and the master follows
+    // the audio buffer's jump only once the audio renderer's schedule
+    // horizon reopens — until then the freshly skipped-to video frames sit
+    // a whole step past a master that is about to move. Abandoning the
+    // master inside that window trades a clean drop-late race for a clock
+    // hop, so the gap must outlive it; a real timeline step persists
+    // (both sides advance at 1×) and only pays the confirm window as a
+    // slightly longer freeze. Re-adoption stays immediate — a master back
+    // in range is trustworthy the moment it is seen.
     const oldestHeld = decoded[0];
-    if (
-      master !== undefined &&
-      (oldestHeld === undefined || oldestHeld.timestamp - master <= DISCONTINUITY_THRESHOLD_US)
-    ) {
-      // Bank no slew budget while the master clock owns presentation: if it
-      // later goes away (audio ends mid-stream), the first self-clock
-      // evaluation would otherwise cash in the whole master-clock interval
-      // as one correction.
-      lastSlewWallMs = null;
-      return master;
+    if (master !== undefined) {
+      if (oldestHeld === undefined || oldestHeld.timestamp - master <= DISCONTINUITY_THRESHOLD_US) {
+        foreignMasterSinceMs = undefined;
+        // Bank no slew budget while the master clock owns presentation: if
+        // it later goes away (audio ends mid-stream), the first self-clock
+        // evaluation would otherwise cash in the whole master-clock
+        // interval as one correction.
+        lastSlewWallMs = null;
+        return master;
+      }
+      const sinceMs = performance.now();
+      foreignMasterSinceMs ??= sinceMs;
+      if (sinceMs - foreignMasterSinceMs < FOREIGN_MASTER_CONFIRM_MS) {
+        lastSlewWallMs = null;
+        return master;
+      }
     }
     const rate = options.getPlaybackRate?.() ?? 1;
     const now = performance.now();
@@ -533,6 +566,7 @@ export function createVideoRendererActor(options: CreateVideoRendererOptions): V
       awaitingKeyframe = true;
       selfAnchor = null;
       lastSlewWallMs = null;
+      foreignMasterSinceMs = undefined;
       appliedDescription = null;
       closeDecoder();
       // `'track'` rather than `'status'`: it also ends the published playout
