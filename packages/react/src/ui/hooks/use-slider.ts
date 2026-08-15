@@ -8,10 +8,12 @@ import {
   type SliderRootProps,
   type SliderRootStyle,
   type SliderThumbProps,
+  selectControls,
 } from '@videojs/core/dom';
 import { useSnapshot } from '@videojs/store/react';
 import { isRTL } from '@videojs/utils/dom';
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useOptionalPlayer } from '../../player/context';
 import { useDestroy } from '../../utils/use-destroy';
 import { useForceRender } from '../../utils/use-force-render';
 import { useLatestRef } from '../../utils/use-latest-ref';
@@ -58,6 +60,16 @@ export function useSlider<State extends SliderState = SliderState>(
   options: UseSliderOptions<State>
 ): UseSliderReturnValue<State> {
   const optionsRef = useLatestRef(options);
+  const controls = useOptionalPlayer(selectControls);
+  const requestControlsLock = controls?.requestControlsLock;
+  const releaseControlsLockRef = useRef<(() => void) | null>(null);
+
+  const releaseControlsLock = useCallback(() => {
+    releaseControlsLockRef.current?.();
+    releaseControlsLockRef.current = null;
+  }, []);
+
+  useEffect(() => releaseControlsLock, [releaseControlsLock]);
 
   const rootElementRef = useRef<HTMLElement | null>(null);
   const thumbElementRef = useRef<HTMLElement | null>(null);
@@ -78,8 +90,14 @@ export function useSlider<State extends SliderState = SliderState>(
       adjustPercent: optionsRef.current.adjustPercent,
       onValueChange: (percent) => optionsRef.current.onValueChange?.(percent),
       onValueCommit: (percent) => optionsRef.current.onValueCommit?.(percent),
-      onDragStart: () => optionsRef.current.onDragStart?.(),
-      onDragEnd: () => optionsRef.current.onDragEnd?.(),
+      onDragStart: () => {
+        releaseControlsLockRef.current ??= requestControlsLock?.() ?? null;
+        optionsRef.current.onDragStart?.();
+      },
+      onDragEnd: () => {
+        releaseControlsLock();
+        optionsRef.current.onDragEnd?.();
+      },
     };
 
     return createSlider(stableOptions);

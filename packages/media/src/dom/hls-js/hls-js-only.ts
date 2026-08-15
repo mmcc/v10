@@ -10,13 +10,14 @@ import type {
 } from '../../core/types';
 import { HTMLVideoElementHost } from '../video-host';
 import { HlsJsMediaAirPlayMixin } from './airplay-bridge';
+import { setupDrm } from './drm';
 import { HlsJsMediaErrorsMixin } from './errors';
 import { HlsJsMediaLiveMixin } from './live';
 import { HlsJsMediaMediaTracksMixin } from './media-tracks';
 import { HlsJsMediaMetadataTracksMixin } from './metadata-tracks';
 import { HlsJsMediaPreloadMixin } from './preload';
 import { HlsJsMediaStreamTypeMixin } from './stream-type';
-import { HlsJsMediaTextTracksMixin } from './text-tracks';
+import { HlsJsMediaTextTracksMixin, withPreservedTextTracks } from './text-tracks';
 
 export const defaultHlsConfig: Partial<HlsConfig> = {
   backBufferLength: 30,
@@ -27,15 +28,22 @@ export const defaultHlsConfig: Partial<HlsConfig> = {
   autoStartLoad: false,
 };
 
+export interface HlsJsOnlyMediaParams {
+  /** Options forwarded to the hls.js constructor, merged over {@link defaultHlsConfig}. */
+  config: Partial<HlsConfig>;
+}
+
 class HlsJsOnlyMediaBase extends HTMLVideoElementHost implements MediaEngineHost<Hls, HTMLVideoElement> {
   #engine: Hls | null = null;
 
-  constructor(params: { config: Partial<HlsConfig> }) {
+  constructor(params: HlsJsOnlyMediaParams) {
     super();
     this.#engine = new Hls({
       ...defaultHlsConfig,
       ...params.config,
     });
+
+    setupDrm(this.#engine);
   }
 
   get engine() {
@@ -47,16 +55,18 @@ class HlsJsOnlyMediaBase extends HTMLVideoElementHost implements MediaEngineHost
   }
 
   set src(src: string) {
-    this.#engine?.loadSource(src);
+    // Attaching, detaching, and loading a source each reset every text track on
+    // the element, sideloaded ones included. See `withPreservedTextTracks`.
+    withPreservedTextTracks(this.target as HTMLVideoElement | null, () => this.#engine?.loadSource(src));
   }
 
   attach(target: HTMLVideoElement) {
     super.attach(target);
-    this.#engine?.attachMedia(target);
+    withPreservedTextTracks(target, () => this.#engine?.attachMedia(target));
   }
 
   detach() {
-    this.#engine?.detachMedia();
+    withPreservedTextTracks(this.target as HTMLVideoElement | null, () => this.#engine?.detachMedia());
     super.detach();
   }
 
