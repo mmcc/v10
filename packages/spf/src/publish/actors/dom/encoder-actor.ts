@@ -27,7 +27,11 @@
  * first encoded frame to the shared wallclock (Unix-epoch microseconds,
  * LOC's absent-timescale timebase) and shifts every output by that
  * constant — intra-track pacing is capture-exact, and cross-track error
- * is bounded by the tracks' first-frame delivery jitter.
+ * is bounded by the tracks' first-frame delivery jitter. One actor is one
+ * *epoch* of its track's published timeline: `setupEncoderActors` passes
+ * each kind's actors a shared `TrackTimeline` so a rebuilt actor
+ * continues the previous epoch's clock domain instead of opening a fresh
+ * wallclock anchor (see the `TrackTimeline` doc below).
  *
  * The reactive snapshot context is the counters `trackPublishStats`
  * samples. Its shape is mirrored structurally by that DOM-free behavior
@@ -123,9 +127,17 @@ export interface EncoderActorOptions {
   /**
    * Shared wallclock the first frame's timestamp is rebased onto, in
    * microseconds since the Unix epoch (see the module doc). Injectable
-   * for deterministic tests; defaults to `Date.now() * 1000`.
+   * for deterministic tests; defaults to `Date.now() * 1000`. Feeds the
+   * default `timeline`; ignored when a `timeline` is given.
    */
   nowUs?: () => number;
+  /**
+   * The track's published timeline this actor stamps an epoch of.
+   * `setupEncoderActors` passes one per kind so the clock domain survives
+   * actor rebuilds; defaults to a private single-epoch timeline (a fresh
+   * wallclock anchor).
+   */
+  timeline?: TrackTimeline;
   /**
    * Sink-routing label for this actor's chunks — independent of the codec
    * kind, since camera and screen are both `'video'` on the wire but must
@@ -136,6 +148,73 @@ export interface EncoderActorOptions {
 }
 
 export const DEFAULT_MAX_QUEUE_DEPTH = 60;
+
+// =============================================================================
+// Track timeline
+// =============================================================================
+
+/** Clock seams a track timeline reads; injectable for deterministic tests. */
+export interface TrackTimelineClocks {
+  /** Wallclock in microseconds since the Unix epoch; defaults to `Date.now() * 1000`. */
+  nowUs?: () => number;
+  /** Monotonic clock in microseconds; defaults to `performance.now() * 1000`. */
+  monotonicNowUs?: () => number;
+}
+
+/**
+ * One track's published clock domain, outliving the encoder actors that
+ * stamp into it.
+ *
+ * An actor pins one rebase offset for its whole life (one *epoch* of the
+ * track's timeline), so an actor rebuild — a capture-source switch, an
+ * encoding change — would otherwise open a fresh wallclock anchor,
+ * silently discarding the skew the old anchor had accumulated
+ * (first-frame delivery staleness, capture-vs-wallclock drift, NTP
+ * steps). The discarded skew lands on the wire as a raw timestamp step on
+ * one track of an otherwise healthy broadcast — *backward* whenever it
+ * exceeds the real acquisition gap — and once two tracks' timelines
+ * diverge, exact A/V correspondence is unrecoverable downstream.
+ *
+ * Sharing one timeline across a kind's successive actors keeps the
+ * domain: a new epoch anchors at the previous epoch's last recorded
+ * timestamp plus the *monotonic* time since it — the real acquisition
+ * gap, preserved as a gap (butt-joining it would desync the switched
+ * track against the surviving ones by the gap length) and immune to
+ * wallclock steps landing between epochs. The trade-off: the carried
+ * skew keeps absolute wallclock error in the published timestamps, which
+ * only `now − timestamp` glass-to-glass estimates see — playback latency
+ * control is buffer-depth-based and unaffected.
+ */
+export interface TrackTimeline {
+  /**
+   * The rebase offset for a new epoch whose first input frame carries
+   * `captureTimestampUs`: the first epoch anchors that frame to the
+   * shared wallclock; every later epoch continues the previous one (see
+   * the interface doc).
+   */
+  anchorOffsetUs(captureTimestampUs: number): number;
+  /** Record an input frame's published-domain timestamp for the epoch. */
+  recordFrame(publishedTimestampUs: number): void;
+}
+
+export function createTrackTimeline(clocks: TrackTimelineClocks = {}): TrackTimeline {
+  const nowUs = clocks.nowUs ?? (() => Date.now() * 1000);
+  const monotonicNowUs = clocks.monotonicNowUs ?? (() => performance.now() * 1000);
+  let lastFrameUs: number | undefined;
+  let lastFrameMonotonicUs: number | undefined;
+  return {
+    anchorOffsetUs(captureTimestampUs) {
+      if (lastFrameUs === undefined || lastFrameMonotonicUs === undefined) {
+        return nowUs() - captureTimestampUs;
+      }
+      return lastFrameUs + (monotonicNowUs() - lastFrameMonotonicUs) - captureTimestampUs;
+    },
+    recordFrame(publishedTimestampUs) {
+      lastFrameUs = publishedTimestampUs;
+      lastFrameMonotonicUs = monotonicNowUs();
+    },
+  };
+}
 
 // =============================================================================
 // Implementation
@@ -170,12 +249,13 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   maxQueueDepth?: number;
   onError?: (error: unknown) => void;
   nowUs?: () => number;
+  timeline?: TrackTimeline;
   sinkTrack?: EncodedChunkSinkMeta['track'];
 }): EncoderActor<Config, Frame> {
   const { track, sink, onError } = options;
   const sinkTrack = options.sinkTrack ?? (track === 'video' ? 'camera' : 'audio');
   const maxQueueDepth = options.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH;
-  const nowUs = options.nowUs ?? (() => Date.now() * 1000);
+  const timeline = options.timeline ?? createTrackTimeline({ nowUs: options.nowUs });
 
   type Message = EncoderMessage<Config, Frame> | InternalMessage;
   type Ctx = HandlerContext<EncoderActorUserState, EncoderActorCounters, () => SerialRunner>;
@@ -191,13 +271,14 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   // consumers have no use for it, so it stays out of the snapshot.
   let latestConfig: Uint8Array | undefined;
 
-  // Capture-clock → wallclock rebase constant (see the module doc).
-  // Anchored on the first frame that reaches the codec — the input side,
-  // where delivery lags capture by less than a frame, not the output side,
-  // where codec queueing would fold encode latency into the timeline.
-  // Actor lifetime matches capture-stream lifetime (`setupEncoderActors`
-  // rebuilds actors per stream), so one anchor per clock domain holds; a
-  // mid-stream reconfigure keeps it.
+  // Capture-clock → published-domain rebase constant (see the module
+  // doc), pinned by the timeline. Anchored on the first frame that
+  // reaches the codec — the input side, where delivery lags capture by
+  // less than a frame, not the output side, where codec queueing would
+  // fold encode latency into the timeline. Actor lifetime matches
+  // capture-stream lifetime (`setupEncoderActors` rebuilds actors per
+  // stream), so one anchor per clock domain holds; a mid-stream
+  // reconfigure keeps it.
   let timestampOffsetUs: number | undefined;
 
   const instance = options.create({
@@ -280,7 +361,10 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
           // Mid-stream reconfigure (WebCodecs allows it on a configured codec).
           configure,
           encode: (msg, { context, setContext }) => {
-            if (timestampOffsetUs === undefined) timestampOffsetUs = nowUs() - msg.frame.timestamp;
+            if (timestampOffsetUs === undefined) timestampOffsetUs = timeline.anchorOffsetUs(msg.frame.timestamp);
+            // Recorded before the drop path — a backpressure-dropped frame
+            // still advances the capture clock the next epoch resumes from.
+            timeline.recordFrame(msg.frame.timestamp + timestampOffsetUs);
             const keyFrame = msg.keyFrame === true;
             if (!keyFrame && instance.encodeQueueSize > maxQueueDepth) {
               msg.frame.close();

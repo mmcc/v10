@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { LOC_PROPERTY } from '../../../../media/moq/loc';
 import type { EncodedChunkLike, PackagedLocFrame } from '../../../../media/moq/loc-packaging';
-import type { EncodedChunkSinkMeta, EncoderInstance, EncoderOutputMetadata } from '../encoder-actor';
-import { createEncoderActor } from '../encoder-actor';
+import type { EncodedChunkSinkMeta, EncoderInstance, EncoderOutputMetadata, TrackTimeline } from '../encoder-actor';
+import { createEncoderActor, createTrackTimeline } from '../encoder-actor';
 
 /**
  * Description carriage contract, exercised through a stubbed codec:
@@ -37,7 +37,9 @@ function descriptionOf(
 
 const disposals: (() => void)[] = [];
 
-function setupStubbedActor(options: { nowUs?: () => number; track?: 'video' | 'audio' } = {}) {
+function setupStubbedActor(
+  options: { nowUs?: () => number; track?: 'video' | 'audio'; timeline?: TrackTimeline } = {}
+) {
   const sunk: { packaged: PackagedLocFrame; meta: EncodedChunkSinkMeta }[] = [];
   let output!: (chunk: EncodedChunkLike, metadata?: EncoderOutputMetadata) => void;
   const actor = createEncoderActor<{ id: number }, FakeFrame>({
@@ -168,6 +170,35 @@ describe('createEncoderActor', () => {
     expect(locTimestampOf(sunk[1]!.packaged)).toBe(1_000_000_033_000);
   });
 
+  it('continues one published timeline across an actor rebuild sharing a track timeline', () => {
+    let now = 1_000_000_000_000;
+    let mono = 0;
+    const timeline = createTrackTimeline({ nowUs: () => now, monotonicNowUs: () => mono });
+
+    const first = setupStubbedActor({ timeline });
+    first.actor.send({ type: 'configure', config: { id: 1 } });
+    first.actor.send({ type: 'encode', frame: makeFrame(7_200_000_000), keyFrame: true });
+    first.emit(makeChunk('key', 7_200_000_000));
+    mono = 33_000;
+    first.actor.send({ type: 'encode', frame: makeFrame(7_200_033_000) });
+    first.emit(makeChunk('delta', 7_200_033_000));
+    expect(first.sunk[1]!.meta.timestampUs).toBe(1_000_000_033_000);
+    first.actor.destroy();
+
+    // The replacement actor: a new capture source on a wildly different
+    // base, 200 ms of real (monotonic) time later, with the wallclock
+    // stepped BACK an hour in between. The new epoch continues the
+    // previous one's domain — forward by the real acquisition gap, never
+    // backward onto the stepped wallclock, never onto the new base.
+    mono = 233_000;
+    now -= 3_600_000_000;
+    const second = setupStubbedActor({ timeline });
+    second.actor.send({ type: 'configure', config: { id: 2 } });
+    second.actor.send({ type: 'encode', frame: makeFrame(42), keyFrame: true });
+    second.emit(makeChunk('key', 42));
+    expect(second.sunk[0]!.meta.timestampUs).toBe(1_000_000_233_000);
+  });
+
   it('keeps the wallclock anchor across a mid-stream reconfigure', () => {
     let now = 1_000_000_000_000;
     const { actor, sunk, emit } = setupStubbedActor({ nowUs: () => now });
@@ -184,5 +215,30 @@ describe('createEncoderActor', () => {
 
     expect(sunk[0]!.meta.timestampUs).toBe(1_000_000_000_000);
     expect(sunk[1]!.meta.timestampUs).toBe(1_000_002_000_000);
+  });
+});
+
+describe('createTrackTimeline', () => {
+  it('anchors the first epoch to the wallclock and later epochs to the previous one plus the monotonic gap', () => {
+    let now = 1_000_000_000_000;
+    let mono = 0;
+    const timeline = createTrackTimeline({ nowUs: () => now, monotonicNowUs: () => mono });
+
+    // First epoch: plain wallclock anchor (capture base two "hours" into
+    // some per-source domain), frames recorded as they publish.
+    const offset = timeline.anchorOffsetUs(7_200_000_000);
+    expect(7_200_000_000 + offset).toBe(1_000_000_000_000);
+    timeline.recordFrame(7_200_000_000 + offset);
+    mono = 500_000;
+    timeline.recordFrame(7_200_500_000 + offset);
+
+    // Between epochs: 250 ms of real (monotonic) time passes and the
+    // wallclock steps back an hour — an NTP step the new epoch must not
+    // inherit, and a real acquisition gap that must be preserved as a
+    // gap, not butt-joined away.
+    mono = 750_000;
+    now -= 3_600_000_000;
+    const nextOffset = timeline.anchorOffsetUs(42);
+    expect(42 + nextOffset).toBe(1_000_000_750_000);
   });
 });

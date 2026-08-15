@@ -212,6 +212,60 @@ describe('setupEncoderActors', () => {
     cleanup();
   });
 
+  it("continues a kind's published timeline across an actor rebuild", async () => {
+    const sunk: EncodedChunkSinkMeta[] = [];
+    const chunkSink: EncodedChunkSink = (_packaged, meta) => sunk.push(meta);
+    const { state, context, cleanup } = setup({ chunkSink });
+    const first = makeCanvasStream();
+    context.cameraStream.set(first.stream);
+    state.activeEncodings.set({ camera: VP8_CONFIG });
+
+    await vi.waitFor(() => {
+      expect(context.cameraEncoderActor.get()).toBeDefined();
+    });
+    const firstActor = context.cameraEncoderActor.get()!;
+    firstActor.send({ type: 'encode', frame: new VideoFrame(first.canvas, { timestamp: 0 }), keyFrame: true });
+    firstActor.send({ type: 'flush' });
+    await vi.waitFor(() => {
+      expect(sunk).toHaveLength(1);
+    });
+
+    // The wallclock steps back an hour between the epochs (an NTP step, or
+    // simply the skew a long-lived anchor accumulated): a rebuilt actor
+    // opening a FRESH wallclock anchor would publish the switched source an
+    // hour behind the surviving tracks.
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() - 3_600_000);
+
+    // A capture-source switch: new stream identity, same kind — the rebuild
+    // this behavior owns.
+    const second = makeCanvasStream();
+    context.cameraStream.set(second.stream);
+    await vi.waitFor(() => {
+      expect(context.cameraEncoderActor.get()).toBeDefined();
+      expect(context.cameraEncoderActor.get()).not.toBe(firstActor);
+    });
+    const secondActor = context.cameraEncoderActor.get()!;
+    // A new source stamps on its own capture base too.
+    secondActor.send({
+      type: 'encode',
+      frame: new VideoFrame(second.canvas, { timestamp: 500_000_000 }),
+      keyFrame: true,
+    });
+    secondActor.send({ type: 'flush' });
+    await vi.waitFor(() => {
+      expect(sunk).toHaveLength(2);
+    });
+
+    // One clock domain across the rebuild: forward by the real acquisition
+    // gap (test-scale: well under 30 s) — never the stepped wallclock, never
+    // the new capture base.
+    expect(sunk[1]!.timestampUs).toBeGreaterThan(sunk[0]!.timestampUs);
+    expect(sunk[1]!.timestampUs - sunk[0]!.timestampUs).toBeLessThan(30_000_000);
+
+    cleanup();
+  });
+
   it('threads the chunk sink through to the actors, labeling camera vs screen', async () => {
     const sunk: EncodedChunkSinkMeta[] = [];
     const chunkSink: EncodedChunkSink = (_packaged, meta) => sunk.push(meta);

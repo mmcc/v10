@@ -13,6 +13,15 @@
  * on the per-kind narrowing below: `activeEncodings` is one merged object,
  * so tracking it whole would make every kind's write everyone's rebuild.
  *
+ * Because this behavior owns the rebuilds, it also owns each kind's
+ * published-timeline continuity across them: one `TrackTimeline` per kind
+ * outlives every actor rebuilt below, so a replacement actor continues
+ * the track's clock domain — advanced by the real acquisition gap —
+ * instead of opening a fresh wallclock anchor that would step the track's
+ * published timestamps against the surviving tracks (the on-wire cause of
+ * "audio jumps and A/V drifts after switching mics"; see the
+ * `TrackTimeline` doc in `encoder-actor.ts`).
+ *
  * Per-type setup-actor convention: downstream behaviors (`pumpMediaFrames`
  * dispatches frames, `trackPublishStats` samples counters) only read the
  * slots — they never create the actors. Unlike `setupTrackPublishers`
@@ -33,6 +42,7 @@ import { computed, type ReadonlySignal, type Signal } from '../../../core/signal
 import type { AudioEncoderActor } from '../../actors/dom/audio-encoder';
 import { createAudioEncoderActor } from '../../actors/dom/audio-encoder';
 import type { EncodedChunkSink } from '../../actors/dom/encoder-actor';
+import { createTrackTimeline } from '../../actors/dom/encoder-actor';
 import type { VideoEncoderActor } from '../../actors/dom/video-encoder';
 import { createVideoEncoderActor } from '../../actors/dom/video-encoder';
 import type { PublishErrorFacts } from './acquire-capture-source';
@@ -113,6 +123,9 @@ function setupEncoderActorsSetup({
     actorSlot: Signal<VideoEncoderActor | undefined>
   ): Reactor<SetupEncoderActorsFsmState | 'destroying' | 'destroyed'> {
     const encoding = encodingFor(encodingKey);
+    // Outlives the actors rebuilt in the effects below — the kind's
+    // published timeline stays one clock domain across rebuilds.
+    const timeline = createTrackTimeline();
     return createMachineReactor<SetupEncoderActorsFsmState>({
       initial: 'preconditions-unmet',
       monitor: () => (stream.get() && encoding.get() ? 'encoder-ready' : 'preconditions-unmet'),
@@ -129,7 +142,7 @@ function setupEncoderActorsSetup({
           effects: () => {
             const videoConfig = encoding.get()!;
             stream.get();
-            const actor = createVideoEncoderActor(sink, { ...errorOptions, sinkTrack: encodingKey });
+            const actor = createVideoEncoderActor(sink, { ...errorOptions, sinkTrack: encodingKey, timeline });
             actor.send({ type: 'configure', config: videoConfig });
             actorSlot.set(actor);
             return () => {
@@ -146,6 +159,9 @@ function setupEncoderActorsSetup({
   const screenCluster = runVideoCluster('screen', context.screenStream, context.screenEncoderActor);
 
   const audioEncoding = encodingFor('audio');
+  // As in `runVideoCluster`: one published timeline across mic rebuilds —
+  // the mic is the kind whose capture source is actually switched live.
+  const audioTimeline = createTrackTimeline();
   const audioCluster = createMachineReactor<SetupEncoderActorsFsmState>({
     initial: 'preconditions-unmet',
     monitor: () => (context.micStream.get() && audioEncoding.get() ? 'encoder-ready' : 'preconditions-unmet'),
@@ -155,7 +171,7 @@ function setupEncoderActorsSetup({
         effects: () => {
           const audioConfig = audioEncoding.get()!;
           context.micStream.get();
-          const actor = createAudioEncoderActor(sink, errorOptions);
+          const actor = createAudioEncoderActor(sink, { ...errorOptions, timeline: audioTimeline });
           actor.send({ type: 'configure', config: audioConfig });
           context.audioEncoderActor.set(actor);
           return () => {
