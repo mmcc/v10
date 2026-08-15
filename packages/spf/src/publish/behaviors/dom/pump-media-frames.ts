@@ -213,6 +213,13 @@ function pumpMediaFramesSetup({
 
 export const pumpMediaFrames = defineBehavior({
   stateKeys: ['publishError'],
-  contextKeys: ['cameraStream', 'screenStream', 'micStream', 'cameraEncoderActor', 'screenEncoderActor', 'audioEncoderActor'],
+  contextKeys: [
+    'cameraStream',
+    'screenStream',
+    'micStream',
+    'cameraEncoderActor',
+    'screenEncoderActor',
+    'audioEncoderActor',
+  ],
   setup: pumpMediaFramesSetup,
 });

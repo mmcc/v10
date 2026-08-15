@@ -20,7 +20,8 @@ export interface PublishButtonProps {
  * and React `PublishButton` adapters from the `publish` and `capture-source`
  * store slices.
  */
-export type PublishButtonMediaState = MediaPublishState & Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState'>;
+export type PublishButtonMediaState = MediaPublishState &
+  Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState'>;
 
 export interface PublishButtonState extends ButtonState {
   /** Current publish session lifecycle. */
