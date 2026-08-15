@@ -23,6 +23,7 @@
  * designed so that swap is internal.
  */
 import { createTransitionActor, type TransitionActor } from '../../../core/actors/create-transition-actor';
+import { TIMELINE_DISCONTINUITY_US } from '../../../media/moq/timeline';
 import type { JitterFrame } from '../track-subscriber';
 
 // =============================================================================
@@ -120,12 +121,18 @@ const DEFAULT_TICK_INTERVAL_MS = 10;
  */
 const MAX_PENDING_DECODES = 4;
 /**
- * Media-time jump beyond which incoming audio is a timeline reset (latency
- * catch-up skipped groups) rather than a gap in the same timeline. Small
- * gaps map to scheduled silence; a reset re-anchors the schedule so the
- * jump is not converted into an equal stretch of silence.
+ * Media-time jump beyond which incoming audio is a timeline reset rather
+ * than a gap or reorder within the same timeline (see
+ * `TIMELINE_DISCONTINUITY_US`). **Both directions.** Forward: a latency
+ * catch-up skipped groups, or the publisher's capture gapped — scheduling
+ * the jump as silence would keep the latency it was meant to shed.
+ * Backward: the publisher re-anchored the track's timeline (a capture
+ * source switch) — butt-joining it would keep audio playing seamlessly
+ * while the master clock silently steps backwards by the jump, holding
+ * the slaved video renderer "early" on every frame it ever receives
+ * again. Either way the schedule re-anchors on the jumped-to timeline.
  */
-const DISCONTINUITY_THRESHOLD_US = 1_000_000;
+const DISCONTINUITY_THRESHOLD_US = TIMELINE_DISCONTINUITY_US;
 
 export function createAudioRendererActor(options: CreateAudioRendererOptions): AudioRendererActor {
   const { audioContext } = options;
@@ -158,6 +165,25 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   let lastEnqueuedUs: number | undefined;
   /** The schedule has no anchor yet: the next one should be placed at the live edge. */
   let needsJoinAnchor = true;
+  /**
+   * The pending anchor placement follows a mid-stream discontinuity rather
+   * than a track (re)start. The distinction decides what to do when the
+   * whole buffer is already *ahead* of the anchor: a fresh join starts
+   * playout immediately (time-to-first-audio wins; the controller builds
+   * depth later), but a re-join was already playing at depth — landing at
+   * arrival instead of at the anchor collapses playout to the live edge,
+   * which the controller then spends tens of pitch-shifted seconds
+   * rebuilding.
+   */
+  let rejoinAnchorArmed = false;
+  /**
+   * Media time the next scheduled buffer should be placed relative to: the
+   * landed re-join anchor. Consumed by the first buffer scheduled onto an
+   * empty schedule — it starts `(timestamp − scheduleFromUs)` later than
+   * arrival, with a bookkeeping segment spanning the gap so the clock
+   * advances smoothly from the anchor instead of stepping to the buffer.
+   */
+  let scheduleFromUs: number | undefined;
 
   /**
    * One scheduled buffer's context-time span mapped to media time. The
@@ -226,8 +252,10 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     decoder = null;
     // A fresh decoder starts a fresh input timeline: the next chunk fed is
     // not a jump within the old one, so it must not re-trigger the
-    // discontinuity restart that closed this decoder.
+    // discontinuity restart that closed this decoder — and a gap placement
+    // landed against the old timeline must not span into the new one.
     lastEnqueuedUs = undefined;
+    scheduleFromUs = undefined;
     stopAll();
   };
 
@@ -250,11 +278,29 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       source.dequeue();
       dropped++;
     }
-    // Nothing behind the edge (yet): a relay's group replay arrives as a
-    // burst, so stay armed — the buffer's live edge may still be moving.
-    if (dropped === 0) return;
+    if (dropped > 0) {
+      needsJoinAnchor = false;
+      rejoinAnchorArmed = false;
+      // The buffer head now sits at the anchor, so scheduling it on
+      // arrival lands the clock there with the target depth behind it.
+      scheduleFromUs = undefined;
+      closeDecoder();
+      return;
+    }
+    // Nothing behind the edge (yet). At a fresh join, stay armed: a relay's
+    // group replay arrives as a burst (oldest first), so the buffer's live
+    // edge may still be moving.
+    if (!rejoinAnchorArmed) return;
+    // A discontinuity re-join whose whole buffer is already ahead of the
+    // anchor — no replay is coming (bursts arrive oldest-first, and the
+    // oldest is already past the anchor). Land the anchor by *placement*
+    // instead of by trimming: the head schedules at its distance from the
+    // anchor, so playout resumes at the target depth rather than racing to
+    // the live edge and pitch-rebuilding from zero.
+    if (!source.peek()) return;
+    scheduleFromUs = anchorUs;
+    rejoinAnchorArmed = false;
     needsJoinAnchor = false;
-    closeDecoder();
   };
 
   const scheduleAudioData = (data: AudioData): void => {
@@ -268,10 +314,13 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       }
 
       const currentRate = rate();
-      // A forward jump past the discontinuity threshold means the source
-      // skipped ahead (latency catch-up): scheduling it as silence would
-      // keep the latency it was meant to shed — and re-trigger the
-      // catch-up loop forever. Drop the stale schedule and anchor fresh.
+      // A jump past the discontinuity threshold in either direction means
+      // the source is on a different timeline — skipped ahead (latency
+      // catch-up: scheduling it as silence would keep the latency it was
+      // meant to shed, and re-trigger the catch-up loop forever) or
+      // re-anchored behind (a publisher source switch: butt-joining it
+      // would step the master clock backwards under the slaved video).
+      // Drop the stale schedule and anchor fresh.
       //
       // "Fresh" has to mean *through the join anchor*, the same way the dequeue
       // path above re-arms it. Clearing the schedule alone left `needsJoinAnchor`
@@ -296,9 +345,10 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       // timestamp rebasing the dequeue check exists for. Anything relying on it
       // firing has no coverage; treat it as unexercised.
       const previous = segments[segments.length - 1];
-      if (previous && data.timestamp - segmentEndMediaUs(previous) > DISCONTINUITY_THRESHOLD_US) {
+      if (previous && Math.abs(data.timestamp - segmentEndMediaUs(previous)) > DISCONTINUITY_THRESHOLD_US) {
         stopAll();
         needsJoinAnchor = true;
+        rejoinAnchorArmed = true;
         return;
       }
 
@@ -308,9 +358,31 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       // context-time silence. Late arrivals (and the first buffer) start
       // no earlier than the context clock — the timeline shifts forward
       // from there rather than trying to make up lost time.
-      const idealStart = last
-        ? last.endCtx + Math.max(0, data.timestamp - segmentEndMediaUs(last)) / 1_000_000 / currentRate
-        : audioContext.currentTime + scheduleMargin;
+      let idealStart: number;
+      if (last) {
+        idealStart = last.endCtx + Math.max(0, data.timestamp - segmentEndMediaUs(last)) / 1_000_000 / currentRate;
+      } else {
+        idealStart = audioContext.currentTime + scheduleMargin;
+        // A landed re-join anchor places this first buffer at its distance
+        // from the anchor rather than at arrival, resuming playout at the
+        // target depth. The bookkeeping segment spanning the gap plays
+        // nothing (nothing is scheduled over it) but lets the clock advance
+        // smoothly from the anchor — so the slaved video renderer plays
+        // through the gap instead of seeing the clock step to the buffer.
+        if (scheduleFromUs !== undefined) {
+          const gapS = Math.max(0, data.timestamp - scheduleFromUs) / 1_000_000 / currentRate;
+          if (gapS > 0) {
+            segments.push({
+              startCtx: idealStart,
+              endCtx: idealStart + gapS,
+              mediaUs: scheduleFromUs,
+              rate: currentRate,
+            });
+            idealStart += gapS;
+          }
+          scheduleFromUs = undefined;
+        }
+      }
       const startAt = Math.max(idealStart, audioContext.currentTime);
 
       const node = audioContext.createBufferSource();
@@ -363,12 +435,15 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
         // from the scheduler. Restart the decoder at the discontinuity so
         // outputs re-base to the jumped-to timeline (every audio frame is
         // independently decodable, so a restart is glitch-free).
-        if (lastEnqueuedUs !== undefined && next.timestampUs - lastEnqueuedUs > DISCONTINUITY_THRESHOLD_US) {
+        if (lastEnqueuedUs !== undefined && Math.abs(next.timestampUs - lastEnqueuedUs) > DISCONTINUITY_THRESHOLD_US) {
           closeDecoder();
-          // The catch-up skip that produced the jump landed on a group
-          // start, still up to one GOP behind the live edge — re-place the
-          // anchor before feeding the jumped-to timeline.
+          // Re-place the anchor before feeding the jumped-to timeline: a
+          // forward jump (catch-up skip) landed on a group start still up
+          // to one GOP behind the live edge, and a backward jump (publisher
+          // re-anchor) is a whole new timeline whose edge the anchor must
+          // be re-read against.
           needsJoinAnchor = true;
+          rejoinAnchorArmed = true;
           continue;
         }
         const active = ensureDecoder();
@@ -412,6 +487,9 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       source = missingConfig ? null : nextSource;
       decoderConfig = nextConfig;
       needsJoinAnchor = true;
+      // A track (re)start is a fresh join, not a re-join: time-to-first-audio
+      // wins over landing at depth (see `rejoinAnchorArmed`).
+      rejoinAnchorArmed = false;
       closeDecoder();
       if (missingConfig) {
         inner.send({
