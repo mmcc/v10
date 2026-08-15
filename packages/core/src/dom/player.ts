@@ -21,7 +21,9 @@ import type {
   MediaTimeState,
   MediaVolumeState,
 } from '@videojs/media';
-import type { AnySlice, Slice, Store, UnionSliceState } from '@videojs/store';
+import type { AnySlice, InferSliceSourceState, Slice, Store, UnionSliceState } from '@videojs/store';
+import type { Simplify, UnionToIntersection } from '@videojs/utils/types';
+import type { metadataFeature } from './store/features/metadata';
 
 export interface MediaContainer extends HTMLElement {}
 
@@ -30,11 +32,76 @@ export interface PlayerTarget {
   container: MediaContainer | null;
 }
 
-export type PlayerFeature<State> = Slice<PlayerTarget, State>;
+type ConfigValue = string | null | undefined;
 
-export type AnyPlayerFeature = AnySlice<PlayerTarget>;
+type ActionInput<Action> = Action extends (...args: infer Arguments) => unknown
+  ? Arguments extends [infer Value]
+    ? Value
+    : never
+  : never;
 
-export type PlayerStore<Features extends AnyPlayerFeature[] = []> = Store<PlayerTarget, UnionSliceState<Features>>;
+type ConfigActionKey<State> = [State] extends [never]
+  ? PropertyKey
+  : {
+      [Key in keyof State]-?: [ActionInput<State[Key]>] extends [ConfigValue]
+        ? [ConfigValue] extends [ActionInput<State[Key]>]
+          ? Key
+          : never
+        : never;
+    }[keyof State];
+
+type ConfigStateKey<State> = [State] extends [never] ? PropertyKey : keyof State;
+
+/**
+ * Maps provider inputs to feature-owned state actions and detach-persistent keys.
+ * Pass the feature's source-state type when declaring a config map so both keys
+ * are checked and each action accepts nullable text, including absent input.
+ */
+export type PlayerFeatureConfig<State = never> = Record<
+  string,
+  {
+    /** Private source-state action that accepts `string | null | undefined`. */
+    action: ConfigActionKey<State>;
+    /** Provider-owned source-state key whose value survives media detach. */
+    state: ConfigStateKey<State>;
+  }
+>;
+
+export type PlayerFeature<State, Derived = object, Config extends PlayerFeatureConfig = Record<never, never>> = Slice<
+  PlayerTarget,
+  State,
+  Derived
+> & {
+  config?: Config;
+};
+
+export type AnyPlayerFeature = AnySlice<PlayerTarget> & { config?: PlayerFeatureConfig };
+
+export type InferPlayerFeatureConfig<Feature extends AnyPlayerFeature> = Feature extends {
+  config?: infer Config extends PlayerFeatureConfig;
+}
+  ? {
+      [Key in keyof Config]: Config[Key]['action'] extends keyof InferSliceSourceState<Feature>
+        ? ActionInput<InferSliceSourceState<Feature>[Config[Key]['action']]>
+        : never;
+    }
+  : object;
+
+export type UnionPlayerConfig<Features extends readonly AnyPlayerFeature[]> = Features extends readonly []
+  ? object
+  : Simplify<UnionToIntersection<InferPlayerFeatureConfig<Features[number]>>>;
+
+declare const PLAYER_CONFIG: unique symbol;
+
+export type PlayerStore<Features extends AnyPlayerFeature[] = []> = Store<PlayerTarget, UnionSliceState<Features>> & {
+  readonly [PLAYER_CONFIG]?: UnionPlayerConfig<Features>;
+};
+
+export type InferPlayerConfig<Store> = Store extends {
+  readonly [PLAYER_CONFIG]?: infer Config;
+}
+  ? Config
+  : object;
 
 export type AnyPlayerStore = Store<PlayerTarget, object>;
 
@@ -57,6 +124,7 @@ export type VideoFeatures = [
   PlayerFeature<MediaControlsState>,
   PlayerFeature<MediaTextTrackState>,
   PlayerFeature<MediaErrorState>,
+  typeof metadataFeature,
 ];
 
 export type AudioFeatures = [
@@ -67,6 +135,7 @@ export type AudioFeatures = [
   PlayerFeature<MediaSourceState>,
   PlayerFeature<MediaBufferState>,
   PlayerFeature<MediaErrorState>,
+  typeof metadataFeature,
 ];
 
 // TODO: Define background video features (e.g., playback, source, buffer)
@@ -91,6 +160,7 @@ export type LiveVideoFeatures = [
   PlayerFeature<MediaTextTrackState>,
   PlayerFeature<MediaErrorState>,
   PlayerFeature<MediaLiveState>,
+  typeof metadataFeature,
 ];
 
 /**
@@ -107,6 +177,7 @@ export type LiveAudioFeatures = [
   PlayerFeature<MediaBufferState>,
   PlayerFeature<MediaErrorState>,
   PlayerFeature<MediaLiveState>,
+  typeof metadataFeature,
 ];
 
 /**

@@ -7,6 +7,7 @@ import type {
   MediaCaptureDevicesCapability,
   MediaCaptureSourceCapability,
   MediaCaptureToggleCapability,
+  MediaContentDataCapability,
   MediaErrorCapability,
   MediaLiveCapability,
   MediaPauseCapability,
@@ -115,6 +116,11 @@ export function isMediaStreamTypeCapable(value: unknown): value is MediaStreamTy
   return !isUndefined(media.streamType);
 }
 
+export function isMediaContentDataCapable(value: unknown): value is MediaContentDataCapability {
+  if (!isObject(value)) return false;
+  return !isUndefined((value as Record<string, unknown>).contentData);
+}
+
 export function isMediaLiveCapable(value: unknown): value is MediaLiveCapability {
   if (!isObject(value)) return false;
   const media = value as Record<string, unknown>;
@@ -130,9 +136,7 @@ export function isMediaPublishCapable(value: unknown): value is MediaPublishCapa
 export function isMediaCaptureSourceCapable(value: unknown): value is MediaCaptureSourceCapability {
   if (!isObject(value)) return false;
   const media = value as Record<string, unknown>;
-  return (
-    !isUndefined(media.cameraState) && !isUndefined(media.screenShareState) && 'cameraActive' in media
-  );
+  return !isUndefined(media.cameraState) && !isUndefined(media.screenShareState) && 'cameraActive' in media;
 }
 
 export function isMediaCaptureDevicesCapable(value: unknown): value is MediaCaptureDevicesCapability {

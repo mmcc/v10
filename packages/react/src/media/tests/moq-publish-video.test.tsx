@@ -1,5 +1,5 @@
 import { cleanup, render } from '@testing-library/react';
-import { MoqPublishMedia } from '@videojs/media/dom/moq-publish';
+import { MoqPublishMedia } from '@videojs/spf/moq-publish';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MoqPublishVideo } from '../moq-publish-video';

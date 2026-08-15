@@ -5,11 +5,24 @@ import {
   isMediaCaptureDevicesCapable,
   isMediaCaptureSourceCapable,
   isMediaCaptureToggleCapable,
+  isMediaContentDataCapable,
   isMediaPublishCapable,
   isMediaPublishStatsCapable,
   isMediaRemotePlaybackCapable,
   isMediaTextTrackCapable,
 } from '../predicate';
+
+describe('isMediaContentDataCapable', () => {
+  it('uses undefined as the unsupported sentinel', () => {
+    expect(isMediaContentDataCapable({})).toBe(false);
+    expect(isMediaContentDataCapable({ contentData: undefined })).toBe(false);
+    expect(isMediaContentDataCapable({ contentData: {} })).toBe(true);
+    expect(isMediaContentDataCapable({ contentData: { poster: 'poster.jpg' } })).toBe(true);
+    expect(isMediaContentDataCapable({ contentData: { title: undefined } })).toBe(true);
+    expect(isMediaContentDataCapable({ contentData: { title: null } })).toBe(true);
+    expect(isMediaContentDataCapable({ contentData: { title: '' } })).toBe(true);
+  });
+});
 
 describe('isMediaBufferCapable', () => {
   it('rejects empty time range stubs', () => {

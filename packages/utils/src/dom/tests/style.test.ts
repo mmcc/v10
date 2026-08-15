@@ -1,6 +1,99 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveCSSLength } from '../style';
+import {
+  addAnchorName,
+  getAnchorNames,
+  readCSSLength,
+  resolveCSSLength,
+  restoreInlineStyles,
+  snapshotInlineStyles,
+  withInlineStyles,
+} from '../style';
+
+describe('getAnchorNames', () => {
+  it('returns normalized anchor names', () => {
+    const el = document.createElement('button');
+
+    el.style.setProperty('anchor-name', '--menu,  --tooltip');
+
+    expect(getAnchorNames(el)).toEqual(['--menu', '--tooltip']);
+  });
+
+  it('returns no names for none', () => {
+    const el = document.createElement('button');
+
+    el.style.setProperty('anchor-name', 'none');
+
+    expect(getAnchorNames(el)).toEqual([]);
+  });
+});
+
+describe('addAnchorName', () => {
+  it('composes anchor names and cleans up only its own name', () => {
+    const el = document.createElement('button');
+    const cleanupMenu = addAnchorName(el, 'settings-menu');
+    const cleanupTooltip = addAnchorName(el, 'settings-tooltip');
+
+    expect(getAnchorNames(el)).toEqual(['--settings-menu', '--settings-tooltip']);
+
+    cleanupMenu();
+    expect(getAnchorNames(el)).toEqual(['--settings-tooltip']);
+
+    cleanupTooltip();
+    expect(getAnchorNames(el)).toEqual([]);
+  });
+
+  it('preserves a pre-existing anchor name on cleanup', () => {
+    const el = document.createElement('button');
+
+    el.style.setProperty('anchor-name', '--settings-menu');
+
+    const cleanup = addAnchorName(el, 'settings-menu');
+
+    cleanup();
+
+    expect(getAnchorNames(el)).toEqual(['--settings-menu']);
+  });
+});
+
+describe('inline style snapshots', () => {
+  it('normalizes property names and restores values and priorities', () => {
+    const element = document.createElement('div');
+    element.style.setProperty('min-width', '20px', 'important');
+    const snapshot = snapshotInlineStyles(element, ['minWidth', '--custom-size']);
+
+    element.style.setProperty('min-width', '40px');
+    element.style.setProperty('--custom-size', '10px');
+    restoreInlineStyles(element, snapshot);
+
+    expect(element.style.getPropertyValue('min-width')).toBe('20px');
+    expect(element.style.getPropertyValue('--custom-size')).toBe('');
+  });
+
+  it('restores styles when a synchronous callback throws', () => {
+    const element = document.createElement('div');
+    element.style.width = '20px';
+
+    expect(() =>
+      withInlineStyles(element, { width: '40px' }, () => {
+        expect(element.style.width).toBe('40px');
+        throw new Error('stop');
+      })
+    ).toThrow('stop');
+    expect(element.style.width).toBe('20px');
+  });
+});
+
+describe('readCSSLength', () => {
+  it('distinguishes absent values and preserves zero', () => {
+    const element = document.createElement('div');
+
+    expect(readCSSLength(element, '--size', { source: 'inline' })).toBeNull();
+
+    element.style.setProperty('--size', '0px');
+    expect(readCSSLength(element, '--size', { source: 'inline' })).toBe(0);
+  });
+});
 
 describe('resolveCSSLength', () => {
   afterEach(() => {

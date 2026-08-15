@@ -1,29 +1,17 @@
-import { createState, type State } from '@videojs/store';
+import type { State } from '@videojs/store';
 import type { MenuInput, MenuState } from '../../../core/ui/menu/menu-core';
+import { MenuCSSVars } from '../../../core/ui/menu/menu-css-vars';
 import { MenuItemDataAttrs } from '../../../core/ui/menu/menu-item-data-attrs';
+import { PopoverCSSVars } from '../../../core/ui/popover/popover-css-vars';
 import type { UIFocusEvent, UIKeyboardEvent } from '../event';
 import { createPopover, type PopoverChangeDetails, type PopoverOpenChangeReason } from '../popover/popover';
-import type { PositioningOptions } from '../popover/popover-positioning';
+import type { PositioningCSSVars, PositioningOptions } from '../popover/popover-positioning';
 import type { PopupGroup } from '../popover/popup-group';
 import type { TransitionApi } from '../transition';
 
 export type MenuOpenChangeReason = PopoverOpenChangeReason;
 
 export type MenuChangeDetails = PopoverChangeDetails;
-
-export interface NavigationEntry {
-  /** ID of the nested menu (submenu) that was pushed. */
-  menuId: string;
-  /** ID of the Trigger element that initiated the push, for focus restoration. */
-  triggerId: string;
-}
-
-export interface NavigationState {
-  /** Stack of active submenus (last = current). */
-  stack: NavigationEntry[];
-  /** Direction of the most recent navigation. */
-  direction: 'forward' | 'back';
-}
 
 export interface MenuOptions {
   transition: TransitionApi;
@@ -76,11 +64,16 @@ export function getRootPositionOptions(side: MenuState['side'], align: MenuState
   return { side, align };
 }
 
+/** Uses Popover offset inputs while publishing Menu-owned available-size outputs. */
+export const MenuPositioningCSSVars = {
+  ...PopoverCSSVars,
+  availableWidth: MenuCSSVars.availableWidth,
+  availableHeight: MenuCSSVars.availableHeight,
+} as const satisfies PositioningCSSVars;
+
 export interface MenuApi {
   /** Reactive transition state for platforms to subscribe to. */
   input: State<MenuInput>;
-  /** Reactive navigation state for submenu stack. */
-  navigationInput: State<NavigationState>;
   /** Attach to the trigger element. */
   triggerProps: MenuTriggerProps;
   /** Attach to the content element. */
@@ -93,25 +86,21 @@ export interface MenuApi {
   setContentElement: (element: HTMLElement | null) => void;
   /** Register a navigable item. Returns a cleanup function. */
   registerItem: (element: HTMLElement) => () => void;
+  /** Register a directly nested menu so it can be reset when this menu closes. */
+  registerSubmenu: (menu: MenuApi) => () => void;
   /** Programmatically highlight an item (or clear highlight with `null`). */
   highlight: (element: HTMLElement | null, options?: MenuHighlightOptions) => void;
   /** Programmatically highlight the first registered item. */
   highlightFirstItem: (options?: MenuHighlightOptions) => void;
-  /** Push a submenu onto the navigation stack. */
-  push: (menuId: string, triggerId: string) => void;
-  /** Pop the current submenu from the navigation stack. */
-  pop: () => void;
   open: (reason?: MenuOpenChangeReason) => void;
   close: (reason?: MenuOpenChangeReason) => void;
+  /** Commit the open state resolved by the platform adapter. */
+  syncOpen: (open: boolean) => void;
   destroy: () => void;
 }
 
-export function completeMenuItemSelection(menu: MenuApi, parentMenu: MenuApi | null = null): void {
-  if (parentMenu) {
-    parentMenu.pop();
-  } else {
-    menu.close();
-  }
+export function completeMenuItemSelection(menu: MenuApi): void {
+  menu.close();
 }
 
 export function createMenu(options: MenuOptions): MenuApi {
@@ -121,39 +110,40 @@ export function createMenu(options: MenuOptions): MenuApi {
   let highlightedItem: HTMLElement | null = null;
   let triggerElement: HTMLElement | null = null;
   let contentElement: HTMLElement | null = null;
+  const submenus = new Set<MenuApi>();
   let typeaheadBuffer = '';
   let typeaheadTimer: ReturnType<typeof setTimeout> | null = null;
   let openRafId = 0;
   let lastCloseReason: MenuOpenChangeReason | null = null;
 
-  const navigationState = createState<NavigationState>({ stack: [], direction: 'forward' });
-
-  function push(menuId: string, triggerId: string): void {
-    const stack = navigationState.current.stack;
-    const topEntry = stack[stack.length - 1];
-
-    if (topEntry?.menuId === menuId) return;
-
-    navigationState.patch({
-      stack: [...stack, { menuId, triggerId }],
-      direction: 'forward',
-    });
+  function isItemHidden(item: HTMLElement): boolean {
+    return Boolean(item.hidden || item.hasAttribute('data-hidden') || item.getAttribute('aria-hidden') === 'true');
   }
 
-  function pop(): void {
-    const stack = navigationState.current.stack;
-
-    if (stack.length === 0) return;
-
-    navigationState.patch({
-      stack: stack.slice(0, -1),
-      direction: 'back',
-    });
+  function getNavigableItems(): HTMLElement[] {
+    return items.filter((item) => !isItemHidden(item));
   }
 
+  function getAdjacentNavigableItem(direction: 1 | -1): HTMLElement | null {
+    if (items.length === 0) return null;
+
+    const currentIndex = highlightedItem ? items.indexOf(highlightedItem) : direction === 1 ? -1 : 0;
+
+    for (let offset = 1; offset <= items.length; offset++) {
+      const index = (currentIndex + direction * offset + items.length) % items.length;
+      const candidate = items[index];
+      if (candidate && !isItemHidden(candidate)) return candidate;
+    }
+
+    return null;
+  }
   // --- Highlight ---
 
   function highlight(element: HTMLElement | null, highlightOptions?: MenuHighlightOptions): void {
+    if (element && isItemHidden(element)) {
+      if (element === highlightedItem) highlight(getAdjacentNavigableItem(1), highlightOptions);
+      return;
+    }
     if (highlightedItem === element) return;
 
     if (highlightedItem) {
@@ -188,13 +178,17 @@ export function createMenu(options: MenuOptions): MenuApi {
   }
 
   function highlightFirstItem(options?: MenuHighlightOptions): void {
-    highlight(items[0] ?? null, options);
+    highlight(getNavigableItems()[0] ?? null, options);
   }
 
   function getInitialHighlightItem(): HTMLElement | null {
+    const navigableItems = getNavigableItems();
+
     return (
-      items.find((item) => item.matches('[role="menuitemradio"][aria-checked="true"], [aria-selected="true"]')) ??
-      items[0] ??
+      navigableItems.find((item) =>
+        item.matches('[role="menuitemradio"][aria-checked="true"], [aria-selected="true"]')
+      ) ??
+      navigableItems[0] ??
       null
     );
   }
@@ -227,11 +221,12 @@ export function createMenu(options: MenuOptions): MenuApi {
     if (typeaheadTimer !== null) clearTimeout(typeaheadTimer);
     typeaheadTimer = setTimeout(clearTypeahead, 500);
 
-    const currentIdx = highlightedItem ? items.indexOf(highlightedItem) : -1;
+    const navigableItems = getNavigableItems();
+    const currentIdx = highlightedItem ? navigableItems.indexOf(highlightedItem) : -1;
 
     // Search from after the current item so repeated chars cycle through matches.
     const searchStart = currentIdx + 1;
-    const candidates = [...items.slice(searchStart), ...items.slice(0, searchStart)];
+    const candidates = [...navigableItems.slice(searchStart), ...navigableItems.slice(0, searchStart)];
 
     const needle = typeaheadBuffer.toLowerCase();
     const match = candidates.find((candidate) => {
@@ -246,6 +241,7 @@ export function createMenu(options: MenuOptions): MenuApi {
 
   const popover = createPopover({
     transition: options.transition,
+    deferOpenChanges: true,
     onOpenChange(open, details) {
       lastCloseReason = open ? null : details.reason;
       options.onOpenChange(open, details);
@@ -257,8 +253,6 @@ export function createMenu(options: MenuOptions): MenuApi {
       } else {
         clearHighlight();
         clearTypeahead();
-        // Reset navigation stack so the menu starts at root next time it opens.
-        navigationState.patch({ stack: [], direction: 'forward' });
       }
     },
     onOpenChangeComplete(open) {
@@ -280,40 +274,39 @@ export function createMenu(options: MenuOptions): MenuApi {
     onFocusOut: popover.popupProps.onFocusOut,
     onKeyDown(event) {
       const { key } = event;
+      const navigableItems = getNavigableItems();
 
       if (key !== 'Escape' && isMenuNavigationKey(event) && !event.defaultPrevented) {
         event.preventDefault();
       }
 
-      if (items.length === 0) return;
+      if (navigableItems.length === 0) return;
 
       switch (key) {
         case 'ArrowDown': {
           event.preventDefault();
-          const currentIndex = highlightedItem ? items.indexOf(highlightedItem) : -1;
-          highlight(items[(currentIndex + 1) % items.length] ?? null);
+          highlight(getAdjacentNavigableItem(1));
           break;
         }
         case 'ArrowUp': {
           event.preventDefault();
-          const currentIndex = highlightedItem ? items.indexOf(highlightedItem) : 0;
-          highlight(items[(currentIndex <= 0 ? items.length : currentIndex) - 1] ?? null);
+          highlight(getAdjacentNavigableItem(-1));
           break;
         }
         case 'Home': {
           event.preventDefault();
-          highlight(items[0] ?? null);
+          highlight(navigableItems[0] ?? null);
           break;
         }
         case 'End': {
           event.preventDefault();
-          highlight(items[items.length - 1] ?? null);
+          highlight(navigableItems[navigableItems.length - 1] ?? null);
           break;
         }
         case 'Enter':
         case ' ': {
           event.preventDefault();
-          highlightedItem?.click();
+          if (highlightedItem && navigableItems.includes(highlightedItem)) highlightedItem.click();
           break;
         }
         default: {
@@ -379,16 +372,29 @@ export function createMenu(options: MenuOptions): MenuApi {
     };
   }
 
+  function registerSubmenu(menu: MenuApi): () => void {
+    submenus.add(menu);
+    return () => submenus.delete(menu);
+  }
+
+  function syncOpen(open: boolean): void {
+    if (!open) {
+      for (const submenu of submenus) submenu.close('imperative-action');
+    }
+
+    popover.syncOpen(open);
+  }
+
   function destroy(): void {
     cancelAnimationFrame(openRafId);
     openRafId = 0;
     clearTypeahead();
+    submenus.clear();
     popover.destroy();
   }
 
   return {
     input: popover.input as State<MenuInput>,
-    navigationInput: navigationState,
     // Menus open/close on trigger click — forward the popover's click handler.
     // Hover and focus-based open are disabled (openOnHover not set).
     triggerProps: {
@@ -405,12 +411,12 @@ export function createMenu(options: MenuOptions): MenuApi {
     setTriggerElement,
     setContentElement,
     registerItem,
+    registerSubmenu,
     highlight,
     highlightFirstItem,
-    push,
-    pop,
     open: popover.open,
     close: popover.close,
+    syncOpen,
     destroy,
   };
 }

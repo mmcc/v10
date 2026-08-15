@@ -1,5 +1,5 @@
 import { CustomMediaElement } from '@videojs/media/dom/custom-media-element';
-import { MoqPublishMedia } from '@videojs/media/dom/moq-publish';
+import { MoqPublishMedia } from '@videojs/spf/moq-publish';
 import { MediaAttachMixin } from '../../store/media-attach-mixin';
 
 const MoqPublishVideoBase = MediaAttachMixin(CustomMediaElement('video', MoqPublishMedia));

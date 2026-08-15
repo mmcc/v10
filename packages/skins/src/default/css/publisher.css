@@ -66,7 +66,7 @@
    ========================================================================== */
 
 @import "./components/reset.css";
-@import "./components/root.css";
+@import "./components/container.css";
 @import "./components/surface.css";
 @import "./components/media.css";
 @import "./components/overlay.css";

@@ -8,6 +8,7 @@
   },
   "references": [
     { "path": "../../../../../utils" },
+    { "path": "../../../../../media" },
     { "path": "../../../core" },
     { "path": "../../../network" },
     { "path": "../../../media" },

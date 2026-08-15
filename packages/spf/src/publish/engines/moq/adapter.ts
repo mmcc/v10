@@ -5,9 +5,8 @@
  * `onSignalsReady`), with the publisher media-contract surface —
  * `MediaPublishCapability`, `MediaCaptureSourceCapability`,
  * `MediaCaptureDevicesCapability`, `MediaCaptureToggleCapability`,
- * `MediaPublishStatsCapability` — expressed structurally so
- * `@videojs/media` can compose it without `@videojs/spf` depending on the
- * contracts package.
+ * `MediaPublishStatsCapability` — expressed structurally so any host base
+ * class can compose it without inheriting from the contracts package.
  *
  * All members are prototype accessors/methods: `CustomMediaElement` only
  * forwards prototype accessors, so instance fields would not surface on a

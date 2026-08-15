@@ -502,6 +502,26 @@ export interface MediaPosterCapability {
 }
 
 // ----------------------------------------
+// Content metadata
+// ----------------------------------------
+
+/** A media-owned content value. `undefined` means the key is absent; `null` means it has no current value. */
+export type MediaContentValue = string | null | undefined;
+
+/** Standardized content metadata reported by a media implementation. */
+export type MediaContentData = Readonly<Record<string, MediaContentValue>>;
+
+/** Events emitted when a media implementation's content data changes. */
+export interface MediaContentDataEvents {
+  contentdatachange: EventLike;
+}
+
+/** Optional media-owned content metadata. */
+export interface MediaContentDataCapability {
+  readonly contentData: MediaContentData | undefined;
+}
+
+// ----------------------------------------
 // Video dimensions (video-only)
 // ----------------------------------------
 
@@ -750,7 +770,8 @@ export interface MediaFullEvents
     MediaErrorEvents,
     TextTrackListEvents,
     MediaStreamTypeEvents,
-    MediaLiveEvents {}
+    MediaLiveEvents,
+    MediaContentDataEvents {}
 
 export interface MediaFull<Events extends { [K in keyof Events]: EventLike } = MediaFullEvents>
   extends Media<Events>,
@@ -765,10 +786,10 @@ export interface MediaFull<Events extends { [K in keyof Events]: EventLike } = M
     MediaTextTrackCapability,
     MediaStreamTypeCapability,
     MediaLiveCapability,
+    MediaContentDataCapability,
     MediaRemotePlaybackCapability,
     MediaControlsCapability,
-    MediaAutoplayCapability,
-    MediaConfigCapability {}
+    MediaAutoplayCapability {}
 
 export interface VideoEvents extends MediaFullEvents, MediaPictureInPictureEvents, MediaVideoDimensionsEvents {}
 
@@ -804,7 +825,7 @@ export interface MediaTargetLike
     MediaAutoplayCapability,
     Partial<MediaLiveCapability>,
     Partial<MediaStreamTypeCapability>,
-    Partial<MediaConfigCapability> {
+    Partial<MediaContentDataCapability> {
   title: string;
 }
 

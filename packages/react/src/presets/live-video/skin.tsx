@@ -67,7 +67,7 @@ const Button = forwardRef<HTMLButtonElement, ComponentProps<'button'>>(function 
 });
 
 function VolumePopover(): ReactNode {
-  const volumeUnsupported = usePlayer((s) => s.volumeAvailability === 'unsupported');
+  const volumeUnavailable = usePlayer((s) => s.volumeAvailability !== 'available');
 
   const muteButton = (
     <MuteButton className="media-button--mute" render={<Button />}>
@@ -77,7 +77,7 @@ function VolumePopover(): ReactNode {
     </MuteButton>
   );
 
-  if (volumeUnsupported) return muteButton;
+  if (volumeUnavailable) return muteButton;
 
   return (
     <Popover.Root openOnHover delay={200} closeDelay={100} side="top">
@@ -317,34 +317,37 @@ export function LiveVideoSkin(props: LiveVideoSkinProps): ReactNode {
       <Gesture type="tap" action="toggleControls" pointer="touch" />
       <Gesture type="doubletap" action="toggleFullscreen" region="center" />
 
-      {/* Input Feedback */}
-      <StatusAnnouncer />
-      <div className="media-input-feedback">
-        <VolumeIndicator.Root className="media-surface media-input-feedback-island media-input-feedback-island--volume">
-          <VolumeIndicator.Fill className="media-input-feedback-island__content">
+      {/* Input Indicators */}
+      <StatusAnnouncer className="media-sr-only" />
+      <div className="media-input-indicator-overlay">
+        <VolumeIndicator.Root className="media-surface media-volume-indicator">
+          <VolumeIndicator.Fill className="media-volume-indicator__content">
             <VolumeHighIcon className="media-icon media-icon--volume-high" />
             <VolumeLowIcon className="media-icon media-icon--volume-low" />
             <VolumeOffIcon className="media-icon media-icon--volume-off" />
-            <VolumeIndicator.Value className="media-input-feedback-island__value" />
+            <VolumeIndicator.Value className="media-volume-indicator__value" />
           </VolumeIndicator.Fill>
         </VolumeIndicator.Root>
 
         <StatusIndicator.Root
           actions={TOP_STATUS_ACTIONS}
-          className="media-surface media-input-feedback-island media-input-feedback-island--status"
+          className="media-surface media-status-indicator media-status-indicator--state"
         >
-          <div className="media-input-feedback-island__content">
+          <div className="media-status-indicator__content">
             <CaptionsOnIcon className="media-icon media-icon--captions-on" />
             <CaptionsOffIcon className="media-icon media-icon--captions-off" />
             <FullscreenEnterIcon className="media-icon media-icon--fullscreen-enter" />
             <FullscreenExitIcon className="media-icon media-icon--fullscreen-exit" />
             <PipEnterIcon className="media-icon media-icon--pip-enter" />
             <PipExitIcon className="media-icon media-icon--pip-exit" />
-            <StatusIndicator.Value className="media-input-feedback-island__value" />
+            <StatusIndicator.Value className="media-status-indicator__value" />
           </div>
         </StatusIndicator.Root>
 
-        <StatusIndicator.Root actions={CENTER_STATUS_ACTIONS} className="media-input-feedback-bubble">
+        <StatusIndicator.Root
+          actions={CENTER_STATUS_ACTIONS}
+          className="media-status-indicator media-status-indicator--playback"
+        >
           <PlayIcon className="media-icon media-icon--play" />
           <PauseIcon className="media-icon media-icon--pause" />
         </StatusIndicator.Root>

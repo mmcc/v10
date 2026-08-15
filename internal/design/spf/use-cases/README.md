@@ -9,7 +9,7 @@ date: 2026-05-21
 
 ## What this directory is for
 
-Use-case compositions are engine *variants*: the engine is composed this way to serve a specific delivery scenario. Same composition assembly + adapter pair, distinguished from the default `createSimpleHlsEngine` + `SimpleHlsMediaElement` by which behaviors are subtracted, added, swapped, or default-tuned.
+Use-case compositions are engine *variants*: the engine is composed this way to serve a specific delivery scenario. Same composition assembly + adapter pair, distinguished from the default `createHlsVideoEngine` + `HlsVideoMediaElement` by which behaviors are subtracted, added, swapped, or default-tuned.
 
 Each use case doc captures the variant assembly. Notion originally framed these as a Case-1 (Media-src composition) + Case-2 (Player composition) split — source-shape correctness versus delivery-mode choice. In practice, when both cases ship the *same* engine factory (which they do for the audio-only and video-only families), they consolidate into a single use-case doc with a *Variant-decision signal source* section that names both paths (adapter-upfront for the Case-2 framing, detect-from-parser for the Case-1 framing). When they don't share an implementation, separate docs.
 
@@ -138,7 +138,7 @@ A use case may have:
 
 Initially empty; populated as docs land. Candidates flagged in source material (bracketed per registry convention):
 
-- [`audio-only-mode-override`](./audio-only-mode-override.md) *(partial — Phase 1 landed)* — audio-only delivery. Covers both truly-audio-only HLS sources and mixed-manifest sources delivered as audio-only via the same shared engine factory (`createHlsAudioOnlyEngine`). Subsumes what Notion originally framed as separate epics #4a (Basic Audio-only) and #4b (Audio-only Mode Override).
+- [`audio-only-mode-override`](./audio-only-mode-override.md) *(partial — Phase 1 landed)* — audio-only delivery. Covers both truly-audio-only HLS sources and mixed-manifest sources delivered as audio-only via the same shared engine factory (`createHlsAudioEngine`). Subsumes what Notion originally framed as separate epics #4a (Basic Audio-only) and #4b (Audio-only Mode Override).
 - [`video-only-mode-override`](./video-only-mode-override.md) *(coarse)* — video-only delivery. Inverse-axis sibling of [`audio-only-mode-override`](./audio-only-mode-override.md); same shape. Subsumes Notion epics NEW-A (Basic Video-only) and NEW-B (Video-only Composition).
 - `[background-video]` — Mux's background-video product scenario: loop + autoplay-muted + GPU/thermal-aware caps + likely silent-video delivery. **Distinct from `video-only-mode-override`** despite shared Mux consumer context; both may share constituent features but address different delivery scenarios. *[GitHub #873](https://github.com/videojs/v10/issues/873); [`mux-background-video`](https://github.com/muxinc/mux-background-video) prior art.*
 - [`moq-live-publish`](./moq-live-publish.md) *(sketched)* — browser live ingest to a MoQ relay: the publish direction (capture → WebCodecs encode → MOQT) as its own composition family (`createMoqPublishEngine`, `publish/` peer of `playback/`) rather than a variant of a playback engine. Constituent capability: [`moq-publish`](../features/moq-publish.md).

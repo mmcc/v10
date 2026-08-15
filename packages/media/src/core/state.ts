@@ -146,6 +146,16 @@ export interface MediaStreamTypeState {
   streamType: MediaStreamType;
 }
 
+/** Resolved content metadata exposed by the player store. */
+export interface MediaMetadataState {
+  /** The resolved content title. */
+  contentTitle: string;
+  /** Set or clear the user title override. */
+  setContentTitle(value: string | null): void;
+  /** Set or clear the fallback used when neither the user nor media supplies a title. */
+  setDefaultContentTitle(value: string | null): void;
+}
+
 export interface MediaLiveState {
   /**
    * Presentation time marking the start of the Live Edge Window.
@@ -212,8 +222,15 @@ export interface MediaFullscreenState {
 export interface MediaControlsState {
   /** Whether the user has recently interacted with the player. */
   userActive: boolean;
-  /** Whether controls should be visible (userActive || paused). */
+  /** Whether controls should be visible. */
   controlsVisible: boolean;
+  /**
+   * Keep controls visible during a sustained interaction.
+   *
+   * The returned function releases the lock. Multiple concurrent locks are
+   * supported and each release function is idempotent.
+   */
+  requestControlsLock(): () => void;
   /** Toggle controls visibility. Returns the new `controlsVisible` value. */
   toggleControls(): boolean;
 }
@@ -315,7 +332,11 @@ export interface MediaTextTrackState {
   textTrackList: MediaTextTrack[];
   /** Whether captions/subtitles are currently enabled. */
   subtitlesShowing: boolean;
-  /** Toggle captions/subtitles visibility. Returns the new enabled value. */
+  /**
+   * Toggle captions/subtitles visibility. Showing restores the track that was
+   * last showing, or the first caption/subtitle track when there is none.
+   * Returns the new enabled value.
+   */
   toggleSubtitles(forceShow?: boolean): boolean;
   /** Select a captions/subtitles track by menu value, or disable with `"off"`. */
   selectSubtitlesTrack(value: string): void;

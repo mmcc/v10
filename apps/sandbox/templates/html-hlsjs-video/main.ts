@@ -1,4 +1,5 @@
 import '@app/styles.css';
+import { renderChapters } from '@app/shared/html/chapters';
 import { bindSandboxHtmlLocaleChange, prepareSandboxHtmlLocale, wrapSandboxHtmlI18n } from '@app/shared/html/i18n';
 import '@videojs/html/video/player';
 import '@videojs/html/media/hlsjs-video';
@@ -13,7 +14,7 @@ import {
   onSkinChange,
   onSourceChange,
 } from '@app/shared/sandbox-listener';
-import { getPosterSrc, getStoryboardSrc, isLiveSource, SOURCES } from '@app/shared/sources';
+import { getChapters, getPosterSrc, getStoryboardSrc, isLiveSource, SOURCES } from '@app/shared/sources';
 
 const html = String.raw;
 
@@ -32,16 +33,26 @@ async function render() {
   const mediaAttrs = renderMediaAttrs(state);
   const playerTag = live ? 'live-video-player' : 'video-player';
 
+  // A source carrying DRM license servers has no room in the `src` attribute, so
+  // it is assigned as an object below instead.
+  const { source, url } = SOURCES[state.source];
+  const srcAttr = source ? '' : ` src="${url}"`;
+
   document.getElementById('root')!.innerHTML = wrapSandboxHtmlI18n(html`
     <${playerTag}>
       <${tag} class="aspect-video max-w-4xl mx-auto">
-        <hlsjs-video src="${SOURCES[state.source].url}" ${mediaAttrs} playsinline crossorigin="anonymous">
+        <hlsjs-video${srcAttr} ${mediaAttrs} playsinline crossorigin="anonymous">
+          ${renderChapters(getChapters(state.source))}
           ${renderStoryboard(storyboard)}
         </hlsjs-video>
         ${poster ? html`<img slot="poster" src="${poster}" alt="Video poster" />` : ''}
       </${tag}>
     </${playerTag}>
   `);
+
+  if (source) {
+    document.querySelector('hlsjs-video')!.source = source;
+  }
 }
 
 render();

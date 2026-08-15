@@ -2,7 +2,7 @@
 
 Use this guidance when migrating vanilla CSS, CSS modules, SCSS, or styled-components to Tailwind class names.
 
-Video.js 10 targets **Tailwind CSS v4** (CSS-first config: **`@import "tailwindcss"`**, **`@theme`**, **`@utility`**, **`@custom-variant`**). Skin packages extend shared theme and keyframes via **`packages/skins/src/shared/tailwind.css`**.
+Video.js 10 targets **Tailwind CSS v4** (CSS-first config: **`@import "tailwindcss"`**, **`@theme`**, **`@utility`**, **`@custom-variant`**).
 
 ## Goal
 
@@ -44,7 +44,7 @@ Tailwind v4 spacing utilities are based on the `--spacing` variable. Translate s
 - `margin-inline: calc(var(--spacing) * 3)` → `mx-3`
 - `gap: var(--spacing)` → `gap-1`
 
-Use built-in responsive or named container variants (`md:`, `@md:`, `@md/media-root:`) for media-query behavior. If a scoped design needs to scale all spacing, overriding `--spacing` at that scope is valid because native utilities inherit it. Ignore `--base-size` and `--size`; resolve font and icon sizes to rem values.
+Use built-in responsive or named container variants (`md:`, `@md:`, `@md/media-root:`) for media-query behavior. If a scoped design needs to scale all spacing, overriding `--spacing` at that scope is valid because native utilities inherit it. Ignore `--scale-unit` and `--size`; resolve font and icon sizes to rem values.
 
 For arbitrary values, Tailwind v4 also provides the build-time `--spacing(N)` function. Use it for literal spacing multipliers that do not map cleanly to a native utility:
 

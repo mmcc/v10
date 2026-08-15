@@ -29,7 +29,8 @@ export type {
   PublishStatsFacts,
   SelectEncoderConfig,
   TrackPublisherActor,
-  VideoEncodeTuning,
   VideoEncoderActor,
+  VideoEncodeTuning,
 } from './engine';
 export { createMoqPublishEngine } from './engine';
+export { MoqPublishMedia } from './media';

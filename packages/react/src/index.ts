@@ -73,7 +73,7 @@ export {
   type CreatePlayerConfig,
   type CreatePlayerResult,
   createPlayer,
-  type ProviderProps,
+  type PlayerProps,
 } from './player/create-player';
 // UI
 export { AirPlayButton, type AirPlayButtonProps } from './ui/airplay-button/airplay-button';
@@ -84,6 +84,12 @@ export {
   type AudioTrackOptionsResult,
   useAudioTrackOptions,
 } from './ui/audio-track';
+export {
+  AudioTrackRadioGroup,
+  type AudioTrackRadioGroupItemProps,
+  type AudioTrackRadioGroupItemState,
+  type AudioTrackRadioGroupProps,
+} from './ui/audio-track-radio-group';
 export { BufferingIndicator, type BufferingIndicatorProps } from './ui/buffering-indicator/buffering-indicator';
 export { CameraButton, type CameraButtonProps } from './ui/camera-button/camera-button';
 export {
@@ -97,6 +103,10 @@ export {
   type CaptionsOption,
   type CaptionsOptionsProps,
   type CaptionsOptionsResult,
+  CaptionsRadioGroup,
+  type CaptionsRadioGroupItemProps,
+  type CaptionsRadioGroupItemState,
+  type CaptionsRadioGroupProps,
   useCaptionsOptions,
 } from './ui/captions-radio-group';
 export { CapturePlaceholder, type CapturePlaceholderProps } from './ui/capture-placeholder/capture-placeholder';
@@ -135,6 +145,12 @@ export {
   usePlaybackRateOptions,
 } from './ui/playback-rate';
 export { PlaybackRateButton, type PlaybackRateButtonProps } from './ui/playback-rate-button/playback-rate-button';
+export {
+  PlaybackRateRadioGroup,
+  type PlaybackRateRadioGroupItemProps,
+  type PlaybackRateRadioGroupItemState,
+  type PlaybackRateRadioGroupProps,
+} from './ui/playback-rate-radio-group';
 export { Popover, type PopoverContextValue, usePopoverContext } from './ui/popover';
 export { Poster, type PosterProps } from './ui/poster/poster';
 export { PublishBadge, type PublishBadgeProps } from './ui/publish-badge/publish-badge';
@@ -146,6 +162,12 @@ export {
   type QualityOptionsResult,
   useQualityOptions,
 } from './ui/quality';
+export {
+  QualityRadioGroup,
+  type QualityRadioGroupItemProps,
+  type QualityRadioGroupItemState,
+  type QualityRadioGroupProps,
+} from './ui/quality-radio-group';
 export { ScreenShareButton, type ScreenShareButtonProps } from './ui/screen-share-button/screen-share-button';
 export { SeekButton, type SeekButtonProps } from './ui/seek-button/seek-button';
 export { SeekIndicator } from './ui/seek-indicator';
@@ -166,6 +188,15 @@ export type { StatusIndicatorValueProps } from './ui/status-indicator/status-ind
 export { Thumbnail, type ThumbnailProps } from './ui/thumbnail/thumbnail';
 export { Time } from './ui/time';
 export { TimeSlider } from './ui/time-slider';
+export type {
+  TimeSliderChapterTitleProps,
+  TimeSliderChapterTitleState,
+} from './ui/time-slider/time-slider-chapters/time-slider-chapter-title';
+export type {
+  TimeSliderChapterState,
+  TimeSliderChaptersProps,
+  TimeSliderChaptersState,
+} from './ui/time-slider/time-slider-chapters/time-slider-chapters';
 export { Tooltip, type TooltipContent, type TooltipContextValue, useTooltipContext } from './ui/tooltip';
 export { VolumeIndicator } from './ui/volume-indicator';
 export type { VolumeIndicatorFillProps } from './ui/volume-indicator/volume-indicator-fill';
@@ -179,5 +210,6 @@ export { useAttachMedia } from './utils/use-attach-media';
 export { composeRefs, useComposedRefs } from './utils/use-composed-refs';
 export { useDestroy } from './utils/use-destroy';
 export { useLatestRef } from './utils/use-latest-ref';
+export { useMediaComponent } from './utils/use-media-component';
 export { useMediaInstance } from './utils/use-media-instance';
 export { renderElement } from './utils/use-render';

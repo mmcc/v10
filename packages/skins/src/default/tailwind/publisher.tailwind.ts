@@ -9,13 +9,13 @@ import {
   enableDevicesButton,
   screenShareButton,
 } from './components/capture';
+import { container as baseRoot } from './components/container';
 import { controls as baseControls } from './components/controls';
 import { error as baseError } from './components/error';
 import { menu as baseMenu } from './components/menu';
 import { overlay as baseOverlay } from './components/overlay';
 import { popup as basePopup } from './components/popup';
 import { publishBadge as basePublishBadge, buttonDataDisabled, publishButton } from './components/publish';
-import { root as baseRoot } from './components/root';
 import { surface } from './components/surface';
 
 /* ==========================================================================
