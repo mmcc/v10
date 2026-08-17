@@ -485,6 +485,43 @@ describe('deriveCatalog', () => {
     expect(catalog.tracks[0].initRef).toBe('video-init');
   });
 
+  it('declares 48000 for an Opus track whatever the capture rate — the RFC 7845 decode rate, not the encoder input', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+    // The probe prefers the capture device's rate when the encoder
+    // supports it, so 44100 is a config that really ships.
+    const CAPTURE_RATE_OPUS = { codec: 'opus', sampleRate: 44_100, numberOfChannels: 2 } as AudioEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ audio: CAPTURE_RATE_OPUS });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    if (sent[0]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+    expect(catalog.tracks[0].samplerate).toBe(48_000);
+  });
+
+  it('declares the configured rate for a non-Opus audio track — only Opus mandates a fixed decode rate', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+    const AAC_CONFIG = { codec: 'mp4a.40.2', sampleRate: 44_100, numberOfChannels: 2 } as AudioEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ audio: AAC_CONFIG });
+    // AAC is init-data-gated; supply its AudioSpecificConfig so the track
+    // is advertised.
+    state.encoderInitData.set({ audio: Uint8Array.from([0x12, 0x10]) });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    if (sent[0]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+    expect(catalog.tracks[0].samplerate).toBe(44_100);
+  });
+
   it('advertises a self-describing codec immediately — the complete-pair gate is init-data-requiring only', async () => {
     const { publisher, sent } = makePublisherStub();
     const { state, context } = setupBehavior();

@@ -51,7 +51,9 @@
  * their `codec` fields are already WebCodecs registry strings, which is
  * exactly what MSF §5.2.18 mandates for LOC tracks — except H.264, whose
  * declared string is re-derived to describe the published bitstream
- * (`catalogVideoCodec`).
+ * (`catalogVideoCodec`), and Opus's samplerate, which declares the 48 kHz
+ * decode rate rather than the encoder's input rate
+ * (`catalogAudioSamplerate`).
  *
  * **Decoder init data rides the catalog, not only LOC.** Each kind's
  * `state.encoderInitData` (the `decoderConfig.description` its live
@@ -187,6 +189,18 @@ function catalogVideoCodec(config: VideoEncoderConfig, initData: Uint8Array | un
   return (initData && avcCodecFromAvcC(initData)) ?? config.codec;
 }
 
+/**
+ * The sample rate the catalog should declare for an audio encoding. An
+ * Opus stream decodes at 48 kHz whatever input rate the encoder was fed
+ * (RFC 7845 §5.1 — the encapsulated rate is informational only), so the
+ * configured capture rate would make a trusting reader derive the wrong
+ * frame period (issue #25). Other codecs decode at the configured rate,
+ * which passes through.
+ */
+function catalogAudioSamplerate(config: AudioEncoderConfig): number {
+  return config.codec === 'opus' ? 48_000 : config.sampleRate;
+}
+
 /** Project the active encoder configs onto the catalog builder's input. */
 export function catalogInputFor(
   endpoint: PublishEndpoint,
@@ -220,7 +234,7 @@ export function catalogInputFor(
     input.audio = {
       name: AUDIO_TRACK_NAME,
       codec: encodings.audio.codec,
-      samplerate: encodings.audio.sampleRate,
+      samplerate: catalogAudioSamplerate(encodings.audio),
       channelConfig: String(encodings.audio.numberOfChannels),
       bitrate: encodings.audio.bitrate,
       initData: initData.audio,
