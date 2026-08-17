@@ -130,10 +130,21 @@ describe('MoqPublishVideo', () => {
       el.micActive = true;
       expect(el.hasAttribute('mic-active')).toBe(true);
 
+      // Denial consumes the intent in the engine; the attribute must
+      // follow, or the next property write toggles an already-present
+      // attribute (no attributeChangedCallback) and retry is dead.
       await vi.waitFor(() => {
         expect(el.host.micState).toBe('denied');
         expect(el.host.micActive).toBe(false);
         expect(el.hasAttribute('mic-active')).toBe(false);
+      });
+
+      const micCalls = () =>
+        getUserMedia.mock.calls.filter((call) => (call[0] as MediaStreamConstraints | undefined)?.audio).length;
+      const callsAfterDenial = micCalls();
+      el.micActive = true;
+      await vi.waitFor(() => {
+        expect(micCalls()).toBeGreaterThan(callsAfterDenial);
       });
     } finally {
       restore();

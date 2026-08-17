@@ -7,10 +7,11 @@ const MoqPublishVideoBase = MediaAttachMixin(CustomMediaElement('video', MoqPubl
 /**
  * Reflects the engine's involuntary intent-consumption (denied, failed,
  * out-of-band ended — see acquire-capture-source's multi-writer contract)
- * back onto `camera-active`/`screen-share-active`. The element property
- * setter routes through `toggleAttribute`, so a stale attribute would
- * swallow the next `cameraActive = true` write (no attribute mutation →
- * no attributeChangedCallback → no retry). Writing the host's own value
+ * back onto `camera-active`/`screen-share-active`/`mic-active`. The
+ * element property setter routes through `toggleAttribute`, so a stale
+ * attribute would swallow the next `cameraActive = true` (or
+ * `micActive = true`) write (no attribute mutation → no
+ * attributeChangedCallback → no retry). Writing the host's own value
  * back dedupes at the signal layer, so this cannot loop.
  *
  * Shared rather than inlined per element: any element built the same way
