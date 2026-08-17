@@ -395,6 +395,54 @@ describe('acquireMicrophone', () => {
     });
   });
 
+  it('re-acquires on a micActive rising edge while a video source holds the gate — explicit retry over a parked mic', async () => {
+    const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+    const getUserMedia = vi
+      .spyOn(navigator.mediaDevices, 'getUserMedia')
+      .mockRejectedValueOnce(new DOMException('Permission denied', 'NotAllowedError'))
+      .mockResolvedValueOnce(asStream(stream));
+    const { state, context } = setupAcquire();
+
+    // The implied mic is denied while the camera captures on: the reactor
+    // never leaves 'active', so no gate rising edge is coming.
+    state.cameraActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('denied');
+    });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    // The explicit intent write is the retry — it must re-fire acquisition
+    // without disturbing the video pipeline or the device selection.
+    state.micActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(context.micStream.get()).toBe(asStream(stream));
+    expect(state.cameraActive.get()).toBe(true);
+  });
+
+  it('never restarts a healthy mic on a micActive rising edge — retry nudges parked statuses only', async () => {
+    const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+    const getUserMedia = vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
+    const { state, context } = setupAcquire();
+
+    state.cameraActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
+    const acquiredStream = context.micStream.get();
+
+    state.micActive.set(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(context.micStream.get()).toBe(acquiredStream);
+    expect(state.micState.get()).toBe('active');
+  });
+
   it('holds micActive through a missing-device idle — a mic-only session waits for the plug-in', async () => {
     const mic = new FakeMediaStream([new FakeMediaStreamTrack()]);
     const getUserMedia = vi

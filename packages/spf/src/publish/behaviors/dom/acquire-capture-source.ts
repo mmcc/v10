@@ -479,20 +479,40 @@ function acquireMicrophoneSetup({
             if (parked === 'ended' || parked === 'idle') retryEpoch.set(peek(retryEpoch) + 1);
           });
         },
-        effects: () => {
-          const deviceId = state.audioInputDeviceId.get();
-          retryEpoch.get();
-          return runCaptureAcquisition({
-            acquire: () => acquireMic(deviceId),
-            snapshot: snapshotAudioTrack,
-            status: state.micState,
-            tracks: state.micTracks,
-            stream: context.micStream,
-            publishError: state.publishError,
-            intent: state.micActive,
-            tolerateMissingDevice: true,
-          });
-        },
+        effects: [
+          () => {
+            const deviceId = state.audioInputDeviceId.get();
+            retryEpoch.get();
+            return runCaptureAcquisition({
+              acquire: () => acquireMic(deviceId),
+              snapshot: snapshotAudioTrack,
+              status: state.micState,
+              tracks: state.micTracks,
+              stream: context.micStream,
+              publishError: state.publishError,
+              intent: state.micActive,
+              tolerateMissingDevice: true,
+            });
+          },
+
+          // Explicit-intent retry. While a video source holds the reactor
+          // in 'active', the gate never re-enters, and the acquisition
+          // effect above deliberately tracks no gate term — so a
+          // `micActive` rising edge over a mic parked by its own
+          // termination (denied/ended/idle) would otherwise never
+          // re-acquire, breaking the one-click-retry half of the intent
+          // contract. Nudge the epoch from parked statuses only; an
+          // in-flight ('acquiring') or healthy ('active') mic is never
+          // restarted. Ordered after the acquisition effect so a fresh
+          // gate entry reads its synchronous 'acquiring' and stays quiet.
+          () => {
+            if (state.micActive.get() !== true) return;
+            const parked = peek(state.micState);
+            if (parked === 'denied' || parked === 'ended' || parked === 'idle') {
+              retryEpoch.set(peek(retryEpoch) + 1);
+            }
+          },
+        ],
       },
     },
   });
