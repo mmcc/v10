@@ -83,6 +83,13 @@ export interface MoqPublishEngineState {
   cameraActive?: boolean;
   /** Screen-share acquisition; additive with `cameraActive`, not exclusive. */
   screenShareActive?: boolean;
+  /**
+   * Microphone acquisition without a video source — the audio-only
+   * publish seam. Either video intent still implies the mic; this slot
+   * makes mic capture (and a session gated on it alone) possible when
+   * neither is set.
+   */
+  micActive?: boolean;
   /** Selected camera; empty string defers to the platform default. */
   videoInputDeviceId?: string;
   /** Selected microphone; empty string defers to the platform default. */
@@ -187,6 +194,7 @@ const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineCon
     'publishActivated',
     'cameraActive',
     'screenShareActive',
+    'micActive',
     'videoInputDeviceId',
     'audioInputDeviceId',
     'previewSource',
@@ -276,6 +284,7 @@ export function createMoqPublishEngine(
         publishActivated: false,
         cameraActive: false,
         screenShareActive: false,
+        micActive: false,
         videoInputDeviceId: '',
         audioInputDeviceId: '',
         previewSource: 'camera',

@@ -295,6 +295,52 @@ describe('MoqPublishMediaMixin', () => {
     expect(stateChanged.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
+  it('drives an audio-only surface: micActive alone acquires the mic and fires capturesourcechange', async () => {
+    const getUserMedia = mockGetUserMedia();
+    const media = makeMedia();
+    const sourceChanged = vi.fn();
+    media.addEventListener('capturesourcechange', sourceChanged);
+
+    expect(media.micActive).toBe(false);
+    media.micActive = true;
+
+    await vi.waitFor(() => {
+      expect(media.micState).toBe('active');
+    });
+    // No video pipeline was touched — the voice-only page's permission
+    // prompt says "microphone", never "camera + microphone" (issue #26).
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
+    expect(media.cameraState).toBe('idle');
+    expect(media.screenShareState).toBe('idle');
+    expect(sourceChanged).toHaveBeenCalled();
+
+    media.micActive = false;
+    await vi.waitFor(() => {
+      expect(media.micState).toBe('idle');
+    });
+  });
+
+  it('publish() accepts an active microphone as its capture precondition — audio-only publish', async () => {
+    mockGetUserMedia();
+    const media = makeMedia({ engineConfig: { connectTransport: pendingConnect } });
+    media.publishEndpoint = 'https://relay.example.com/moq';
+    media.publishNamespace = 'live/abc123';
+
+    media.micActive = true;
+    await vi.waitFor(() => {
+      expect(media.micState).toBe('active');
+    });
+
+    const pending = media.publish();
+    expect(media.engine.state.publishActivated.get()).toBe(true);
+    await vi.waitFor(() => {
+      expect(media.publishState).toBe('connecting');
+    });
+    media.engine.state.sessionStatus.set('live');
+    await expect(pending).resolves.toBeUndefined();
+  });
+
   it('drives the screen-share surface: intent, stream, preview source, and events', async () => {
     const screenStream = new FakeMediaStream([new FakeMediaStreamTrack('video', { width: 1920 })]);
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(screenStream));

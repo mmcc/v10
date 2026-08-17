@@ -75,6 +75,12 @@ export interface MoqPublishMediaProps {
   cameraActive: boolean;
   /** Screen-share acquisition; additive with `cameraActive`, not exclusive. */
   screenShareActive: boolean;
+  /**
+   * Microphone acquisition without a video source — the audio-only
+   * publish seam. Either video source active still implies the mic;
+   * acquisition intent, not a mute (`micMuted` is).
+   */
+  micActive: boolean;
   /** Which capture stream the preview element mirrors. */
   previewSource: PreviewSource;
   /** Selected camera; empty string defers to the platform default. */
@@ -93,6 +99,7 @@ export const moqPublishMediaDefaultProps: MoqPublishMediaProps = {
   publishAuthToken: '',
   cameraActive: false,
   screenShareActive: false,
+  micActive: false,
   previewSource: 'camera',
   videoInputDeviceId: '',
   audioInputDeviceId: '',
@@ -289,6 +296,14 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
       this.#signals.state.screenShareActive.set(value);
     }
 
+    get micActive(): boolean {
+      return this.#signals.state.micActive.get() ?? false;
+    }
+
+    set micActive(value: boolean) {
+      this.#signals.state.micActive.set(value);
+    }
+
     get previewSource(): PreviewSource {
       return this.#signals.state.previewSource.get() ?? 'camera';
     }
@@ -397,7 +412,11 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           new Error('MoqPublishMedia: publish() requires a publishEndpoint before it can start a session.')
         );
       }
-      if (peek(state.cameraState) !== 'active' && peek(state.screenShareState) !== 'active') {
+      if (
+        peek(state.cameraState) !== 'active' &&
+        peek(state.screenShareState) !== 'active' &&
+        !(peek(state.micActive) && peek(state.micState) === 'active')
+      ) {
         return Promise.reject(new Error('MoqPublishMedia: publish() requires an active capture source.'));
       }
       return this.#activatePublish();
@@ -522,7 +541,8 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           () => this.#dispatch('capturestatechange')
         ),
         this.#bridge(
-          () => `${state.cameraActive.get() ?? false}|${state.screenShareActive.get() ?? false}`,
+          () =>
+            `${state.cameraActive.get() ?? false}|${state.screenShareActive.get() ?? false}|${state.micActive.get() ?? false}`,
           () => this.#dispatch('capturesourcechange')
         ),
         // Identity, not presence: a re-acquire (device switch, replug

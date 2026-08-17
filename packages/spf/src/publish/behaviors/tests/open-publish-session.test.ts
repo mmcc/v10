@@ -31,8 +31,10 @@ function setupBehavior(connectTransport: ConnectPublishTransport) {
   const state = {
     endpoint: signal<OpenPublishSessionState['endpoint']>(undefined),
     publishActivated: signal<OpenPublishSessionState['publishActivated']>(false),
+    micActive: signal<OpenPublishSessionState['micActive']>(false),
     cameraState: signal<OpenPublishSessionState['cameraState']>('idle'),
     screenShareState: signal<OpenPublishSessionState['screenShareState']>('idle'),
+    micState: signal<OpenPublishSessionState['micState']>('idle'),
     sessionStatus: signal<OpenPublishSessionState['sessionStatus']>('idle'),
     publishError: signal<OpenPublishSessionState['publishError']>(undefined),
   };
@@ -65,6 +67,61 @@ describe('openPublishSession', () => {
     expect(connect).not.toHaveBeenCalled();
     expect(state.sessionStatus.get()).toBe('idle');
     expect(context.publishSessionActor.get()).toBeUndefined();
+  });
+
+  it('opens the session on an active microphone alone — audio-only publish', async () => {
+    const pair = createTransportPair();
+    makePeer(pair);
+    const { state } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
+
+    state.endpoint.set(ENDPOINT);
+    state.publishActivated.set(true);
+    state.micActive.set(true);
+    state.micState.set('active');
+
+    await vi.waitFor(() => {
+      expect(state.sessionStatus.get()).toBe('ready');
+    });
+  });
+
+  it('ignores an implied mic — without micActive the mic status never gates the session', async () => {
+    const connect = vi.fn();
+    const { state, context } = setupBehavior(connect as unknown as ConnectPublishTransport);
+
+    state.endpoint.set(ENDPOINT);
+    state.publishActivated.set(true);
+    // A mic acquired as a side effect of video intent can outlive its video
+    // source for a beat (denied picker, camera failure). Its status alone
+    // must not hold a session no consumer intent justifies.
+    state.micState.set('active');
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(connect).not.toHaveBeenCalled();
+    expect(state.sessionStatus.get()).toBe('idle');
+    expect(context.publishSessionActor.get()).toBeUndefined();
+  });
+
+  it('rides out a mic device switch in a mic-only session — acquiring holds the open session', async () => {
+    const pair = createTransportPair();
+    makePeer(pair);
+    const { state, context } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
+
+    state.endpoint.set(ENDPOINT);
+    state.publishActivated.set(true);
+    state.micActive.set(true);
+    state.micState.set('active');
+    await vi.waitFor(() => {
+      expect(state.sessionStatus.get()).toBe('ready');
+    });
+    const actor = context.publishSessionActor.get();
+
+    state.micState.set('acquiring');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(context.publishSessionActor.get()).toBe(actor);
+
+    state.micState.set('active');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(context.publishSessionActor.get()).toBe(actor);
   });
 
   it('opens the session and mirrors the actor lifecycle into sessionStatus', async () => {

@@ -1,7 +1,8 @@
 /**
  * **Own the publish transport session.** While an `endpoint` is set,
- * `publishActivated` is true, and either capture pipeline (camera or
- * screen) is `'active'`, connects through
+ * `publishActivated` is true, and any capture pipeline (camera, screen,
+ * or — under explicit `micActive` intent only — microphone) is
+ * `'active'`, connects through
  * `config.connectTransport` (default: a real `WebTransport`), creates the
  * publish-session actor, publishes it on `context.publishSessionActor`,
  * and mirrors the actor's lifecycle into `state.sessionStatus`
@@ -63,8 +64,11 @@ export interface SessionPublishErrorFacts {
 export interface OpenPublishSessionState {
   endpoint?: PublishEndpoint | undefined;
   publishActivated?: boolean;
+  /** Explicit microphone intent — the mic's capture status counts toward the session gate only under it. */
+  micActive?: boolean;
   cameraState?: CaptureStatusFacts;
   screenShareState?: CaptureStatusFacts;
+  micState?: CaptureStatusFacts;
   sessionStatus?: PublishSessionStatus;
   publishError?: SessionPublishErrorFacts | undefined;
 }
@@ -97,8 +101,10 @@ function openPublishSessionSetup({
   state: {
     endpoint: ReadonlySignal<OpenPublishSessionState['endpoint']>;
     publishActivated: ReadonlySignal<OpenPublishSessionState['publishActivated']>;
+    micActive: ReadonlySignal<OpenPublishSessionState['micActive']>;
     cameraState: ReadonlySignal<OpenPublishSessionState['cameraState']>;
     screenShareState: ReadonlySignal<OpenPublishSessionState['screenShareState']>;
+    micState: ReadonlySignal<OpenPublishSessionState['micState']>;
     sessionStatus: Signal<OpenPublishSessionState['sessionStatus']>;
     publishError: Signal<OpenPublishSessionState['publishError']>;
   };
@@ -113,15 +119,20 @@ function openPublishSessionSetup({
       if (!state.endpoint.get() || state.publishActivated.get() !== true) return 'no-session';
       const camera = state.cameraState.get();
       const screen = state.screenShareState.get();
-      if (camera === 'active' || screen === 'active') return 'session-open';
-      // Either pipeline's own device-id change re-acquires through
-      // 'acquiring' independently of the other. An already-open session
+      // The mic counts only under its own intent: while a video source
+      // holds the mic's gate, its status is a side effect of video capture
+      // — an implied mic must not open (or hold) a session the video
+      // pipelines no longer justify.
+      const mic = state.micActive.get() ? state.micState.get() : undefined;
+      if (camera === 'active' || screen === 'active' || mic === 'active') return 'session-open';
+      // Any pipeline's own device-id change re-acquires through
+      // 'acquiring' independently of the others. An already-open session
       // must ride that out: closing it would send PUBLISH_DONE for every
       // track and drop the transport — a relay treats that as the END of
       // the broadcast, freezing every subscriber. The session only
       // *opens* fresh on an outright 'active', and both idle/denied/ended
       // still close it. `peek`: our own effect writes the actor slot.
-      const reacquiring = camera === 'acquiring' || screen === 'acquiring';
+      const reacquiring = camera === 'acquiring' || screen === 'acquiring' || mic === 'acquiring';
       return reacquiring && peek(context.publishSessionActor) ? 'session-open' : 'no-session';
     },
     states: {
@@ -191,7 +202,16 @@ function openPublishSessionSetup({
 }
 
 export const openPublishSession = defineBehavior({
-  stateKeys: ['endpoint', 'publishActivated', 'cameraState', 'screenShareState', 'sessionStatus', 'publishError'],
+  stateKeys: [
+    'endpoint',
+    'publishActivated',
+    'micActive',
+    'cameraState',
+    'screenShareState',
+    'micState',
+    'sessionStatus',
+    'publishError',
+  ],
   contextKeys: ['publishSessionActor'],
   setup: openPublishSessionSetup,
 });

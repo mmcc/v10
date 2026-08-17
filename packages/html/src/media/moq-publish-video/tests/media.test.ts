@@ -108,6 +108,49 @@ describe('MoqPublishVideo', () => {
     }
   });
 
+  it('activates an audio-only capture through the mic-active attribute', () => {
+    const el = createMoqPublishVideo();
+
+    el.setAttribute('mic-active', '');
+    expect(el.host.micActive).toBe(true);
+    // No video source rides along — audio-only publish (issue #26).
+    expect(el.host.cameraActive).toBe(false);
+    expect(el.host.screenShareActive).toBe(false);
+
+    el.removeAttribute('mic-active');
+    expect(el.host.micActive).toBe(false);
+  });
+
+  it('clears the mic-active attribute when the engine consumes the intent, keeping property retry live', async () => {
+    const getUserMedia = vi.fn().mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
+    const restore = stubMediaDevices(getUserMedia);
+    try {
+      const el = createMoqPublishVideo();
+
+      el.micActive = true;
+      expect(el.hasAttribute('mic-active')).toBe(true);
+
+      // Denial consumes the intent in the engine; the attribute must
+      // follow, or the next property write toggles an already-present
+      // attribute (no attributeChangedCallback) and retry is dead.
+      await vi.waitFor(() => {
+        expect(el.host.micState).toBe('denied');
+        expect(el.host.micActive).toBe(false);
+        expect(el.hasAttribute('mic-active')).toBe(false);
+      });
+
+      const micCalls = () =>
+        getUserMedia.mock.calls.filter((call) => (call[0] as MediaStreamConstraints | undefined)?.audio).length;
+      const callsAfterDenial = micCalls();
+      el.micActive = true;
+      await vi.waitFor(() => {
+        expect(micCalls()).toBeGreaterThan(callsAfterDenial);
+      });
+    } finally {
+      restore();
+    }
+  });
+
   it('activates screen share independently through the screen-share-active attribute', () => {
     const el = createMoqPublishVideo();
 

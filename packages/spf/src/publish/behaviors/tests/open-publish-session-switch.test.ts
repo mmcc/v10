@@ -38,8 +38,10 @@ function setupBehavior(connectTransport: ConnectPublishTransport) {
   const state = {
     endpoint: signal<OpenPublishSessionState['endpoint']>(undefined),
     publishActivated: signal<OpenPublishSessionState['publishActivated']>(false),
+    micActive: signal<OpenPublishSessionState['micActive']>(false),
     cameraState: signal<OpenPublishSessionState['cameraState']>('idle'),
     screenShareState: signal<OpenPublishSessionState['screenShareState']>('idle'),
+    micState: signal<OpenPublishSessionState['micState']>('idle'),
     sessionStatus: signal<OpenPublishSessionState['sessionStatus']>('idle'),
     publishError: signal<OpenPublishSessionState['publishError']>(undefined),
   };
