@@ -406,6 +406,85 @@ describe('deriveCatalog', () => {
     expect(catalog.initDataList).toEqual([{ id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x1e\xff') }]);
   });
 
+  it('declares the profile/level the encoder emitted, not the one the config requested', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+    // Requested constrained-baseline 3.1 (42E01F)…
+    const H264_CONFIG = { codec: 'avc1.42E01F', width: 1280, height: 720 } as VideoEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: H264_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+
+    // …but the encoder's avcC says baseline 3.0 (42C01E). The catalog's
+    // codec string is a consumer's only pre-decode capability check, so
+    // it must describe the stream on the wire.
+    state.encoderInitData.set({ camera: Uint8Array.from([0x01, 0x42, 0xc0, 0x1e, 0xff]) });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    if (sent[1]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+    expect(catalog.tracks[0].codec).toBe('avc1.42C01E');
+  });
+
+  it('declares avc3 for an annexb bitstream — avc1 would promise length prefixes the stream does not have', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+    const ANNEXB_CONFIG = {
+      codec: 'avc1.42E01F',
+      width: 1280,
+      height: 720,
+      avc: { format: 'annexb' },
+    } as VideoEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: ANNEXB_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+
+    // In-band parameter sets: decodable with no description, so the track
+    // is advertised immediately — under the fourcc that says so.
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    if (sent[0]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+    expect(catalog.tracks[0].codec).toBe('avc3.42E01F');
+    expect(catalog.tracks[0].initRef).toBeUndefined();
+  });
+
+  it('gates an avc3 AVCC-format track on its init data like avc1 — WebCodecs keeps parameter sets out-of-band', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+    // Default (absent) avc format is 'avc': length-prefixed, parameter
+    // sets only in the description — undecodable without it, whatever
+    // fourcc was requested.
+    const AVC3_CONFIG = { codec: 'avc3.42E01F', width: 1280, height: 720 } as VideoEncoderConfig;
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: AVC3_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    if (sent[0]!.type !== 'frame') return;
+    expect(JSON.parse(new TextDecoder().decode(sent[0]!.payload)).tracks).toEqual([]);
+
+    // Once the avcC lands, the declared string is re-derived from it —
+    // out-of-band parameter sets are the avc1 contract.
+    state.encoderInitData.set({ camera: Uint8Array.from([0x01, 0x42, 0xc0, 0x1e, 0xff]) });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    if (sent[1]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+    expect(catalog.tracks[0].codec).toBe('avc1.42C01E');
+    expect(catalog.tracks[0].initRef).toBe('video-init');
+  });
+
   it('advertises a self-describing codec immediately — the complete-pair gate is init-data-requiring only', async () => {
     const { publisher, sent } = makePublisherStub();
     const { state, context } = setupBehavior();

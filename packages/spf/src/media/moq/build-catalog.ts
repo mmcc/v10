@@ -19,8 +19,10 @@
  * `altGroup` is the load-bearing half of that pair on the parse side: it is
  * what puts camera and screen in separate switching sets, so a subscriber's
  * ABR never mistakes the screen share for a cheaper camera. Codec
- * strings are WebCodecs registry strings (§5.2.18), so the encoder
- * configs' `codec` fields pass through verbatim. A track's decoder init
+ * strings are WebCodecs registry strings (§5.2.18) and pass through
+ * verbatim — the caller resolves what to declare (`derive-catalog.ts`
+ * re-derives H.264 strings from the published bitstream). A track's
+ * decoder init
  * data (`initData`) is emitted as an inline `initDataList` entry plus a
  * per-track `initRef` (§5.2.16-17) — the catalog is the one channel every
  * consumer can read: LOC's per-keyframe Config property (`loc-packaging.ts`)
