@@ -19,11 +19,12 @@ const MoqPublishVideoBase = MediaAttachMixin(CustomMediaElement('video', MoqPubl
  * one behavioral contract, not a copy that can drift per element.
  */
 export function installCaptureAttributeReflection(
-  el: HTMLElement & { host: Pick<MoqPublishMedia, 'cameraActive' | 'screenShareActive'> }
+  el: HTMLElement & { host: Pick<MoqPublishMedia, 'cameraActive' | 'screenShareActive' | 'micActive'> }
 ): void {
   el.addEventListener('capturesourcechange', () => {
     el.toggleAttribute('camera-active', el.host.cameraActive);
     el.toggleAttribute('screen-share-active', el.host.screenShareActive);
+    el.toggleAttribute('mic-active', el.host.micActive);
   });
 }
 
@@ -35,8 +36,10 @@ export function installCaptureAttributeReflection(
  * `CustomMediaElement` maps their kebab-case attributes onto the host
  * accessors (`publish-endpoint` → `publishEndpoint`, …) instead of
  * mirroring them onto the preview `<video>`. `camera-active` /
- * `screen-share-active` are additive booleans, not an exclusive selection —
- * removing either attribute releases only that source.
+ * `screen-share-active` / `mic-active` are additive booleans, not an
+ * exclusive selection — removing any attribute releases only that source
+ * (`mic-active` alone is an audio-only publish; either video source still
+ * implies the mic).
  */
 export class MoqPublishVideo extends MoqPublishVideoBase {
   static properties = {
@@ -46,6 +49,7 @@ export class MoqPublishVideo extends MoqPublishVideoBase {
     publishAuthToken: { type: String, attribute: 'publish-auth-token', empty: '' },
     cameraActive: { type: Boolean, attribute: 'camera-active' },
     screenShareActive: { type: Boolean, attribute: 'screen-share-active' },
+    micActive: { type: Boolean, attribute: 'mic-active' },
   };
 
   constructor() {
