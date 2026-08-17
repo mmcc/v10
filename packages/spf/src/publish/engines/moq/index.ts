@@ -16,6 +16,7 @@ export type {
   ConnectPublishTransport,
   EncodedChunkSink,
   EncodedChunkSinkMeta,
+  EncoderInitDataFacts,
   EncoderSupportFacts,
   MoqPublishEngineConfig,
   MoqPublishEngineContext,

@@ -10,9 +10,9 @@
  * supported per kind), applying only that probe's own kind from the
  * strategy's result.
  *
- * Default ladder: H.264 constrained-baseline (`avc1.42E01F`, `annexb`
- * bitstream format so keyframes are self-describing — see
- * `videoCandidates`) with a VP8 fallback, at the track
+ * Default ladder: H.264 constrained-baseline (`avc1.42E01F`, `avc`
+ * bitstream format so the avcC extradata exists to publish out-of-band —
+ * see `videoCandidates`) with a VP8 fallback, at the track
  * resolution/framerate; Opus at the track sample rate with a 48 kHz
  * fallback. A `config.{camera,screen}.codec` prepends itself to the
  * ladder rather than replacing it. The screen ladder defaults to a lower
@@ -121,11 +121,18 @@ function videoCandidates(track: CaptureTrackFacts, tuning: VideoEncodeTuning | u
     framerate: tuning?.frameRate ?? track.frameRate ?? 30,
     bitrate: tuning?.bitrate ?? DEFAULT_VIDEO_BITRATE,
     latencyMode: 'realtime',
-    // `annexb` keeps H.264 parameter sets in-band with every keyframe, so
-    // the stream decodes with no out-of-band `description` at all — see
-    // the identical note on the camera ladder this was lifted from; the
-    // relay-interop constraint applies equally to the screen track.
-    ...(codec.startsWith('avc1') ? { avc: { format: 'annexb' as const } } : {}),
+    // `avc` (length-prefixed AVCC) is what the `avc1` codec string
+    // declares (ISO/IEC 14496-15) — a length-prefix reader parsing
+    // Annex-B start codes as NAL lengths crashes on the SPS bytes — and
+    // it is the format under which WebCodecs reports the avcC as
+    // `decoderConfig.description`, which the MSF catalog publishes as
+    // `initDataList` (`derive-catalog.ts`). The catalog is the carriage
+    // that reaches every consumer: the alternative per-keyframe LOC
+    // Config property is an odd-id MOQ object property relays drop
+    // without forwarding (relay.mux.dev, verified on the wire
+    // 2026-08-01), which is what sank the earlier LOC-property-only
+    // `avc` carriage and forced a detour through in-band `annexb`.
+    ...(codec.startsWith('avc1') ? { avc: { format: 'avc' as const } } : {}),
   }));
 }
 

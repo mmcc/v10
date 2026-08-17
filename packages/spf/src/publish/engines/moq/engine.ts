@@ -30,6 +30,7 @@ import type {
 } from '../../behaviors/dom/probe-encoder-support';
 import { probeEncoderSupport } from '../../behaviors/dom/probe-encoder-support';
 import { pumpMediaFrames } from '../../behaviors/dom/pump-media-frames';
+import type { EncoderInitDataFacts } from '../../behaviors/dom/setup-encoder-actors';
 import { setupEncoderActors } from '../../behaviors/dom/setup-encoder-actors';
 import type { PreviewSource } from '../../behaviors/dom/sync-preview';
 import { syncPreview } from '../../behaviors/dom/sync-preview';
@@ -53,6 +54,7 @@ export type {
   ConnectPublishTransport,
   EncodedChunkSink,
   EncodedChunkSinkMeta,
+  EncoderInitDataFacts,
   EncoderSupportFacts,
   PreviewSource,
   PublishEndpoint,
@@ -101,6 +103,8 @@ export interface MoqPublishEngineState {
   micTracks?: CaptureTrackFacts;
   encoderSupport?: EncoderSupportFacts;
   activeEncodings?: ActiveEncodingsFacts;
+  /** Decoder init data per kind, reported by the live encoders (`setupEncoderActors`). */
+  encoderInitData?: EncoderInitDataFacts;
   sessionStatus?: PublishSessionStatus;
   publishStats?: PublishStatsFacts;
   publishError?: PublishErrorFacts | undefined;

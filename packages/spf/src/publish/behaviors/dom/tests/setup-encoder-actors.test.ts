@@ -21,6 +21,7 @@ const OPUS_CONFIG: AudioEncoderConfig = { codec: 'opus', sampleRate: 48_000, num
 function setup(config: SetupEncoderActorsConfig = {}) {
   const state = {
     activeEncodings: signal<SetupEncoderActorsState['activeEncodings']>(undefined),
+    encoderInitData: signal<SetupEncoderActorsState['encoderInitData']>(undefined),
     publishError: signal<SetupEncoderActorsState['publishError']>(undefined),
   };
   const context = {
@@ -262,6 +263,46 @@ describe('setupEncoderActors', () => {
     // the new capture base.
     expect(sunk[1]!.timestampUs).toBeGreaterThan(sunk[0]!.timestampUs);
     expect(sunk[1]!.timestampUs - sunk[0]!.timestampUs).toBeLessThan(30_000_000);
+
+    cleanup();
+  });
+
+  it("publishes a kind's reported decoder description as encoderInitData and clears it with the actor", async () => {
+    const { state, context, cleanup } = setup();
+    const { stream, canvas } = makeCanvasStream();
+    // `avc` (AVCC) format is what makes the codec report the avcC as
+    // `decoderConfig.description` — the fact under test.
+    const H264_CONFIG: VideoEncoderConfig = {
+      codec: 'avc1.42E01F',
+      width: 320,
+      height: 240,
+      bitrate: 500_000,
+      framerate: 30,
+      avc: { format: 'avc' },
+    };
+    context.cameraStream.set(stream);
+    state.activeEncodings.set({ camera: H264_CONFIG });
+
+    await vi.waitFor(() => {
+      expect(context.cameraEncoderActor.get()).toBeDefined();
+    });
+    const actor = context.cameraEncoderActor.get()!;
+    actor.send({ type: 'encode', frame: new VideoFrame(canvas, { timestamp: 0 }), keyFrame: true });
+    actor.send({ type: 'flush' });
+
+    await vi.waitFor(() => {
+      expect(state.encoderInitData.get()?.camera).toBeDefined();
+    });
+    // An avcC, not an empty buffer: configurationVersion is always 1.
+    expect(state.encoderInitData.get()!.camera![0]).toBe(1);
+
+    // The description describes THIS actor's output config — releasing the
+    // stream destroys the actor and must retract the fact with it.
+    context.cameraStream.set(undefined);
+    await vi.waitFor(() => {
+      expect(context.cameraEncoderActor.get()).toBeUndefined();
+    });
+    expect(state.encoderInitData.get()).toBeUndefined();
 
     cleanup();
   });

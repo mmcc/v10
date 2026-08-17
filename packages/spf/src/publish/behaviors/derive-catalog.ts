@@ -51,6 +51,21 @@
  * their `codec` fields are already WebCodecs registry strings, which is
  * exactly what MSF §5.2.18 mandates for LOC tracks.
  *
+ * **Decoder init data rides the catalog, not only LOC.** Each kind's
+ * `state.encoderInitData` (the `decoderConfig.description` its live
+ * encoder reported — `setupEncoderActors`) is emitted as the catalog's
+ * `initDataList` + per-track `initRef`. The catalog is the one channel
+ * every consumer can read: the per-keyframe LOC Config property is an
+ * odd-id MOQ object property that relays and property-blind consumers
+ * drop, and an MoQ→HLS origin needs the extradata *before* any media
+ * object to build an init segment. The description arrives on the kind's
+ * first encoded output — after its encoder actor (whose teardown clears
+ * the fact) rebuilds — so it is latched beside the encoding: held through
+ * an actor rebuild while the kind's config is unchanged (a device switch
+ * must not flap `initRef` off and back on), dropped the moment the config
+ * changes (old extradata describes the old config) or the kind leaves the
+ * catalog.
+ *
  * Writes no state; state/context reader only.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
@@ -82,10 +97,22 @@ export interface EncoderSupportByKind {
   audio?: AudioEncoderConfig[];
 }
 
+/**
+ * Structural mirror of `behaviors/dom/setup-encoder-actors.ts`'s
+ * `EncoderInitDataFacts` (same non-importable DOM boundary as the mirrors
+ * above) — keep identical.
+ */
+export interface EncoderInitDataByKind {
+  camera?: Uint8Array;
+  screen?: Uint8Array;
+  audio?: Uint8Array;
+}
+
 export interface DeriveCatalogState {
   activeEncodings?: ActiveEncodingsFacts;
   endpoint?: PublishEndpoint | undefined;
   encoderSupport?: EncoderSupportByKind;
+  encoderInitData?: EncoderInitDataByKind;
   cameraState?: CaptureSourceStatus;
   screenShareState?: CaptureSourceStatus;
   micState?: CaptureSourceStatus;
@@ -113,7 +140,11 @@ function sourceHolds(status: CaptureSourceStatus | undefined): boolean {
 }
 
 /** Project the active encoder configs onto the catalog builder's input. */
-export function catalogInputFor(endpoint: PublishEndpoint, encodings: ActiveEncodingsFacts): MsfCatalogInput {
+export function catalogInputFor(
+  endpoint: PublishEndpoint,
+  encodings: ActiveEncodingsFacts,
+  initData: EncoderInitDataByKind = {}
+): MsfCatalogInput {
   const input: MsfCatalogInput = { namespace: endpoint.namespace };
   if (encodings.camera) {
     input.video = {
@@ -123,6 +154,7 @@ export function catalogInputFor(endpoint: PublishEndpoint, encodings: ActiveEnco
       height: encodings.camera.height,
       framerate: encodings.camera.framerate,
       bitrate: encodings.camera.bitrate,
+      initData: initData.camera,
     };
   }
   if (encodings.screen) {
@@ -133,6 +165,7 @@ export function catalogInputFor(endpoint: PublishEndpoint, encodings: ActiveEnco
       height: encodings.screen.height,
       framerate: encodings.screen.framerate,
       bitrate: encodings.screen.bitrate,
+      initData: initData.screen,
     };
   }
   if (encodings.audio) {
@@ -142,6 +175,7 @@ export function catalogInputFor(endpoint: PublishEndpoint, encodings: ActiveEnco
       samplerate: encodings.audio.sampleRate,
       channelConfig: String(encodings.audio.numberOfChannels),
       bitrate: encodings.audio.bitrate,
+      initData: initData.audio,
     };
   }
   return input;
@@ -156,6 +190,7 @@ function deriveCatalogSetup({
     activeEncodings: ReadonlySignal<DeriveCatalogState['activeEncodings']>;
     endpoint: ReadonlySignal<DeriveCatalogState['endpoint']>;
     encoderSupport: ReadonlySignal<DeriveCatalogState['encoderSupport']>;
+    encoderInitData: ReadonlySignal<DeriveCatalogState['encoderInitData']>;
     cameraState: ReadonlySignal<DeriveCatalogState['cameraState']>;
     screenShareState: ReadonlySignal<DeriveCatalogState['screenShareState']>;
     micState: ReadonlySignal<DeriveCatalogState['micState']>;
@@ -170,6 +205,12 @@ function deriveCatalogSetup({
   // passing through 'idle' (a sole-source device switch collapses
   // `activeEncodings` to undefined for the length of the re-probe).
   const advertised: ActiveEncodingsFacts = {};
+
+  // The init data each kind was last advertised with — latched beside the
+  // encoding (see the module doc), so a rebuild transient never flaps the
+  // catalog's `initRef` off and back on. Contains only kinds currently in
+  // (or held in) the catalog; resolve() prunes it with `advertised`.
+  const advertisedInitData: EncoderInitDataByKind = {};
 
   /**
    * The publisher the latch memory describes. A new catalog publisher
@@ -207,6 +248,7 @@ function deriveCatalogSetup({
           // re-runs each hop costs are absorbed by the content dedupe
           // below.
           const support = state.encoderSupport.get();
+          const initData = state.encoderInitData.get();
           const statuses = {
             camera: state.cameraState.get(),
             screen: state.screenShareState.get(),
@@ -218,11 +260,27 @@ function deriveCatalogSetup({
             delete advertised.camera;
             delete advertised.screen;
             delete advertised.audio;
+            delete advertisedInitData.camera;
+            delete advertisedInitData.screen;
+            delete advertisedInitData.audio;
           }
 
           const resolve = <Kind extends keyof ActiveEncodingsFacts>(kind: Kind): ActiveEncodingsFacts[Kind] => {
             const current = encodings[kind];
             if (current !== undefined) {
+              // The kind's description arrives on its first encoded output
+              // — after the actor whose teardown cleared the fact rebuilt —
+              // so an absent fact under an unchanged config is that
+              // transient: hold the advertised copy. Under a *changed*
+              // config the old extradata is invalid; drop it and wait for
+              // the new codec's report. (Content-compared: a re-probe
+              // resolving to the same config produces a fresh object.)
+              const fresh = initData?.[kind];
+              const held =
+                fresh ??
+                (JSON.stringify(advertised[kind]) === JSON.stringify(current) ? advertisedInitData[kind] : undefined);
+              if (held === undefined) delete advertisedInitData[kind];
+              else advertisedInitData[kind] = held;
               advertised[kind] = current;
               return current;
             }
@@ -233,8 +291,11 @@ function deriveCatalogSetup({
             // completed answer — an empty ladder, or a `selectEncoderConfig`
             // veto — and the source being live does not make the track
             // encodable, so it leaves the catalog.
+            // The held kind's `advertisedInitData` entry stays untouched on
+            // this path — the hold covers the pair.
             if (sourceHolds(statuses[kind]) && support?.[kind] === undefined) return advertised[kind];
             delete advertised[kind];
+            delete advertisedInitData[kind];
             return undefined;
           };
           const resolved: ActiveEncodingsFacts = {};
@@ -245,7 +306,9 @@ function deriveCatalogSetup({
           if (screen) resolved.screen = screen;
           if (audio) resolved.audio = audio;
 
-          const text = (config.buildCatalog ?? buildMsfCatalog)(catalogInputFor(endpoint, resolved));
+          const text = (config.buildCatalog ?? buildMsfCatalog)(
+            catalogInputFor(endpoint, resolved, advertisedInitData)
+          );
           if (lastSent && lastSent.publisher === publisher && lastSent.text === text) return;
           lastSent = { publisher, text };
           // The catalog publisher runs groupPerFrame: each send is object 0
@@ -264,7 +327,15 @@ function deriveCatalogSetup({
 }
 
 export const deriveCatalog = defineBehavior({
-  stateKeys: ['activeEncodings', 'endpoint', 'encoderSupport', 'cameraState', 'screenShareState', 'micState'],
+  stateKeys: [
+    'activeEncodings',
+    'endpoint',
+    'encoderSupport',
+    'encoderInitData',
+    'cameraState',
+    'screenShareState',
+    'micState',
+  ],
   contextKeys: ['catalogTrackPublisher'],
   setup: deriveCatalogSetup,
 });

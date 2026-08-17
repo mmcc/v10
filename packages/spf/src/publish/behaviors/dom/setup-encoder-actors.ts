@@ -32,13 +32,25 @@
  *
  * Packaged output routes through `config.chunkSink` (default: no-op).
  *
- * Sole writer of the three encoder-actor context slots; co-writer of
- * `state.publishError` (encoder failures only).
+ * Also the sole writer of `state.encoderInitData`: the decoder
+ * description (codec extradata, e.g. avcC for `avc`-format H.264) each
+ * live encoder reported, per kind. The description only exists in the
+ * codec's output metadata — encoder *configs* carry none — so the actor
+ * owner is the one place it can be lifted into a fact `deriveCatalog`
+ * can publish as the MSF catalog's `initDataList`. Written from the
+ * actor's `onDecoderConfig` callback and cleared with the actor, using
+ * the same partitioned-by-kind multi-writer-slot pattern as
+ * `probe-encoder-support.ts`'s facts: each cluster writes only its own
+ * key, and the last kind leaving restores the absent state.
+ *
+ * Sole writer of the three encoder-actor context slots and of
+ * `state.encoderInitData`; co-writer of `state.publishError` (encoder
+ * failures only).
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
-import { computed, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
+import { computed, peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import type { AudioEncoderActor } from '../../actors/dom/audio-encoder';
 import { createAudioEncoderActor } from '../../actors/dom/audio-encoder';
 import type { EncodedChunkSink } from '../../actors/dom/encoder-actor';
@@ -48,8 +60,20 @@ import { createVideoEncoderActor } from '../../actors/dom/video-encoder';
 import type { PublishErrorFacts } from './acquire-capture-source';
 import type { ActiveEncodingsFacts } from './probe-encoder-support';
 
+/**
+ * Decoder init data per kind — the `decoderConfig.description` the kind's
+ * live encoder most recently reported. Absent for codecs that carry no
+ * extradata (VP8, Opus) and until the kind's first encoded output.
+ */
+export interface EncoderInitDataFacts {
+  camera?: Uint8Array;
+  screen?: Uint8Array;
+  audio?: Uint8Array;
+}
+
 export interface SetupEncoderActorsState {
   activeEncodings?: ActiveEncodingsFacts;
+  encoderInitData?: EncoderInitDataFacts;
   publishError?: PublishErrorFacts | undefined;
 }
 
@@ -80,6 +104,7 @@ function setupEncoderActorsSetup({
 }: {
   state: {
     activeEncodings: ReadonlySignal<SetupEncoderActorsState['activeEncodings']>;
+    encoderInitData: Signal<SetupEncoderActorsState['encoderInitData']>;
     publishError: Signal<SetupEncoderActorsState['publishError']>;
   };
   context: {
@@ -117,6 +142,19 @@ function setupEncoderActorsSetup({
   const encodingFor = <Kind extends keyof ActiveEncodingsFacts>(kind: Kind) =>
     computed(() => state.activeEncodings.get()?.[kind]);
 
+  // The kind-partitioned write/clear pair for `encoderInitData` — the same
+  // merged-object discipline as `probe-encoder-support.ts`'s facts: each
+  // write spreads the previous object so the other kinds' entries stay
+  // reference-identical, and the last kind leaving collapses the emptied
+  // object back to `undefined` (downstream gates on presence).
+  const setInitData = (kind: keyof EncoderInitDataFacts, description: Uint8Array): void => {
+    state.encoderInitData.set({ ...peek(state.encoderInitData), [kind]: description });
+  };
+  const clearInitData = (kind: keyof EncoderInitDataFacts): void => {
+    const remaining = Object.entries(peek(state.encoderInitData) ?? {}).filter(([key]) => key !== kind);
+    state.encoderInitData.set(remaining.length === 0 ? undefined : Object.fromEntries(remaining));
+  };
+
   function runVideoCluster(
     encodingKey: 'camera' | 'screen',
     stream: ReadonlySignal<MediaStream | undefined>,
@@ -142,12 +180,20 @@ function setupEncoderActorsSetup({
           effects: () => {
             const videoConfig = encoding.get()!;
             stream.get();
-            const actor = createVideoEncoderActor(sink, { ...errorOptions, sinkTrack: encodingKey, timeline });
+            const actor = createVideoEncoderActor(sink, {
+              ...errorOptions,
+              sinkTrack: encodingKey,
+              timeline,
+              onDecoderConfig: (description) => setInitData(encodingKey, description),
+            });
             actor.send({ type: 'configure', config: videoConfig });
             actorSlot.set(actor);
             return () => {
               actor.destroy();
               actorSlot.set(undefined);
+              // A description describes one actor's output config — it must
+              // not outlive the actor whose codec reported it.
+              clearInitData(encodingKey);
             };
           },
         },
@@ -171,12 +217,17 @@ function setupEncoderActorsSetup({
         effects: () => {
           const audioConfig = audioEncoding.get()!;
           context.micStream.get();
-          const actor = createAudioEncoderActor(sink, { ...errorOptions, timeline: audioTimeline });
+          const actor = createAudioEncoderActor(sink, {
+            ...errorOptions,
+            timeline: audioTimeline,
+            onDecoderConfig: (description) => setInitData('audio', description),
+          });
           actor.send({ type: 'configure', config: audioConfig });
           context.audioEncoderActor.set(actor);
           return () => {
             actor.destroy();
             context.audioEncoderActor.set(undefined);
+            clearInitData('audio');
           };
         },
       },
@@ -191,7 +242,7 @@ function setupEncoderActorsSetup({
 }
 
 export const setupEncoderActors = defineBehavior({
-  stateKeys: ['activeEncodings', 'publishError'],
+  stateKeys: ['activeEncodings', 'encoderInitData', 'publishError'],
   contextKeys: [
     'cameraStream',
     'screenStream',

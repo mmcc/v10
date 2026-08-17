@@ -5,10 +5,11 @@ import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-ha
 
 /**
  * Cross-engine regression suite: the real publish engine (DEFAULT encoder
- * config — H.264 in `annexb` bitstream format, self-describing keyframes;
- * see `probe-encoder-support.ts` for why `avc` + LOC Config carriage was
- * abandoned) publishing through an in-memory draft-19 relay hub to the
- * real playback engine rendering onto a canvas.
+ * config — H.264 in `avc` (AVCC) bitstream format, with the avcC
+ * published out-of-band as the catalog's `initDataList`; see
+ * `probe-encoder-support.ts` for the carriage history) publishing through
+ * an in-memory draft-19 relay hub to the real playback engine rendering
+ * onto a canvas.
  *
  * Covers the real-world publisher bugs:
  * - a LATE-joining subscriber (after ≥1 group boundary) must reach decoded
@@ -64,7 +65,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     const hub = createRelayHub();
     disposals.push(() => hub.destroy());
 
-    // ── Publish (default codec config: avc1, annexb format) ──────────────
+    // ── Publish (default codec config: avc1, avc format) ─────────────────
     const publisher = createMoqPublishEngine({
       groupDurationSec: 1,
       connectTransport: hub.connectPublisher,

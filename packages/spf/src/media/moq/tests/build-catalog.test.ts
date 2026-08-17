@@ -114,6 +114,33 @@ describe('buildMsfCatalog', () => {
     expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual(['live/abc123/screen']);
   });
 
+  it('round-trips track init data through initDataList + initRef into the decoder description', () => {
+    const avcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x1e, 0xff, 0xe1]);
+    const audioSpecificConfig = Uint8Array.from([0x11, 0x90]);
+    const text = buildMsfCatalog({
+      namespace: NAMESPACE,
+      video: { ...AV_INPUT.video, initData: avcC },
+      audio: { ...AV_INPUT.audio, codec: 'mp4a.40.2', initData: audioSpecificConfig },
+    });
+
+    // The wire shape §5.2.16-17 readers (and non-SPF consumers) parse:
+    // inline base64 entries referenced per track.
+    const raw = JSON.parse(text);
+    expect(raw.tracks.map((track: Record<string, unknown>) => track.initRef)).toEqual(['video-init', 'audio-init']);
+    expect(raw.initDataList).toEqual([
+      { id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x1e\xff\xe1') },
+      { id: 'audio-init', type: 'inline', data: btoa('\x11\x90') },
+    ]);
+
+    const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+    const video = getTracksByType(presentation, 'video') as MoqVideoTrack[];
+    const audio = getTracksByType(presentation, 'audio') as MoqAudioTrack[];
+    expect(video[0]!.moq.initData).toEqual(avcC);
+    expect(audio[0]!.moq.initData).toEqual(audioSpecificConfig);
+    expect(new Uint8Array(toVideoDecoderConfig(video[0]!)!.description as ArrayBuffer)).toEqual(avcC);
+    expect(new Uint8Array(toAudioDecoderConfig(audio[0]!)!.description as ArrayBuffer)).toEqual(audioSpecificConfig);
+  });
+
   it('emits the supported version, completeness, and no absent fields', () => {
     const raw = JSON.parse(
       buildMsfCatalog({ namespace: NAMESPACE, audio: { name: 'audio', codec: 'opus' }, generatedAt: 1746104606044 })
