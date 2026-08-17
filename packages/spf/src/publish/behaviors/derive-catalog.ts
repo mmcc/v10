@@ -49,7 +49,9 @@
  * publisher slot `setupTrackPublishers` owns and sends frames — it never
  * creates actors. The WebCodecs encoder configs feed the catalog directly:
  * their `codec` fields are already WebCodecs registry strings, which is
- * exactly what MSF §5.2.18 mandates for LOC tracks.
+ * exactly what MSF §5.2.18 mandates for LOC tracks — except H.264, whose
+ * declared string is re-derived to describe the published bitstream
+ * (`catalogVideoCodec`).
  *
  * **Decoder init data rides the catalog, not only LOC.** Each kind's
  * `state.encoderInitData` (the `decoderConfig.description` its live
@@ -79,6 +81,7 @@ import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import type { ReadonlySignal } from '../../core/signals/primitives';
+import { avcCodecFromAvcC } from '../../media/moq/avc-codec';
 import type { BuildMsfCatalog, MsfCatalogInput } from '../../media/moq/build-catalog';
 import { buildMsfCatalog } from '../../media/moq/build-catalog';
 import type { TrackPublisherActor } from '../actors/track-publisher';
@@ -148,15 +151,40 @@ function sourceHolds(status: CaptureSourceStatus | undefined): boolean {
 
 /**
  * Whether the config's bitstream can only be decoded with out-of-band
- * init data. `avc1` in its default `avc` (AVCC) bitstream format needs
- * the avcC `description` (`annexb` keeps parameter sets in-band); AAC
- * (`mp4a.*`) needs its AudioSpecificConfig. VP8/VP9/AV1 and Opus are
- * self-describing. Covers the codecs the config seam can produce today —
- * extend alongside the probe ladder.
+ * init data. H.264 in its default `avc` (AVCC) bitstream format needs
+ * the avcC `description` whatever the requested fourcc — WebCodecs puts
+ * the parameter sets in the description, never in-band, unless `annexb`
+ * is requested — and AAC (`mp4a.*`) needs its AudioSpecificConfig.
+ * VP8/VP9/AV1 and Opus are self-describing. Covers the codecs the config
+ * seam can produce today — extend alongside the probe ladder.
  */
 function requiresInitData(config: VideoEncoderConfig | AudioEncoderConfig): boolean {
-  if (config.codec.startsWith('avc1')) return (config as VideoEncoderConfig).avc?.format !== 'annexb';
+  if (config.codec.startsWith('avc1') || config.codec.startsWith('avc3')) {
+    return (config as VideoEncoderConfig).avc?.format !== 'annexb';
+  }
   return config.codec.startsWith('mp4a');
+}
+
+/**
+ * The codec string the catalog should declare for a video encoding — the
+ * one place a consumer learns the bitstream contract, so it must describe
+ * the stream as published, not as requested (issue #23):
+ *
+ * - An `annexb` H.264 config publishes start codes with in-band parameter
+ *   sets — that is `avc3`, whatever fourcc was requested. An `avc1` label
+ *   sends length-prefix readers parsing the SPS start code as a NAL
+ *   length. (No avcC exists in this format, so the requested
+ *   profile/level suffix is the best available and passes through.)
+ * - An AVCC config's avcC carries the profile/constraints/level the
+ *   encoder actually emitted, which the requested suffix may not match —
+ *   an encoder may honor the profile but pick its own constraint flags
+ *   and level — so the suffix is re-derived from the avcC riding the same
+ *   catalog.
+ */
+function catalogVideoCodec(config: VideoEncoderConfig, initData: Uint8Array | undefined): string {
+  if (!config.codec.startsWith('avc1') && !config.codec.startsWith('avc3')) return config.codec;
+  if (config.avc?.format === 'annexb') return `avc3${config.codec.slice(4)}`;
+  return (initData && avcCodecFromAvcC(initData)) ?? config.codec;
 }
 
 /** Project the active encoder configs onto the catalog builder's input. */
@@ -169,7 +197,7 @@ export function catalogInputFor(
   if (encodings.camera) {
     input.video = {
       name: VIDEO_TRACK_NAME,
-      codec: encodings.camera.codec,
+      codec: catalogVideoCodec(encodings.camera, initData.camera),
       width: encodings.camera.width,
       height: encodings.camera.height,
       framerate: encodings.camera.framerate,
@@ -180,7 +208,7 @@ export function catalogInputFor(
   if (encodings.screen) {
     input.screen = {
       name: SCREEN_TRACK_NAME,
-      codec: encodings.screen.codec,
+      codec: catalogVideoCodec(encodings.screen, initData.screen),
       width: encodings.screen.width,
       height: encodings.screen.height,
       framerate: encodings.screen.framerate,
