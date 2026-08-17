@@ -1,7 +1,8 @@
 /**
  * **Own the publish transport session.** While an `endpoint` is set,
  * `publishActivated` is true, and any capture pipeline (camera, screen,
- * or microphone) is `'active'`, connects through
+ * or — under explicit `micActive` intent only — microphone) is
+ * `'active'`, connects through
  * `config.connectTransport` (default: a real `WebTransport`), creates the
  * publish-session actor, publishes it on `context.publishSessionActor`,
  * and mirrors the actor's lifecycle into `state.sessionStatus`
