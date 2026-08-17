@@ -385,13 +385,15 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
-    // Before the first encoded output there is nothing to reference.
+    // Before the first encoded output reports the avcC, an AVCC track is
+    // an undecodable declaration — it must not be advertised yet.
     if (sent[0]!.type !== 'frame') return;
     const initial = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+    expect(initial.tracks).toEqual([]);
     expect(initial.initDataList).toBeUndefined();
-    expect(initial.tracks[0].initRef).toBeUndefined();
 
-    // The camera encoder reports its avcC on the first encoded output.
+    // The camera encoder reports its avcC on the first encoded output —
+    // the track and its init data appear as one complete pair.
     const avcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x1e, 0xff]);
     state.encoderInitData.set({ camera: avcC });
     await vi.waitFor(() => {
@@ -399,8 +401,25 @@ describe('deriveCatalog', () => {
     });
     if (sent[1]!.type !== 'frame') return;
     const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+    expect(catalog.tracks[0].name).toBe('video');
     expect(catalog.tracks[0].initRef).toBe('video-init');
     expect(catalog.initDataList).toEqual([{ id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x1e\xff') }]);
+  });
+
+  it('advertises a self-describing codec immediately — the complete-pair gate is init-data-requiring only', async () => {
+    const { publisher, sent } = makePublisherStub();
+    const { state, context } = setupBehavior();
+
+    state.endpoint.set(ENDPOINT);
+    // VP8 + Opus decode with no out-of-band description; waiting for a
+    // report that will never come would keep them out of the catalog
+    // forever.
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(trackNames(sent[0]!)).toEqual(['video', 'audio']);
   });
 
   it('holds a kind’s init data through a device switch (initRef must not flap off and back on)', async () => {
@@ -440,7 +459,7 @@ describe('deriveCatalog', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('drops held init data when the kind’s config changes (old extradata describes the old config)', async () => {
+  it('holds the previous complete pair across a config change until the new config’s init data lands', async () => {
     const { publisher, sent } = makePublisherStub();
     const { state, context } = setupBehavior();
     const H264_CONFIG = { codec: 'avc1.42E01F', width: 1280, height: 720 } as VideoEncoderConfig;
@@ -455,29 +474,28 @@ describe('deriveCatalog', () => {
     });
 
     // A new config: the actor rebuilds (fact cleared) and the encoding
-    // changes — the old avcC (wrong resolution's SPS) must not be carried
-    // over to the new track description.
+    // changes. The old avcC (wrong resolution's SPS) must not describe
+    // the new config, and the new config must not be advertised without
+    // init data — the previous complete pair stands, so nothing new goes
+    // on the wire yet. (Dropping the track instead would end every
+    // subscriber's subscription for a one-frame transient.)
     state.encoderInitData.set(undefined);
     state.activeEncodings.set({ camera: { ...H264_CONFIG, width: 640, height: 360 } });
+    await settle();
+    expect(sent).toHaveLength(1);
+
+    // The new codec reports the new config's extradata — the pair
+    // advances atomically: new dimensions and new initRef together.
+    const nextAvcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x0d]);
+    state.encoderInitData.set({ camera: nextAvcC });
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
     if (sent[1]!.type !== 'frame') return;
-    const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
-    expect(catalog.tracks[0].width).toBe(640);
-    expect(catalog.tracks[0].initRef).toBeUndefined();
-    expect(catalog.initDataList).toBeUndefined();
-
-    // The new codec reports the new config's extradata — now it rides.
-    const nextAvcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x0d]);
-    state.encoderInitData.set({ camera: nextAvcC });
-    await vi.waitFor(() => {
-      expect(sent).toHaveLength(3);
-    });
-    if (sent[2]!.type !== 'frame') return;
-    const next = JSON.parse(new TextDecoder().decode(sent[2]!.payload));
+    const next = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+    expect(next.tracks[0].width).toBe(640);
     expect(next.tracks[0].initRef).toBe('video-init');
-    expect(next.initDataList).toHaveLength(1);
+    expect(next.initDataList).toEqual([{ id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x0d') }]);
   });
 
   it('routes through the buildCatalog config seam', async () => {

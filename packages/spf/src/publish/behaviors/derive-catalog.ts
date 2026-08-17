@@ -64,7 +64,14 @@
  * an actor rebuild while the kind's config is unchanged (a device switch
  * must not flap `initRef` off and back on), dropped the moment the config
  * changes (old extradata describes the old config) or the kind leaves the
- * catalog.
+ * catalog. A config whose bitstream is undecodable without that init
+ * data (see `requiresInitData`) is only ever advertised as a complete
+ * pair: before the kind's first description report it stays out of the
+ * catalog — an `avc1` track without `initRef` is an undecodable
+ * declaration a consumer may configure from once and never re-evaluate —
+ * and across a config change the previous complete pair holds for the
+ * one-frame window until the new description lands, because dropping the
+ * track instead would end every subscriber's subscription.
  *
  * Writes no state; state/context reader only.
  */
@@ -137,6 +144,19 @@ const textEncoder = new TextEncoder();
  */
 function sourceHolds(status: CaptureSourceStatus | undefined): boolean {
   return status === 'active' || status === 'acquiring';
+}
+
+/**
+ * Whether the config's bitstream can only be decoded with out-of-band
+ * init data. `avc1` in its default `avc` (AVCC) bitstream format needs
+ * the avcC `description` (`annexb` keeps parameter sets in-band); AAC
+ * (`mp4a.*`) needs its AudioSpecificConfig. VP8/VP9/AV1 and Opus are
+ * self-describing. Covers the codecs the config seam can produce today —
+ * extend alongside the probe ladder.
+ */
+function requiresInitData(config: VideoEncoderConfig | AudioEncoderConfig): boolean {
+  if (config.codec.startsWith('avc1')) return (config as VideoEncoderConfig).avc?.format !== 'annexb';
+  return config.codec.startsWith('mp4a');
 }
 
 /** Project the active encoder configs onto the catalog builder's input. */
@@ -279,6 +299,11 @@ function deriveCatalogSetup({
               const held =
                 fresh ??
                 (JSON.stringify(advertised[kind]) === JSON.stringify(current) ? advertisedInitData[kind] : undefined);
+              // Complete-pair gate (see the module doc): a config that is
+              // undecodable without init data never advances the advertised
+              // pair until its description exists — the previous complete
+              // advertisement (or none, before the first report) stands.
+              if (held === undefined && requiresInitData(current)) return advertised[kind];
               if (held === undefined) delete advertisedInitData[kind];
               else advertisedInitData[kind] = held;
               advertised[kind] = current;
