@@ -43,6 +43,7 @@ function setupStubbedActor(
     track?: 'video' | 'audio';
     timeline?: TrackTimeline;
     encode?: (frame: FakeFrame, keyFrame: boolean) => void;
+    onDecoderConfig?: (description: Uint8Array) => void;
   } = {}
 ) {
   const sunk: { packaged: PackagedLocFrame; meta: EncodedChunkSinkMeta }[] = [];
@@ -121,6 +122,30 @@ describe('createEncoderActor', () => {
       expect(descriptionOf(packaged, LOC_PROPERTY.AUDIO_CONFIG)).toEqual(description);
       expect(descriptionOf(packaged, LOC_PROPERTY.VIDEO_CONFIG)).toBeUndefined();
     }
+  });
+
+  it('reports each decoder description through onDecoderConfig, as an owned copy', () => {
+    const reported: Uint8Array[] = [];
+    const { actor, emit } = setupStubbedActor({ onDecoderConfig: (description) => reported.push(description) });
+    actor.send({ type: 'configure', config: { id: 1 } });
+
+    const description = Uint8Array.from([1, 66, 224, 31]);
+    emit(makeChunk('key', 0), { decoderConfig: { description } });
+    // Outputs without metadata report nothing — the callback is the
+    // config-change channel, not a per-chunk one.
+    emit(makeChunk('delta', 33_000));
+    emit(makeChunk('key', 2_000_000));
+    expect(reported).toHaveLength(1);
+
+    // The codec may reuse its buffer after the callback returns.
+    description.fill(0);
+    expect(reported[0]).toEqual(Uint8Array.from([1, 66, 224, 31]));
+
+    // A reconfigure's fresh description is reported again.
+    actor.send({ type: 'configure', config: { id: 2 } });
+    emit(makeChunk('key', 4_000_000), { decoderConfig: { description: Uint8Array.from([2, 2]) } });
+    expect(reported).toHaveLength(2);
+    expect(reported[1]).toEqual(Uint8Array.from([2, 2]));
   });
 
   it('does not alias the codec-owned description buffer', () => {

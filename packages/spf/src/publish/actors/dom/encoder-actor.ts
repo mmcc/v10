@@ -145,6 +145,15 @@ export interface EncoderActorOptions {
    * specialization's `'camera'` / the audio specialization's `'audio'`.
    */
   sinkTrack?: EncodedChunkSinkMeta['track'];
+  /**
+   * Called whenever the codec reports a `decoderConfig.description`
+   * (e.g. avcC for `avc`-format H.264) — the same extradata the actor
+   * carries as the LOC Config property. `setupEncoderActors` publishes it
+   * as the kind's `encoderInitData` fact so the MSF catalog can carry it
+   * out-of-band. The callback receives the actor's owned copy; do not
+   * mutate it.
+   */
+  onDecoderConfig?: (description: Uint8Array) => void;
 }
 
 export const DEFAULT_MAX_QUEUE_DEPTH = 60;
@@ -256,8 +265,9 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   nowUs?: () => number;
   timeline?: TrackTimeline;
   sinkTrack?: EncodedChunkSinkMeta['track'];
+  onDecoderConfig?: (description: Uint8Array) => void;
 }): EncoderActor<Config, Frame> {
-  const { track, sink, onError } = options;
+  const { track, sink, onError, onDecoderConfig } = options;
   const sinkTrack = options.sinkTrack ?? (track === 'video' ? 'camera' : 'audio');
   const maxQueueDepth = options.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH;
   const timeline = options.timeline ?? createTrackTimeline({ nowUs: options.nowUs });
@@ -289,7 +299,10 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   const instance = options.create({
     output: (chunk, metadata) => {
       const description = metadata?.decoderConfig?.description;
-      if (description !== undefined) latestConfig = copyDescription(description);
+      if (description !== undefined) {
+        latestConfig = copyDescription(description);
+        onDecoderConfig?.(latestConfig);
+      }
       const keyframe = chunk.type === 'key';
       // Codecs carry input timestamps through to their chunks, so the
       // input-anchored offset applies exactly.
