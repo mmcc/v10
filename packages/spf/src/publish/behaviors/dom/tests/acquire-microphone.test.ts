@@ -11,6 +11,7 @@ import {
 
 function makeState(initial: AcquireMicrophoneState = {}): StateSignals<AcquireMicrophoneState> {
   return {
+    micActive: signal(initial.micActive ?? false),
     cameraActive: signal(initial.cameraActive ?? false),
     screenShareActive: signal(initial.screenShareActive ?? false),
     audioInputDeviceId: signal(initial.audioInputDeviceId ?? ''),
@@ -299,6 +300,125 @@ describe('acquireMicrophone', () => {
       expect(context.micStream.get()).toBe(asStream(second));
     });
     expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it('acquires with the microphone as the sole capture source — no video source required', async () => {
+    const stream = new FakeMediaStream([new FakeMediaStreamTrack({ sampleRate: 48000, channelCount: 1 })]);
+    const getUserMedia = vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
+    const { state, context } = setupAcquire();
+
+    state.micActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
+    // Audio-only constraints: no camera or screen share in the permission
+    // prompt (issue #26 — users decline "camera + microphone" who would
+    // have accepted "microphone").
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
+    expect(context.micStream.get()).toBe(asStream(stream));
+  });
+
+  it('releases when micActive drops and no video source holds the gate', async () => {
+    const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
+    const { state, context } = setupAcquire();
+
+    state.micActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
+
+    state.micActive.set(false);
+
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('idle');
+      expect(context.micStream.get()).toBeUndefined();
+    });
+    for (const track of stream.getTracks()) expect(track.stop).toHaveBeenCalled();
+  });
+
+  it('keeps capturing when micActive drops while a video source is active — video intent implies the mic', async () => {
+    const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+    const getUserMedia = vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
+    const { state, context } = setupAcquire();
+
+    state.micActive.set(true);
+    state.cameraActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
+    const acquiredStream = context.micStream.get();
+
+    state.micActive.set(false);
+
+    // micActive is acquisition intent, not a mute: with the camera still
+    // holding the gate the pipeline neither releases nor re-acquires.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(state.micState.get()).toBe('active');
+    expect(context.micStream.get()).toBe(acquiredStream);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('consumes micActive on denial — the next true write is a real retry edge', async () => {
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValue(
+      new DOMException('Permission denied', 'NotAllowedError')
+    );
+    const { state } = setupAcquire();
+
+    state.micActive.set(true);
+
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('denied');
+      expect(state.micActive.get()).toBe(false);
+    });
+    expect(state.publishError.get()).toBeUndefined();
+  });
+
+  it('consumes micActive when a sole-source mic ends out-of-band, keeping the terminal status', async () => {
+    const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
+    const { state, context } = setupAcquire();
+
+    state.micActive.set(true);
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
+
+    stream.getTracks()[0]!.dispatchEvent(new Event('ended'));
+
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('ended');
+      expect(state.micActive.get()).toBe(false);
+      expect(context.micStream.get()).toBeUndefined();
+    });
+  });
+
+  it('holds micActive through a missing-device idle — a mic-only session waits for the plug-in', async () => {
+    const mic = new FakeMediaStream([new FakeMediaStreamTrack()]);
+    const getUserMedia = vi
+      .spyOn(navigator.mediaDevices, 'getUserMedia')
+      .mockRejectedValueOnce(new DOMException('no mic', 'NotFoundError'))
+      .mockResolvedValueOnce(asStream(mic));
+    const { state } = setupAcquire();
+
+    state.micActive.set(true);
+    await vi.waitFor(() => {
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('idle');
+    });
+    // A quiet idle is not a termination: the intent survives, so the gate
+    // stays hot and the devicechange nudge below can still re-acquire.
+    expect(state.micActive.get()).toBe(true);
+
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+
+    await vi.waitFor(() => {
+      expect(state.micState.get()).toBe('active');
+    });
   });
 
   it('re-acquires on devicechange after a missing-device idle — mic plugged in later', async () => {

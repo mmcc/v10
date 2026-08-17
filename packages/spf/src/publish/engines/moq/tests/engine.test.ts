@@ -44,8 +44,8 @@ function makeLiveAudioStream(): MediaStream {
  * that dispatch so each pipeline gets its own live stream instead of
  * sharing one (which would make releasing one stop the other's tracks).
  */
-function mockGetUserMedia(): void {
-  vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
+function mockGetUserMedia() {
+  return vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
     if (constraints?.audio) return makeLiveAudioStream();
     return makeLiveVideoStream();
   });
@@ -120,6 +120,40 @@ describe('createMoqPublishEngine', () => {
     // screen wants to capture anymore), so it winds down too.
     await vi.waitFor(() => {
       expect(engine.state.publishStats.get()).toBeUndefined();
+    });
+  }, 30_000);
+
+  it('publishes audio-only: micActive alone captures and encodes with no video pipeline touched', async () => {
+    const getUserMedia = mockGetUserMedia();
+    const engine = createMoqPublishEngine({ statsIntervalMs: 250 });
+    disposals.push(() => void engine.destroy());
+
+    engine.state.micActive.set(true);
+    await vi.waitFor(() => {
+      expect(engine.state.micState.get()).toBe('active');
+    });
+    // The one getUserMedia call asked for audio alone — no camera in the
+    // permission prompt, no hardware indicator, and (below) no video
+    // track in the encodings the catalog would advertise (issue #26).
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
+    expect(engine.state.cameraState.get()).toBe('idle');
+    expect(engine.state.screenShareState.get()).toBe('idle');
+
+    await vi.waitFor(() => {
+      expect(engine.state.activeEncodings.get()?.audio).toMatchObject({ codec: 'opus' });
+      expect(engine.context.audioEncoderActor.get()).toBeDefined();
+    });
+    expect(engine.state.activeEncodings.get()?.camera).toBeUndefined();
+    expect(engine.state.activeEncodings.get()?.screen).toBeUndefined();
+    expect(engine.context.cameraEncoderActor.get()).toBeUndefined();
+    expect(engine.state.publishError.get()).toBeUndefined();
+
+    // Releasing the sole source winds the whole capture stage down.
+    engine.state.micActive.set(false);
+    await vi.waitFor(() => {
+      expect(engine.state.micState.get()).toBe('idle');
+      expect(engine.context.audioEncoderActor.get()).toBeUndefined();
     });
   }, 30_000);
 

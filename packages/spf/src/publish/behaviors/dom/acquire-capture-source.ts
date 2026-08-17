@@ -15,24 +15,32 @@
  *   audio is never requested (see the multi-source design record's
  *   "System audio" decision) — gated on `state.screenShareActive`.
  * - **Microphone**: `getUserMedia({audio, video: false})`, gated on
- *   *either* video source being active (so the permission prompt still
- *   waits for real capture intent, matching v1's UX) but keyed for
- *   re-acquisition on `state.audioInputDeviceId` ALONE — never on which
- *   video source is active. This is the actual fix for the confirmed
- *   defect: a mic device change used to no-op while screen-sharing
- *   because the mic was merged into the screen's stream; now it has no
- *   dependency on the video pipelines at all.
+ *   `state.micActive` OR *either* video source being active. Video intent
+ *   implies audio (the permission prompt still waits for real capture
+ *   intent, matching v1's UX); `micActive` is the audio-only seam — a
+ *   voice-only session captures with no camera or screen share in the
+ *   permission prompt and no video pipeline touched (issue #26). The
+ *   pipeline is keyed for re-acquisition on `state.audioInputDeviceId`
+ *   ALONE — never on which gate term is active. This is the actual fix
+ *   for the confirmed defect: a mic device change used to no-op while
+ *   screen-sharing because the mic was merged into the screen's stream;
+ *   now it has no dependency on the video pipelines at all. Because video
+ *   intent implies audio, a mic acquired under an active video source
+ *   stays acquired when `micActive` drops — the slot is acquisition
+ *   intent, not a mute (`micMuted` is).
  *
  * **Intent consumption** (multi-writer contract on `cameraActive` /
- * `screenShareActive`): the adapter writes these slots to record consumer
- * intent; the video acquire behaviors are their second writer, consuming
- * the intent (writing `false`) when the pipeline terminates without
- * consumer action — permission `denied`, the track `ended` outside our
- * control, or any acquisition failure (surfaced as a capture
- * `publishError`). The slot therefore always means "a request being served", so
- * the mic's OR-gate collapses when nothing is really capturing (no hot
- * mic behind a dismissed screen picker) and the next `true` write is a
- * real rising edge — one-click retry after a denial. The terminal status
+ * `screenShareActive` / `micActive`): the adapter writes these slots to
+ * record consumer intent; each acquire behavior is its own slot's second
+ * writer, consuming the intent (writing `false`) when the pipeline
+ * terminates without consumer action — permission `denied`, the track
+ * `ended` outside our control, or any acquisition failure (surfaced as a
+ * capture `publishError`). The slot therefore always means "a request
+ * being served", so the mic's OR-gate collapses when nothing is really
+ * capturing (no hot mic behind a dismissed screen picker) and the next
+ * `true` write is a real rising edge — one-click retry after a denial.
+ * The mic consumes only `micActive`, never the video slots its gate also
+ * reads — a dead mic must not end a video capture. The terminal status
  * (`denied`/`ended`) survives the release so UIs keep their blocked/ended
  * messaging.
  *
@@ -141,7 +149,8 @@ function runCaptureAcquisition({
    * Consumer-intent slot this pipeline serves, consumed (set `false`) when
    * it terminates without consumer action — `denied`, `ended`, or any
    * acquisition failure — see the module doc's multi-writer contract. The
-   * mic passes none: its gate is the video sources' intent, not its own.
+   * mic passes its own `micActive`: consuming it never touches the video
+   * slots whose intent also holds its gate.
    */
   intent?: Signal<boolean | undefined>;
   /** Mic-only policy: a missing/unsatisfiable device lands a quiet `idle` instead of a capture error. */
@@ -386,6 +395,7 @@ export const acquireScreenShare = defineBehavior({
 // ----------------------------------------
 
 export interface AcquireMicrophoneState {
+  micActive?: boolean;
   cameraActive?: boolean;
   screenShareActive?: boolean;
   audioInputDeviceId?: string;
@@ -421,6 +431,11 @@ function acquireMicrophoneSetup({
   context,
 }: {
   state: {
+    // Intent slot: adapter-written, consumed (set `false`) here on
+    // `denied`/`ended`/failure — see the module doc's multi-writer
+    // contract. The audio-only seam; the video slots below stay read-only
+    // implied intent.
+    micActive: Signal<AcquireMicrophoneState['micActive']>;
     cameraActive: ReadonlySignal<AcquireMicrophoneState['cameraActive']>;
     screenShareActive: ReadonlySignal<AcquireMicrophoneState['screenShareActive']>;
     audioInputDeviceId: ReadonlySignal<AcquireMicrophoneState['audioInputDeviceId']>;
@@ -437,14 +452,16 @@ function acquireMicrophoneSetup({
   const retryEpoch = signal(0);
   return createMachineReactor<CaptureFsmState>({
     initial: 'inactive',
-    // Gated on either video source wanting to capture at all (keeps the
-    // permission prompt tied to real capture intent), but the effect below
-    // tracks ONLY audioInputDeviceId — switching camera<->screen while
-    // either stays active must never re-fire this pipeline. Because the
-    // video behaviors consume their intent on `denied`/`ended`, this gate
-    // collapses when nothing is really capturing — the mic never outlives
-    // a dismissed picker or a browser-native "Stop sharing".
-    monitor: () => (state.cameraActive.get() || state.screenShareActive.get() ? 'active' : 'inactive'),
+    // Gated on the mic's own intent OR either video source wanting to
+    // capture at all (keeps the permission prompt tied to real capture
+    // intent), but the effect below tracks ONLY audioInputDeviceId —
+    // switching between gate terms while any stays active must never
+    // re-fire this pipeline. Because every intent writer consumes its slot
+    // on `denied`/`ended`, this gate collapses when nothing is really
+    // capturing — the mic never outlives a dismissed picker or a
+    // browser-native "Stop sharing".
+    monitor: () =>
+      state.micActive.get() || state.cameraActive.get() || state.screenShareActive.get() ? 'active' : 'inactive',
     states: {
       inactive: {},
       active: {
@@ -472,6 +489,7 @@ function acquireMicrophoneSetup({
             tracks: state.micTracks,
             stream: context.micStream,
             publishError: state.publishError,
+            intent: state.micActive,
             tolerateMissingDevice: true,
           });
         },
@@ -481,7 +499,15 @@ function acquireMicrophoneSetup({
 }
 
 export const acquireMicrophone = defineBehavior({
-  stateKeys: ['cameraActive', 'screenShareActive', 'audioInputDeviceId', 'micState', 'micTracks', 'publishError'],
+  stateKeys: [
+    'micActive',
+    'cameraActive',
+    'screenShareActive',
+    'audioInputDeviceId',
+    'micState',
+    'micTracks',
+    'publishError',
+  ],
   contextKeys: ['micStream'],
   setup: acquireMicrophoneSetup,
 });
