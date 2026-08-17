@@ -19,7 +19,7 @@ function makePublisherStub() {
   return { publisher, sent };
 }
 
-function setupBehavior(buildCatalog?: (input: unknown) => string) {
+function setupBehavior(buildCatalog?: (input: unknown) => string, dataTracks?: { name: string; role?: string }[]) {
   const state = {
     activeEncodings: signal<DeriveCatalogState['activeEncodings']>(undefined),
     endpoint: signal<DeriveCatalogState['endpoint']>(undefined),
@@ -35,7 +35,10 @@ function setupBehavior(buildCatalog?: (input: unknown) => string) {
   const reactor = deriveCatalog.setup({
     state,
     context,
-    config: buildCatalog ? { buildCatalog: buildCatalog as never } : {},
+    config: {
+      ...(buildCatalog ? { buildCatalog: buildCatalog as never } : {}),
+      ...(dataTracks ? { dataTracks } : {}),
+    },
   });
   disposals.push(() => reactor.destroy());
   return { state, context };
@@ -631,5 +634,41 @@ describe('deriveCatalog', () => {
     );
     if (sent[0]!.type !== 'frame') return;
     expect(new TextDecoder().decode(sent[0]!.payload)).toBe('{"version":"draft-01","tracks":[]}');
+  });
+
+  it('advertises configured data tracks on every catalog, filtered like the serve registry', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    disposals.push(() => warn.mockRestore());
+    const { publisher, sent } = makePublisherStub();
+    // `catalog` collides with a reserved name and must not be advertised.
+    const { state, context } = setupBehavior(undefined, [{ name: 'overlay', role: 'data' }, { name: 'catalog' }]);
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.catalogTrackPublisher.set(publisher);
+
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(trackNames(sent[0]!)).toEqual(['video', 'audio', 'overlay']);
+    if (sent[0]!.type !== 'frame') return;
+    const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+    const overlay = catalog.tracks.find((track: { name: string }) => track.name === 'overlay');
+    expect(overlay).toEqual({
+      namespace: 'live/abc123',
+      packaging: 'loc',
+      isLive: true,
+      name: 'overlay',
+      role: 'data',
+    });
+
+    // The data entry is static — an encodings change re-derives a catalog
+    // that still carries it.
+    state.activeEncodings.set({ audio: AUDIO_CONFIG });
+    state.encoderSupport.set({ audio: [AUDIO_CONFIG] });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(trackNames(sent[1]!)).toEqual(['audio', 'overlay']);
   });
 });

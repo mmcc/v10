@@ -6,6 +6,9 @@
  * it as object 0 of a new group on the catalog publisher — re-deriving
  * whenever the inputs change identity, so subscribers always have a
  * current, independently parseable catalog at every group boundary.
+ * Config-declared application data tracks (`config.dataTracks`, resolved
+ * through the same name filter the serve registry applies) ride every
+ * catalog as name + role entries — static, so they add no reactivity.
  *
  * **The advertisement is latched across a source switch, mirroring
  * `setupTrackPublishers`.** A device switch re-acquires through a
@@ -88,8 +91,8 @@ import type { BuildMsfCatalog, MsfCatalogInput } from '../../media/moq/build-cat
 import { buildMsfCatalog } from '../../media/moq/build-catalog';
 import type { TrackPublisherActor } from '../actors/track-publisher';
 import type { PublishEndpoint } from '../session/publish-session';
-import type { ActiveEncodingsFacts } from './setup-track-publishers';
-import { AUDIO_TRACK_NAME, SCREEN_TRACK_NAME, VIDEO_TRACK_NAME } from './setup-track-publishers';
+import type { ActiveEncodingsFacts, PublishDataTrackConfig } from './setup-track-publishers';
+import { AUDIO_TRACK_NAME, resolveDataTracks, SCREEN_TRACK_NAME, VIDEO_TRACK_NAME } from './setup-track-publishers';
 
 /**
  * Structural mirror of `behaviors/dom/acquire-capture-source.ts`'s
@@ -137,6 +140,12 @@ export interface DeriveCatalogContext {
 export interface DeriveCatalogConfig {
   /** Catalog-JSON builder seam; default `buildMsfCatalog`. */
   buildCatalog?: BuildMsfCatalog;
+  /**
+   * Application data tracks published on the broadcast beside the media
+   * (`setupTrackPublishers` registers and serves them); advertised on
+   * every catalog so subscribers can discover them.
+   */
+  dataTracks?: PublishDataTrackConfig[];
 }
 
 type DeriveCatalogFsmState = 'idle' | 'publishing-catalog';
@@ -205,9 +214,13 @@ function catalogAudioSamplerate(config: AudioEncoderConfig): number {
 export function catalogInputFor(
   endpoint: PublishEndpoint,
   encodings: ActiveEncodingsFacts,
-  initData: EncoderInitDataByKind = {}
+  initData: EncoderInitDataByKind = {},
+  dataTracks: readonly PublishDataTrackConfig[] = []
 ): MsfCatalogInput {
   const input: MsfCatalogInput = { namespace: endpoint.namespace };
+  if (dataTracks.length > 0) {
+    input.data = dataTracks.map(({ name, role }) => (role === undefined ? { name } : { name, role }));
+  }
   if (encodings.camera) {
     input.video = {
       name: VIDEO_TRACK_NAME,
@@ -262,6 +275,10 @@ function deriveCatalogSetup({
   };
   config?: DeriveCatalogConfig;
 }): Reactor<DeriveCatalogFsmState | 'destroying' | 'destroyed'> {
+  // Resolved through the same filter the serve registry applies, so the
+  // catalog never advertises a data track the session refused to register.
+  const dataTracks = resolveDataTracks(config.dataTracks);
+
   // The latch memory: the encoding each kind was last advertised with.
   // Setup-scoped rather than effect-scoped so it survives the reactor
   // passing through 'idle' (a sole-source device switch collapses
@@ -374,7 +391,7 @@ function deriveCatalogSetup({
           if (audio) resolved.audio = audio;
 
           const text = (config.buildCatalog ?? buildMsfCatalog)(
-            catalogInputFor(endpoint, resolved, advertisedInitData)
+            catalogInputFor(endpoint, resolved, advertisedInitData, dataTracks)
           );
           if (lastSent && lastSent.publisher === publisher && lastSent.text === text) return;
           lastSent = { publisher, text };

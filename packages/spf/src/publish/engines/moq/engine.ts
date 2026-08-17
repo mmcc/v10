@@ -36,6 +36,7 @@ import type { PreviewSource } from '../../behaviors/dom/sync-preview';
 import { syncPreview } from '../../behaviors/dom/sync-preview';
 import type { PublishSessionStatus } from '../../behaviors/open-publish-session';
 import { openPublishSession } from '../../behaviors/open-publish-session';
+import type { DataTrackProducer, PublishDataTrackConfig } from '../../behaviors/setup-track-publishers';
 import { setupTrackPublishers } from '../../behaviors/setup-track-publishers';
 import type { PublishStatsFacts } from '../../behaviors/track-publish-stats';
 import { trackPublishStats } from '../../behaviors/track-publish-stats';
@@ -52,11 +53,13 @@ export type {
   CaptureStatus,
   CaptureTrackFacts,
   ConnectPublishTransport,
+  DataTrackProducer,
   EncodedChunkSink,
   EncodedChunkSinkMeta,
   EncoderInitDataFacts,
   EncoderSupportFacts,
   PreviewSource,
+  PublishDataTrackConfig,
   PublishEndpoint,
   PublishErrorFacts,
   PublishSessionActor,
@@ -139,6 +142,13 @@ export interface MoqPublishEngineContext {
   videoTrackPublisher?: TrackPublisherActor | undefined;
   screenTrackPublisher?: TrackPublisherActor | undefined;
   audioTrackPublisher?: TrackPublisherActor | undefined;
+  /**
+   * Producer handles for the config-declared application data tracks,
+   * keyed by track name (owned by `setupTrackPublishers`). Present while
+   * the publish session's track publishers are up; a page holding one
+   * across a session rebuild must re-read the slot.
+   */
+  dataTrackProducers?: Readonly<Record<string, DataTrackProducer>> | undefined;
 }
 
 /** Composition signal refs handed to {@link ShareSignalsConfig.onSignalsReady}. */
@@ -178,6 +188,14 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   statsIntervalMs?: number;
   /** Groups the transport may fall behind before dropping to the keyframe. */
   maxQueuedGroups?: number;
+  /**
+   * Application data tracks published on the broadcast beside the media —
+   * timed metadata, overlays, and other page-produced payload streams.
+   * Each is registered and served by the engine like the media tracks
+   * (same announce, same catalog) and exposed as a page-facing producer
+   * handle on `context.dataTrackProducers`.
+   */
+  dataTracks?: PublishDataTrackConfig[];
   /** Transport seam; default constructs a real `WebTransport`. */
   connectTransport?: ConnectPublishTransport;
   /** MSF catalog-JSON builder seam; default `buildMsfCatalog`. */
