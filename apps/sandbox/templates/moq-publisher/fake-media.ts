@@ -596,13 +596,18 @@ export class FakePublishMedia
     let droppedFrames = 0;
 
     this.#statsTimer = setInterval(() => {
-      const videoBitrate = FAKE_VIDEO_BITRATE * (0.92 + Math.random() * 0.16);
-      const audioBitrate = FAKE_AUDIO_BITRATE;
-      bytesSent += Math.round((videoBitrate + audioBitrate) / 8);
-      if (Math.random() < 0.1) droppedFrames += 1;
+      // Source-aware per sample, so a mic-only session reports no video
+      // traffic (the stats contract uses NaN for absent metrics) and a
+      // video source joining mid-session starts counting.
+      const hasVideo = this.cameraStream !== null || this.screenShareStream !== null;
+      const hasAudio = this.micState === 'active';
+      const videoBitrate = hasVideo ? FAKE_VIDEO_BITRATE * (0.92 + Math.random() * 0.16) : Number.NaN;
+      const audioBitrate = hasAudio ? FAKE_AUDIO_BITRATE : Number.NaN;
+      bytesSent += Math.round(((hasVideo ? videoBitrate : 0) + (hasAudio ? audioBitrate : 0)) / 8);
+      if (hasVideo && Math.random() < 0.1) droppedFrames += 1;
 
       this.#publishStats = {
-        encodedFps: Math.round(29 + Math.random() * 2),
+        encodedFps: hasVideo ? Math.round(29 + Math.random() * 2) : Number.NaN,
         videoBitrate,
         audioBitrate,
         droppedFrames,
