@@ -32,6 +32,8 @@ const FAKE_AUDIO_BITRATE = 1.28e5;
  * `internal/design/spf/features/publisher-multi-source-capture.md`). That
  * extra independence isn't this fake's job to demonstrate; it only needs to
  * satisfy the additive capability contract for the sandbox's `?fake` mode.
+ * `micActive` runs a third, audio-only pipeline for the explicit mic seam,
+ * so a mic-only publish is drivable here too.
  */
 export class FakePublishMedia
   extends HTMLVideoElementHost
@@ -48,15 +50,22 @@ export class FakePublishMedia
 
   #cameraActive = false;
   #screenShareActive = false;
+  #micActive = false;
   #cameraState: MediaCaptureState = 'idle';
   #screenShareState: MediaCaptureState = 'idle';
   #cameraStream: MediaStream | null = null;
   #screenShareStream: MediaStream | null = null;
+  /** Owned by the explicit mic pipeline; never exposed or previewed. */
+  #micStream: MediaStream | null = null;
   /** Bumped per kind to cancel in-flight acquisitions when it's re-toggled. */
   #cameraAcquireToken = 0;
   #screenAcquireToken = 0;
+  #micAcquireToken = 0;
   /** Owned: losing the merged audio track doesn't end its stream, so `micState` has nothing live to read 'ended' off. */
   #micEnded = false;
+  /** Owned: the explicit pipeline's in-flight/denied phases have no stream to derive from either. */
+  #micAcquiring = false;
+  #micDenied = false;
 
   #captureDevices: MediaCaptureDeviceInfo[] = [];
   #videoInputDeviceId = '';
@@ -101,12 +110,14 @@ export class FakePublishMedia
     this.#disposed.abort();
     this.#cameraAcquireToken++;
     this.#screenAcquireToken++;
+    this.#micAcquireToken++;
     this.#clearPublishTimer();
     this.#stopStats();
     this.#pendingPublish?.reject(new Error('The media host was destroyed.'));
     this.#pendingPublish = null;
     this.#releaseStream('camera');
     this.#releaseStream('screen');
+    this.#releaseMicStream();
     super.destroy();
   }
 
@@ -127,9 +138,7 @@ export class FakePublishMedia
       this.#cameraAcquireToken++;
       this.#releaseStream('camera');
       this.#setCaptureState('camera', 'idle');
-      if (!this.#screenShareActive && (this.#publishState === 'connecting' || this.#publishState === 'live')) {
-        this.unpublish();
-      }
+      this.#unpublishWithoutSources();
     }
   }
 
@@ -148,9 +157,29 @@ export class FakePublishMedia
       this.#screenAcquireToken++;
       this.#releaseStream('screen');
       this.#setCaptureState('screen', 'idle');
-      if (!this.#cameraActive && (this.#publishState === 'connecting' || this.#publishState === 'live')) {
-        this.unpublish();
-      }
+      this.#unpublishWithoutSources();
+    }
+  }
+
+  get micActive(): boolean {
+    return this.#micActive;
+  }
+
+  set micActive(value: boolean) {
+    if (value === this.#micActive) return;
+    this.#micActive = value;
+    this.dispatchEvent(new Event('capturesourcechange'));
+
+    if (value) {
+      void this.#acquireMic();
+    } else {
+      this.#micAcquireToken++;
+      this.#releaseMicStream();
+      this.#micAcquiring = false;
+      this.#micDenied = false;
+      this.#micEnded = false;
+      this.dispatchEvent(new Event('capturestatechange'));
+      this.#unpublishWithoutSources();
     }
   }
 
@@ -163,16 +192,20 @@ export class FakePublishMedia
   }
 
   /**
-   * Mostly derived: this fake merges mic audio into each capture stream
-   * (see the header note) instead of running an independent mic pipeline,
-   * so 'active' reads straight off the live streams. 'ended' needs the
-   * owned `#micEnded` flag — losing the audio track removes it from its
-   * stream without ending the stream itself, so there's nothing live to
-   * derive 'ended' from.
+   * Mostly derived: this fake merges mic audio into each video capture
+   * stream (see the header note), and the explicit `micActive` pipeline
+   * owns `#micStream`, so 'active' reads straight off the live streams.
+   * The remaining phases need owned flags — losing a merged audio track
+   * removes it from its stream without ending the stream itself, and the
+   * explicit pipeline's acquiring/denied phases have no stream at all.
    */
   get micState(): MediaCaptureState {
     const hasAudio = (stream: MediaStream | null) => (stream?.getAudioTracks().length ?? 0) > 0;
-    if (hasAudio(this.#cameraStream) || hasAudio(this.#screenShareStream)) return 'active';
+    if (hasAudio(this.#micStream) || hasAudio(this.#cameraStream) || hasAudio(this.#screenShareStream)) {
+      return 'active';
+    }
+    if (this.#micAcquiring) return 'acquiring';
+    if (this.#micDenied) return 'denied';
     return this.#micEnded ? 'ended' : 'idle';
   }
 
@@ -208,6 +241,7 @@ export class FakePublishMedia
     if (value === this.#audioInputDeviceId) return;
     this.#audioInputDeviceId = value;
     this.#reacquireCamera();
+    this.#reacquireMic();
   }
 
   // ── MediaCaptureToggleCapability ────────────────────────────────────────
@@ -232,6 +266,7 @@ export class FakePublishMedia
     this.#micMuted = value;
     for (const track of this.#cameraStream?.getAudioTracks() ?? []) track.enabled = !value;
     for (const track of this.#screenShareStream?.getAudioTracks() ?? []) track.enabled = !value;
+    for (const track of this.#micStream?.getAudioTracks() ?? []) track.enabled = !value;
     this.dispatchEvent(new Event('capturetogglechange'));
   }
 
@@ -253,7 +288,11 @@ export class FakePublishMedia
     if (this.#publishState === 'connecting' || this.#publishState === 'live' || this.#publishState === 'stopping') {
       return Promise.reject(new Error(`publish() is not allowed while the session is ${this.#publishState}.`));
     }
-    if (this.#cameraState !== 'active' && this.#screenShareState !== 'active') {
+    if (
+      this.#cameraState !== 'active' &&
+      this.#screenShareState !== 'active' &&
+      !(this.#micActive && this.micState === 'active')
+    ) {
       this.#publishError = { code: 0, message: 'publish() requires an active capture source.' };
       this.#setPublishState('error');
       return Promise.reject(new Error(this.#publishError.message));
@@ -337,20 +376,76 @@ export class FakePublishMedia
    * click. Sets the backing field directly — the setter's release path
    * would clobber the terminal state the UI needs.
    */
-  #consumeIntent(kind: MediaCaptureSourceKind): void {
+  #consumeIntent(kind: MediaCaptureSourceKind | 'mic'): void {
     if (kind === 'camera') this.#cameraActive = false;
-    else this.#screenShareActive = false;
+    else if (kind === 'screen') this.#screenShareActive = false;
+    else this.#micActive = false;
     this.dispatchEvent(new Event('capturesourcechange'));
     // Every involuntary-release caller (acquire failure, track-ended) routes
-    // through here, so this is the one place that can see "no source left" —
-    // a live session with nothing capturing must not stay live.
-    if (
-      !this.#cameraActive &&
-      !this.#screenShareActive &&
-      (this.#publishState === 'connecting' || this.#publishState === 'live')
-    ) {
-      this.unpublish();
+    // through here — a live session with nothing capturing must not stay live.
+    this.#unpublishWithoutSources();
+  }
+
+  /** Shared by intent consumption and the consumer-release setters: no intent left means no session. */
+  #unpublishWithoutSources(): void {
+    if (this.#cameraActive || this.#screenShareActive || this.#micActive) return;
+    if (this.#publishState === 'connecting' || this.#publishState === 'live') this.unpublish();
+  }
+
+  /** The explicit audio-only pipeline behind `micActive`; video capture keeps merging its own mic audio. */
+  async #acquireMic(): Promise<void> {
+    const token = ++this.#micAcquireToken;
+    this.#releaseMicStream();
+    this.#micAcquiring = true;
+    this.#micDenied = false;
+    this.dispatchEvent(new Event('capturestatechange'));
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: this.#audioInputDeviceId ? { deviceId: this.#audioInputDeviceId } : true,
+      });
+      if (token !== this.#micAcquireToken) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
+      for (const track of stream.getAudioTracks()) track.enabled = !this.#micMuted;
+      this.#micAcquiring = false;
+      this.#micEnded = false;
+      this.#micStream = stream;
+      this.#watchMicTracks(stream);
+      this.dispatchEvent(new Event('capturestatechange'));
+      // Device labels stay redacted until a grant, so refresh after acquiring.
+      void this.#refreshDevices();
+    } catch (error) {
+      if (token !== this.#micAcquireToken) return;
+      this.#micAcquiring = false;
+      this.#micDenied = error instanceof DOMException && error.name === 'NotAllowedError';
+      this.dispatchEvent(new Event('capturestatechange'));
+      this.#consumeIntent('mic');
     }
+  }
+
+  #watchMicTracks(stream: MediaStream): void {
+    for (const track of stream.getTracks()) {
+      track.addEventListener(
+        'ended',
+        () => {
+          if (this.#micStream !== stream) return;
+          this.#releaseMicStream();
+          this.#micEnded = true;
+          this.dispatchEvent(new Event('capturestatechange'));
+          this.#consumeIntent('mic');
+        },
+        { once: true }
+      );
+    }
+  }
+
+  #releaseMicStream(): void {
+    const stream = this.#micStream;
+    if (!stream) return;
+    this.#micStream = null;
+    for (const track of stream.getTracks()) track.stop();
   }
 
   async #getCameraStream(): Promise<MediaStream> {
@@ -397,7 +492,7 @@ export class FakePublishMedia
     else this.#screenShareStream = null;
     for (const track of stream.getTracks()) track.stop();
     // The last source is gone — clean slate, back to 'idle' rather than a stale 'ended' outliving the capture that produced it.
-    if (!this.#cameraStream && !this.#screenShareStream) this.#micEnded = false;
+    if (!this.#cameraStream && !this.#screenShareStream && !this.#micStream) this.#micEnded = false;
     this.dispatchEvent(new Event('capturestreamchange'));
     this.#syncPreview();
   }
@@ -436,6 +531,12 @@ export class FakePublishMedia
     if (!this.#cameraActive) return;
     if (this.#cameraState !== 'active' && this.#cameraState !== 'acquiring') return;
     void this.#acquire('camera');
+  }
+
+  #reacquireMic(): void {
+    if (!this.#micActive) return;
+    if (!this.#micStream && !this.#micAcquiring) return;
+    void this.#acquireMic();
   }
 
   async #refreshDevices(): Promise<void> {
