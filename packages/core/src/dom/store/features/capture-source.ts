@@ -34,9 +34,10 @@ export const captureSourceFeature = definePlayerFeature({
 
     toggleMic() {
       const { media } = target();
-      // Also guarded on the property itself: a media host from an older
-      // generation has no mic intent slot, and writing one would create an
-      // inert expando that sync() reads back as real intent.
+      // The contract keeps `micActive` optional because the capability
+      // predicate admits older hosts without the slot — writing one there
+      // would create an inert expando that sync() reads back as real
+      // intent.
       if (!isMediaCaptureSourceCapable(media) || !('micActive' in media)) return false;
       const next = !media.micActive;
       media.micActive = next;
@@ -57,7 +58,10 @@ export const captureSourceFeature = definePlayerFeature({
     // `micActive` on `denied`/`ended` while parking `micState` there, so
     // the explicit claim must survive that consumption — and reset the
     // moment a new (implied) lifecycle starts, so a video-driven mic never
-    // inherits it.
+    // inherits it. Known boundary: an explicit attempt that terminates
+    // before this feature attaches (persisted denial rejecting before a
+    // React passive effect runs) reads as implied on the first sync — the
+    // host would have to persist provenance for the latch to recover it.
     let micExplicit = false;
 
     // Defaulted reads: the capability predicate checks presence of the

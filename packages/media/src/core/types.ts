@@ -648,8 +648,13 @@ export interface MediaCaptureSourceCapability {
    * Microphone acquisition without a video source — the audio-only capture
    * seam. Either video source active still implies the mic; this is
    * acquisition intent, not a mute. Fires `capturesourcechange`.
+   *
+   * Optional because {@link isMediaCaptureSourceCapable} deliberately
+   * admits hosts from before this generation, which lack the slot — check
+   * presence before writing; an assignment to a host without it is an
+   * inert expando, not an acquisition.
    */
-  micActive: boolean;
+  micActive?: boolean;
   /** Camera pipeline lifecycle. Fires `capturestatechange`. */
   readonly cameraState: MediaCaptureState;
   /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */

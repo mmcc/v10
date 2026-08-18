@@ -82,6 +82,15 @@ describe('isMediaCaptureSourceCapable', () => {
   it('rejects media without a cameraState', () => {
     expect(isMediaCaptureSourceCapable({ cameraActive: true, screenShareState: 'idle' })).toBe(false);
   });
+
+  // Hosts from before the audio-only generation lack the mic intent slot
+  // but stay capture-capable — which is why the contract keeps `micActive`
+  // optional: writers must check presence, not trust this narrowing.
+  it('admits hosts without the widened mic fields', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: false, cameraState: 'idle', screenShareState: 'idle' })).toBe(
+      true
+    );
+  });
 });
 
 describe('isMediaCaptureDevicesCapable', () => {
