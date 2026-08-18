@@ -150,4 +150,18 @@ describe('CapturePlaceholderElement', () => {
     expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
     expect(placeholder.textContent).toBe('Enable camera and microphone');
   });
+
+  it('keeps permission guidance after a mic-only denial consumes the intent', async () => {
+    const { placeholder, setState } = setup();
+
+    await placeholder.updateComplete;
+
+    setState({ micState: 'denied', micActive: false });
+    await placeholder.updateComplete;
+
+    expect(placeholder.getAttribute('data-capture-state')).toBe('denied');
+    expect(placeholder.textContent).toBe(
+      'Camera and microphone access is blocked. Update your browser permissions to continue.'
+    );
+  });
 });

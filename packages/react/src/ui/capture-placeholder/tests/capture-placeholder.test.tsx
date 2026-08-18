@@ -74,4 +74,16 @@ describe('CapturePlaceholder', () => {
     expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
     expect(placeholder.textContent).toBe('Enable camera and microphone');
   });
+
+  it('keeps permission guidance after a mic-only denial consumes the intent', () => {
+    const Wrapper = createWrapper({ micState: 'denied', micActive: false });
+
+    render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
+
+    const placeholder = screen.getByTestId('placeholder');
+    expect(placeholder.getAttribute('data-capture-state')).toBe('denied');
+    expect(placeholder.textContent).toBe(
+      'Camera and microphone access is blocked. Update your browser permissions to continue.'
+    );
+  });
 });

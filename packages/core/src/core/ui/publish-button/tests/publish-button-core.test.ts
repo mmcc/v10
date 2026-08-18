@@ -67,6 +67,12 @@ describe('PublishButtonCore', () => {
       expect(core.getState().disabled).toBe(true);
     });
 
+    it('stays disabled on mic denial residue after the intent is consumed', () => {
+      const core = new PublishButtonCore();
+      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'denied', micActive: false }));
+      expect(core.getState().disabled).toBe(true);
+    });
+
     it('is disabled while connecting', () => {
       const core = new PublishButtonCore();
       core.setMedia(createMediaState({ publishState: 'connecting' }));

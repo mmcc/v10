@@ -64,6 +64,17 @@ describe('CapturePlaceholderCore', () => {
       expect(state.label).toBe('Enable camera and microphone');
     });
 
+    it('shows permission guidance after a mic-only denial consumes the intent', () => {
+      // The acquire pipeline sets micActive back to false on denial while
+      // parking micState — the guidance must survive that consumption.
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ micState: 'denied', micActive: false }));
+
+      const state = core.getState();
+      expect(state.captureState).toBe('denied');
+      expect(state.label).toBe('Camera and microphone access is blocked. Update your browser permissions to continue.');
+    });
+
     it('prefers the more in-progress status when the two disagree', () => {
       const core = new CapturePlaceholderCore();
       core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'acquiring' }));
