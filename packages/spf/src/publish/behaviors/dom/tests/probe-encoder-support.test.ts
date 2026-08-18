@@ -34,6 +34,18 @@ function mockVideoEncoderSupport(supported: () => boolean): void {
   }));
 }
 
+/**
+ * Force the audio ladder's verdict per candidate. Needed for any AAC arm:
+ * headless Chromium ships no AAC encoder, so the preference walk would
+ * always fall back to Opus under the real `isConfigSupported`.
+ */
+function mockAudioEncoderSupport(supported: (config: AudioEncoderConfig) => boolean): void {
+  vi.spyOn(AudioEncoder, 'isConfigSupported').mockImplementation(async (config) => ({
+    supported: supported(config),
+    config,
+  }));
+}
+
 const CAMERA_TRACK = { width: 320, height: 240, frameRate: 30 };
 const SCREEN_TRACK = { width: 1920, height: 1080, frameRate: 30 };
 const MIC_TRACK = { sampleRate: 48_000, channelCount: 1 };
@@ -127,6 +139,50 @@ describe('probeEncoderSupport', () => {
       expect(state.activeEncodings.get()?.screen).toBeDefined();
     });
     expect(state.activeEncodings.get()!.screen).toMatchObject({ framerate: 15, bitrate: 1_500_000 });
+  });
+
+  it('walks the audio codec preference before the Opus default (codec-major ladder)', async () => {
+    mockAudioEncoderSupport(() => true);
+    const { state } = setupProbe({ audio: { codec: 'mp4a.40.2' } });
+
+    state.micTracks.set({ sampleRate: 44_100, channelCount: 2 });
+
+    await vi.waitFor(() => {
+      expect(state.encoderSupport.get()?.audio).toBeDefined();
+    });
+    // The preferred codec exhausts its sample rates before Opus gets a turn.
+    expect(state.encoderSupport.get()!.audio!.map(({ codec, sampleRate }) => ({ codec, sampleRate }))).toEqual([
+      { codec: 'mp4a.40.2', sampleRate: 44_100 },
+      { codec: 'mp4a.40.2', sampleRate: 48_000 },
+      { codec: 'opus', sampleRate: 44_100 },
+      { codec: 'opus', sampleRate: 48_000 },
+    ]);
+    expect(state.activeEncodings.get()!.audio).toMatchObject({ codec: 'mp4a.40.2', sampleRate: 44_100 });
+  });
+
+  it('falls back to Opus when the preferred audio codec is unsupported', async () => {
+    mockAudioEncoderSupport((config) => config.codec === 'opus');
+    const { state } = setupProbe({ audio: { codec: 'mp4a.40.2' } });
+
+    state.micTracks.set(MIC_TRACK);
+
+    await vi.waitFor(() => {
+      expect(state.activeEncodings.get()?.audio).toBeDefined();
+    });
+    expect(state.activeEncodings.get()!.audio).toMatchObject({ codec: 'opus', sampleRate: 48_000 });
+    expect(state.publishError.get()).toBeUndefined();
+  });
+
+  it('does not duplicate the ladder when the preferred audio codec is the default', async () => {
+    mockAudioEncoderSupport(() => true);
+    const { state } = setupProbe({ audio: { codec: 'opus' } });
+
+    state.micTracks.set(MIC_TRACK);
+
+    await vi.waitFor(() => {
+      expect(state.encoderSupport.get()?.audio).toBeDefined();
+    });
+    expect(state.encoderSupport.get()!.audio).toHaveLength(1);
   });
 
   it('resolves the active encodings through the selectEncoderConfig seam', async () => {
