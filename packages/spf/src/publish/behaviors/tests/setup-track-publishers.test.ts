@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signal } from '../../../core/signals/primitives';
+import { parseLocProperties } from '../../../media/moq/loc';
 import { REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
+import type { MoqtObject } from '../../../network/moqt/object-stream';
 import { createMoqtSession } from '../../../network/moqt/session';
 import { solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
 import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
 import { createPublishSessionActor, type PublishSessionActor } from '../../session/publish-session';
 import {
+  type SetupTrackPublishersConfig,
   type SetupTrackPublishersContext,
   type SetupTrackPublishersState,
   setupTrackPublishers,
@@ -30,7 +33,7 @@ function makeSessionActor() {
   return { actor, peer, server: pair.server };
 }
 
-function setupBehavior() {
+function setupBehavior(config: SetupTrackPublishersConfig = {}) {
   const state = {
     activeEncodings: signal<SetupTrackPublishersState['activeEncodings']>(undefined),
     endpoint: signal<SetupTrackPublishersState['endpoint']>(undefined),
@@ -41,8 +44,9 @@ function setupBehavior() {
     videoTrackPublisher: signal<SetupTrackPublishersContext['videoTrackPublisher']>(undefined),
     screenTrackPublisher: signal<SetupTrackPublishersContext['screenTrackPublisher']>(undefined),
     audioTrackPublisher: signal<SetupTrackPublishersContext['audioTrackPublisher']>(undefined),
+    dataTrackProducers: signal<SetupTrackPublishersContext['dataTrackProducers']>(undefined),
   };
-  const reactor = setupTrackPublishers.setup({ state, context, config: {} });
+  const reactor = setupTrackPublishers.setup({ state, context, config });
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -212,5 +216,142 @@ describe('setupTrackPublishers', () => {
       expect(context.catalogTrackPublisher.get()).toBeUndefined();
     });
     expect(publisher.snapshot.get().value).toBe('destroyed');
+  });
+
+  it('registers configured data tracks with the cluster and serves a producer-published payload', async () => {
+    const { actor, peer, server } = makeSessionActor();
+    const { state, context } = setupBehavior({ dataTracks: [{ name: 'overlay', role: 'data' }] });
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    context.publishSessionActor.set(actor);
+    void solicitNamespace(server, []);
+
+    await vi.waitFor(() => {
+      expect(context.dataTrackProducers.get()?.overlay).toBeDefined();
+      expect(actor.snapshot.get().context.status).toBe('live');
+    });
+    const producer = context.dataTrackProducers.get()!.overlay!;
+    expect(producer.trackName).toBe('overlay');
+
+    // Unbound (pull-through): a publish before any subscription is dropped.
+    producer.publish(new TextEncoder().encode('early'), { timestampUs: 1 });
+
+    const objects: MoqtObject[] = [];
+    peer.subscribe(
+      { trackNamespace: ENDPOINT.namespace, trackName: 'overlay' },
+      { onObject: (object) => objects.push(object) }
+    );
+    await vi.waitFor(() => {
+      expect(actor.snapshot.get().context.trackBindings.overlay).toBeDefined();
+    });
+
+    producer.publish(new TextEncoder().encode('hello overlay'), { timestampUs: 42_000_000 });
+    await vi.waitFor(() => {
+      expect(objects).toHaveLength(1);
+    });
+    expect(new TextDecoder().decode(objects[0]!.payload)).toBe('hello overlay');
+    // LOC-packaged: the payload carries a microsecond timestamp property.
+    expect(parseLocProperties(objects[0]!.properties)).toMatchObject({
+      timestamp: 42_000_000,
+      timescale: 1_000_000,
+    });
+    // Every payload is its own single-object group (a random-access point).
+    expect(objects[0]!.objectId).toBe(0);
+  });
+
+  it('drops data tracks whose name collides with a reserved or earlier track, or cannot key a record', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    disposals.push(() => warn.mockRestore());
+    const { actor, peer } = makeSessionActor();
+    const { state, context } = setupBehavior({
+      // `__proto__` and `constructor` would corrupt or misread the
+      // name-keyed records (producers, trackBindings) — refused up front.
+      dataTracks: [
+        { name: 'video' },
+        { name: 'overlay' },
+        { name: 'overlay' },
+        { name: '__proto__' },
+        { name: 'constructor' },
+      ],
+    });
+    // One warning per dropped config: reserved `video`, duplicate
+    // `overlay`, and the two prototype-member names.
+    expect(warn).toHaveBeenCalledTimes(4);
+
+    state.endpoint.set(ENDPOINT);
+    // Audio-only encodings: the engine itself never registers `video`, so
+    // a served `video` track could only have come from the colliding
+    // data-track config.
+    state.activeEncodings.set({ audio: AUDIO_CONFIG });
+    context.publishSessionActor.set(actor);
+
+    await vi.waitFor(() => {
+      expect(context.dataTrackProducers.get()).toBeDefined();
+    });
+    expect(Object.keys(context.dataTrackProducers.get()!)).toEqual(['overlay']);
+
+    const errors: number[] = [];
+    const overlayAliases: number[] = [];
+    peer.subscribe(
+      { trackNamespace: ENDPOINT.namespace, trackName: 'video' },
+      { onError: (error) => errors.push(error.errorCode) }
+    );
+    peer.subscribe(
+      { trackNamespace: ENDPOINT.namespace, trackName: 'overlay' },
+      { onOk: (ok) => overlayAliases.push(ok.trackAlias) }
+    );
+    await vi.waitFor(() => {
+      expect(errors).toEqual([REQUEST_ERROR_CODE.DOES_NOT_EXIST]);
+      expect(overlayAliases).toHaveLength(1);
+    });
+  });
+
+  it('replays the latest payload to a new subscription when the track opts into replay', async () => {
+    const { actor, peer, server } = makeSessionActor();
+    const { state, context } = setupBehavior({
+      dataTracks: [{ name: 'overlay', replayLastOnSubscribe: true }],
+    });
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    context.publishSessionActor.set(actor);
+    void solicitNamespace(server, []);
+    await vi.waitFor(() => {
+      expect(context.dataTrackProducers.get()?.overlay).toBeDefined();
+      expect(actor.snapshot.get().context.status).toBe('live');
+    });
+
+    // Published while nothing subscribes — retained for replay.
+    context.dataTrackProducers.get()!.overlay!.publish(new TextEncoder().encode('current state'), {
+      timestampUs: 7,
+    });
+
+    const payloads: Uint8Array[] = [];
+    peer.subscribe(
+      { trackNamespace: ENDPOINT.namespace, trackName: 'overlay' },
+      { onObject: (object) => payloads.push(object.payload) }
+    );
+    await vi.waitFor(() => {
+      expect(payloads).toHaveLength(1);
+    });
+    expect(new TextDecoder().decode(payloads[0]!)).toBe('current state');
+  });
+
+  it('clears the producer slot when the session goes away', async () => {
+    const { actor } = makeSessionActor();
+    const { state, context } = setupBehavior({ dataTracks: [{ name: 'overlay' }] });
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    context.publishSessionActor.set(actor);
+    await vi.waitFor(() => {
+      expect(context.dataTrackProducers.get()?.overlay).toBeDefined();
+    });
+
+    context.publishSessionActor.set(undefined);
+    await vi.waitFor(() => {
+      expect(context.dataTrackProducers.get()).toBeUndefined();
+    });
   });
 });

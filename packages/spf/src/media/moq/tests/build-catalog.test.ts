@@ -114,6 +114,35 @@ describe('buildMsfCatalog', () => {
     expect(videoSet.switchingSets[1]!.tracks.map((track) => track.id)).toEqual(['live/abc123/screen']);
   });
 
+  it('emits application data tracks that round-trip as non-renderable plumbing', () => {
+    const text = buildMsfCatalog({
+      ...AV_INPUT,
+      data: [{ name: 'overlay', role: 'data' }, { name: 'events' }],
+    });
+
+    const raw = JSON.parse(text);
+    const overlay = raw.tracks.find((track: Record<string, unknown>) => track.name === 'overlay');
+    // Shared publication fields plus name + role — no media fields, and no
+    // renderGroup (the track composes nothing on screen).
+    expect(overlay).toEqual({
+      namespace: 'live/abc123',
+      packaging: 'loc',
+      isLive: true,
+      name: 'overlay',
+      role: 'data',
+    });
+    const events = raw.tracks.find((track: Record<string, unknown>) => track.name === 'events');
+    expect(events).not.toHaveProperty('role');
+
+    // The parse side classifies both as engine plumbing, not media: the
+    // renderable track set is exactly what it was without them.
+    const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+    expect(isResolvedPresentation(presentation)).toBe(true);
+    expect(getTracksByType(presentation, 'video')).toHaveLength(1);
+    expect(getTracksByType(presentation, 'audio')).toHaveLength(1);
+    expect(getTracksByType(presentation, 'text')).toHaveLength(0);
+  });
+
   it('round-trips track init data through initDataList + initRef into the decoder description', () => {
     const avcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x1e, 0xff, 0xe1]);
     const audioSpecificConfig = Uint8Array.from([0x11, 0x90]);

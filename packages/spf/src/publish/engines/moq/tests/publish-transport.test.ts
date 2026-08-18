@@ -80,6 +80,7 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
       engineConfig: {
         groupDurationSec: 0.5,
         connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
+        dataTracks: [{ name: 'overlay', role: 'data' }],
       },
     });
     disposals.push(() => media.destroy());
@@ -153,8 +154,10 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     const names = parsed.tracks.map((track) => track.name);
     expect(names).toContain('video');
     expect(names).toContain('audio');
+    expect(names).toContain('overlay');
     expect(parsed.tracks.every((track) => track.packaging === 'loc' && track.isLive)).toBe(true);
     expect(parsed.tracks.find((track) => track.name === 'audio')?.codec).toBe('opus');
+    expect(parsed.tracks.find((track) => track.name === 'overlay')?.role).toBe('data');
 
     // Real encoded media flows: several objects per track, LOC-extractable,
     // group 0 starting at a keyframe.
@@ -180,6 +183,27 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     // Audio publishes one group per frame with object id 0.
     expect(audio.objects.every((object) => object.objectId === 0)).toBe(true);
     expect(audio.objects[1]!.groupId).toBeGreaterThan(audio.objects[0]!.groupId);
+
+    // The application data track rides the same broadcast: a page-published
+    // payload reaches the subscriber LOC-extractable once its subscription
+    // binds (pull-through — nothing flows before the SUBSCRIBE above).
+    const overlay = collect('overlay');
+    const producer = media.engine.context.dataTrackProducers.get()!.overlay!;
+    await vi.waitFor(() => {
+      const bindings = media.engine.context.publishSessionActor.get()!.snapshot.get().context.trackBindings;
+      expect(bindings.overlay).toBeDefined();
+    });
+    producer.publish(new TextEncoder().encode('LIVE: hello overlay'), { timestampUs: 123_000_000 });
+    await vi.waitFor(
+      () => {
+        expect(overlay.objects.length).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 10_000 }
+    );
+    const overlayFrame = toLocFrame(overlay.objects[0]!)!;
+    expect(utf8Decode(overlayFrame.payload)).toBe('LIVE: hello overlay');
+    expect(overlayFrame.timestampUs).toBe(123_000_000);
+    expect(overlay.objects[0]!.objectId).toBe(0);
 
     // Unpublish: the announce is retracted with NAMESPACE_DONE on the
     // solicitation stream (each subscribe stream ends with a bare FIN —

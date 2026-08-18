@@ -439,6 +439,16 @@ const TEXT_ROLES = new Set(['caption', 'subtitle']);
 const AUDIO_ROLES = new Set(['audio', 'audiodescription']);
 const VIDEO_ROLES = new Set(['video', 'signlanguage']);
 
+/**
+ * Whether `mediaKindOf` classifies the role as renderable media. The
+ * publish side consults this to keep application data tracks out of a
+ * subscriber's renderable set: a data entry declaring a media role would
+ * be selected as an undecodable track (no codec, no media fields).
+ */
+export function isMediaCatalogRole(role: string): boolean {
+  return VIDEO_ROLES.has(role) || AUDIO_ROLES.has(role) || TEXT_ROLES.has(role);
+}
+
 type MediaKind = 'video' | 'audio' | 'text';
 
 function mediaKindOf(track: MoqCatalogTrack): MediaKind | null {

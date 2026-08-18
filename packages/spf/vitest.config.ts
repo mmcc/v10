@@ -2,6 +2,11 @@ import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Tests run source directly, so the build-time dev flag (see
+  // build/tsdown.ts) must be defined here; dev-gated warnings stay on.
+  define: {
+    __DEV__: 'true',
+  },
   test: {
     coverage: {
       provider: 'v8',

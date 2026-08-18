@@ -51,6 +51,7 @@ function setupBehavior() {
     videoTrackPublisher: signal<SetupTrackPublishersContext['videoTrackPublisher']>(undefined),
     screenTrackPublisher: signal<SetupTrackPublishersContext['screenTrackPublisher']>(undefined),
     audioTrackPublisher: signal<SetupTrackPublishersContext['audioTrackPublisher']>(undefined),
+    dataTrackProducers: signal<SetupTrackPublishersContext['dataTrackProducers']>(undefined),
   };
   const reactor = setupTrackPublishers.setup({ state, context, config: {} });
   disposals.push(() => reactor.destroy());

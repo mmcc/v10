@@ -11,7 +11,9 @@
  *
  * One LOC-packaged camera video rendition, an optional second
  * LOC-packaged screen-share video rendition (additive, not an alternate —
- * see the multi-source design record), plus one LOC-packaged audio track.
+ * see the multi-source design record), one LOC-packaged audio track, plus
+ * any application data tracks (name + role only — non-renderable, so the
+ * parse side classifies them as engine plumbing rather than media).
  * When a screen track is present, all tracks share one `renderGroup` (never
  * `altGroup`, which marks alternates of the same content) so subscribers
  * know camera + screen + audio compose one live view; a camera-only
@@ -63,6 +65,19 @@ export interface MsfCatalogAudioTrackInput {
   initData?: Uint8Array;
 }
 
+export interface MsfCatalogDataTrackInput {
+  name: string;
+  /**
+   * MSF role label (§5.2.6) classifying the non-media track for
+   * consumers, e.g. `'data'` or `'metadata'`. MUST NOT be a media role
+   * (`isMediaCatalogRole`): the entry carries no codec or media fields,
+   * so a media role would round-trip into an undecodable renderable
+   * track. Like codec strings, the caller resolves what to declare — the
+   * publish engine strips media roles before building (`resolveDataTracks`).
+   */
+  role?: string;
+}
+
 export interface MsfCatalogInput {
   /** Track namespace tuple every track is published under. */
   namespace: readonly string[];
@@ -70,6 +85,13 @@ export interface MsfCatalogInput {
   /** Screen-share video track — additive alongside `video`, never an alternate. */
   screen?: MsfCatalogVideoTrackInput;
   audio?: MsfCatalogAudioTrackInput;
+  /**
+   * Application data tracks published beside the media — advertised so
+   * consumers can discover and subscribe to them, but carrying none of
+   * the media fields (`mediaKindOf` on the parse side classifies them as
+   * non-renderable plumbing).
+   */
+  data?: readonly MsfCatalogDataTrackInput[];
   /** Catalog generation time (§5.2.24), epoch milliseconds. */
   generatedAt?: number;
 }
@@ -167,6 +189,19 @@ export function buildMsfCatalog(input: MsfCatalogInput): string {
         samplerate: input.audio.samplerate,
         channelConfig: input.audio.channelConfig,
         bitrate: input.audio.bitrate,
+      })
+    );
+  }
+
+  // Data tracks take the shared fields only — no `renderGroup` (they are
+  // not renderable) and no media fields, so the parse side's
+  // `mediaKindOf` resolves them to non-media plumbing.
+  for (const data of input.data ?? []) {
+    tracks.push(
+      pruneUndefined({
+        ...shared,
+        name: data.name,
+        role: data.role,
       })
     );
   }
