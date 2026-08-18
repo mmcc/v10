@@ -32,11 +32,17 @@ type PublisherSliceState = MediaPublishState & MediaCaptureSourceState;
 function createPublisherStore({
   publishState = 'idle',
   cameraState = 'active',
+  micState = 'idle',
+  micActive = false,
+  micExplicit = false,
   publish = vi.fn(() => Promise.resolve()),
   unpublish = vi.fn(),
 }: {
   publishState?: MediaPublishState['publishState'] | undefined;
   cameraState?: MediaCaptureSourceState['cameraState'] | undefined;
+  micState?: MediaCaptureSourceState['micState'] | undefined;
+  micActive?: MediaCaptureSourceState['micActive'] | undefined;
+  micExplicit?: MediaCaptureSourceState['micExplicit'] | undefined;
   publish?: MediaPublishState['publish'] | undefined;
   unpublish?: MediaPublishState['unpublish'] | undefined;
 } = {}): AnyPlayerStore {
@@ -48,14 +54,17 @@ function createPublisherStore({
       publishError: null,
       publish,
       unpublish,
-      cameraActive: true,
+      cameraActive: cameraState === 'active',
       screenShareActive: false,
+      micActive,
+      micExplicit,
       cameraState,
       screenShareState: 'idle',
-      micState: 'idle',
+      micState,
       screenShareAvailability: 'unavailable',
       toggleCamera: vi.fn(() => false),
       toggleScreenShare: vi.fn(() => false),
+      toggleMic: vi.fn(() => false),
     }),
   }) as unknown as AnyPlayerStore;
 }
@@ -144,6 +153,39 @@ describe('PublishButtonElement', () => {
 
     expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(button.hasAttribute('data-disabled')).toBe(true);
+
+    click(button);
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('enables and starts a session from a mic-only capture', async () => {
+    const publish = vi.fn(() => Promise.resolve());
+    const { button } = setup({ cameraState: 'idle', micState: 'active', micActive: true, micExplicit: true, publish });
+
+    await button.updateComplete;
+
+    expect(button.hasAttribute('aria-disabled')).toBe(false);
+    expect(button.hasAttribute('data-disabled')).toBe(false);
+
+    click(button);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays disabled on an implied mic without explicit intent', async () => {
+    const publish = vi.fn(() => Promise.resolve());
+    const { button } = setup({
+      cameraState: 'idle',
+      micState: 'active',
+      micActive: false,
+      micExplicit: false,
+      publish,
+    });
+
+    await button.updateComplete;
+
+    expect(button.getAttribute('aria-disabled')).toBe('true');
 
     click(button);
 

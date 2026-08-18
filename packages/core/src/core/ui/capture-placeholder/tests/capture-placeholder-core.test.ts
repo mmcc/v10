@@ -7,12 +7,15 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
   return {
     cameraActive: false,
     screenShareActive: false,
+    micActive: false,
+    micExplicit: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
     screenShareAvailability: 'available',
     toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
+    toggleMic: vi.fn(() => true),
     ...overrides,
   };
 }
@@ -42,6 +45,35 @@ describe('CapturePlaceholderCore', () => {
       core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'active' }));
 
       expect(core.getState().captureState).toBe('active');
+    });
+
+    it('clears the placeholder for a mic-only capture', () => {
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ micState: 'active', micActive: true, micExplicit: true }));
+
+      const state = core.getState();
+      expect(state.captureState).toBe('active');
+      expect(state.label).toBe('');
+    });
+
+    it('keeps the CTA up when only an implied mic is live', () => {
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ micState: 'active', micExplicit: false }));
+
+      const state = core.getState();
+      expect(state.captureState).toBe('idle');
+      expect(state.label).toBe('Enable camera and microphone');
+    });
+
+    it('shows permission guidance after a mic-only denial consumes the intent', () => {
+      // The acquire pipeline sets micActive back to false on denial while
+      // parking micState — the guidance must survive that consumption.
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ micState: 'denied', micExplicit: true }));
+
+      const state = core.getState();
+      expect(state.captureState).toBe('denied');
+      expect(state.label).toBe('Camera and microphone access is blocked. Update your browser permissions to continue.');
     });
 
     it('prefers the more in-progress status when the two disagree', () => {

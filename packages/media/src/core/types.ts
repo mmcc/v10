@@ -625,12 +625,13 @@ export interface MediaCaptureSourceEvents {
 }
 
 /**
- * Camera and screen-share acquisition — additive, not exclusive: starting
- * a share never releases the camera, and either can be toggled
- * independently. The microphone has no intent slot of its own: it is
- * acquired while either video source is active (keyed for re-acquisition
- * on {@link MediaCaptureDevicesCapability.audioInputDeviceId}), and only
- * its lifecycle is readable here.
+ * Camera, screen-share, and microphone acquisition — additive, not
+ * exclusive: activating any source never releases another, and each can be
+ * toggled independently. The microphone is also implied by video intent:
+ * it is acquired while either video source is active (keyed for
+ * re-acquisition on
+ * {@link MediaCaptureDevicesCapability.audioInputDeviceId}), so
+ * {@link micActive} only needs to be written for an audio-only capture.
  *
  * The intent slots are consumed by the pipeline on terminal outcomes:
  * after a permission denial or an out-of-band end (device unplugged,
@@ -643,6 +644,17 @@ export interface MediaCaptureSourceCapability {
   cameraActive: boolean;
   /** Screen-share acquisition; `true` opens the OS picker, `false` stops sharing. Fires `capturesourcechange`. */
   screenShareActive: boolean;
+  /**
+   * Microphone acquisition without a video source — the audio-only capture
+   * seam. Either video source active still implies the mic; this is
+   * acquisition intent, not a mute. Fires `capturesourcechange`.
+   *
+   * Optional because {@link isMediaCaptureSourceCapable} deliberately
+   * admits hosts from before this generation, which lack the slot — check
+   * presence before writing; an assignment to a host without it is an
+   * inert expando, not an acquisition.
+   */
+  micActive?: boolean;
   /** Camera pipeline lifecycle. Fires `capturestatechange`. */
   readonly cameraState: MediaCaptureState;
   /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */

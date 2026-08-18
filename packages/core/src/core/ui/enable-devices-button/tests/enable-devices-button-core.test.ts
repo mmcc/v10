@@ -7,12 +7,15 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
   return {
     cameraActive: false,
     screenShareActive: false,
+    micActive: false,
+    micExplicit: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
     screenShareAvailability: 'available',
     toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
+    toggleMic: vi.fn(() => true),
     ...overrides,
   };
 }
@@ -48,6 +51,18 @@ describe('EnableDevicesButtonCore', () => {
       const core = new EnableDevicesButtonCore();
       core.setMedia(createMediaState({ screenShareState: 'acquiring' }));
       expect(core.getState().disabled).toBe(false);
+    });
+
+    it('reflects a mic-only capture as active', () => {
+      const core = new EnableDevicesButtonCore();
+      core.setMedia(createMediaState({ micState: 'active', micActive: true, micExplicit: true }));
+      expect(core.getState().captureState).toBe('active');
+    });
+
+    it('ignores an implied mic when reporting the capture state', () => {
+      const core = new EnableDevicesButtonCore();
+      core.setMedia(createMediaState({ micState: 'active', micExplicit: false }));
+      expect(core.getState().captureState).toBe('idle');
     });
 
     it('is disabled via props', () => {

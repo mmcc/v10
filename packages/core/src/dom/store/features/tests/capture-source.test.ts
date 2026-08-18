@@ -8,6 +8,7 @@ import { captureSourceFeature } from '../capture-source';
 interface CaptureSourceCapableMedia extends EventTarget {
   cameraActive: boolean;
   screenShareActive: boolean;
+  micActive: boolean;
   cameraState: MediaCaptureState;
   screenShareState: MediaCaptureState;
   micState: MediaCaptureState;
@@ -17,6 +18,7 @@ function createCaptureMedia(initial: Partial<CaptureSourceCapableMedia> = {}): C
   const media = new EventTarget() as CaptureSourceCapableMedia;
   media.cameraActive = initial.cameraActive ?? false;
   media.screenShareActive = initial.screenShareActive ?? false;
+  media.micActive = initial.micActive ?? false;
   media.cameraState = initial.cameraState ?? 'idle';
   media.screenShareState = initial.screenShareState ?? 'idle';
   media.micState = initial.micState ?? 'idle';
@@ -56,6 +58,7 @@ describe('captureSourceFeature', () => {
 
       expect(store.toggleCamera()).toBe(false);
       expect(store.toggleScreenShare()).toBe(false);
+      expect(store.toggleMic()).toBe(false);
     });
   });
 
@@ -123,14 +126,28 @@ describe('captureSourceFeature', () => {
     it('defaults widened-contract fields an older media host lacks instead of storing undefined', () => {
       const media = createCaptureMedia({ cameraActive: true, cameraState: 'active' });
       // The capability predicate checks the core fields only — a host
-      // predating micState still passes it.
+      // predating micState/micActive still passes it.
       delete (media as { micState?: unknown }).micState;
+      delete (media as { micActive?: unknown }).micActive;
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.micState).toBe('idle');
+      expect(store.state.micActive).toBe(false);
       expect(store.state.cameraState).toBe('active');
+    });
+
+    it('`toggleMic()` refuses a host without a mic intent slot instead of writing an inert one', () => {
+      const media = createCaptureMedia();
+      delete (media as { micActive?: unknown }).micActive;
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      expect(store.toggleMic()).toBe(false);
+      // An expando here would sync back as real intent on the next event.
+      expect('micActive' in media).toBe(false);
     });
 
     it('syncs the mic pipeline lifecycle on `capturestatechange`', () => {
@@ -185,6 +202,84 @@ describe('captureSourceFeature', () => {
 
       expect(store.toggleScreenShare()).toBe(true);
       expect(media.screenShareActive).toBe(true);
+    });
+
+    it('re-reads the mic intent on `capturesourcechange`', () => {
+      const media = createCaptureMedia();
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      media.micActive = true;
+      media.dispatchEvent(new Event('capturesourcechange'));
+
+      expect(store.state.micActive).toBe(true);
+      expect(store.state.micExplicit).toBe(true);
+    });
+
+    it('latches `micExplicit` across intent consumption on a terminal outcome', () => {
+      const media = createCaptureMedia({ micActive: true, micState: 'acquiring' });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+      expect(store.state.micExplicit).toBe(true);
+
+      // The pipeline consumes the intent on denial while parking the state.
+      media.micActive = false;
+      media.micState = 'denied';
+      media.dispatchEvent(new Event('capturestatechange'));
+
+      expect(store.state.micActive).toBe(false);
+      expect(store.state.micExplicit).toBe(true);
+    });
+
+    it('never claims an implied mic lifecycle as explicit', () => {
+      const media = createCaptureMedia({ cameraActive: true, micState: 'acquiring' });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+      expect(store.state.micExplicit).toBe(false);
+
+      media.micState = 'denied';
+      media.dispatchEvent(new Event('capturestatechange'));
+
+      expect(store.state.micExplicit).toBe(false);
+    });
+
+    it('resets the explicit claim when a new implied lifecycle starts', () => {
+      const media = createCaptureMedia({ micActive: true, micState: 'acquiring' });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      media.micActive = false;
+      media.micState = 'denied';
+      media.dispatchEvent(new Event('capturestatechange'));
+      expect(store.state.micExplicit).toBe(true);
+
+      // Video intent re-fires the mic pipeline over the parked denial —
+      // the fresh attempt is implied, so the explicit claim must not leak
+      // onto it.
+      media.cameraActive = true;
+      media.micState = 'acquiring';
+      media.dispatchEvent(new Event('capturestatechange'));
+
+      expect(store.state.micExplicit).toBe(false);
+    });
+
+    it('`toggleMic()` flips the media mic intent without touching the video intents', () => {
+      const media = createCaptureMedia({ cameraActive: true });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      expect(store.toggleMic()).toBe(true);
+      expect(media.micActive).toBe(true);
+      expect(media.cameraActive).toBe(true);
+
+      expect(store.toggleMic()).toBe(false);
+      expect(media.micActive).toBe(false);
+      expect(media.cameraActive).toBe(true);
     });
   });
 });

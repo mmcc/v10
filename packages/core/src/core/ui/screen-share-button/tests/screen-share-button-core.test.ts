@@ -7,12 +7,15 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
   return {
     cameraActive: true,
     screenShareActive: false,
+    micActive: false,
+    micExplicit: false,
     cameraState: 'active',
     screenShareState: 'idle',
     micState: 'idle',
     screenShareAvailability: 'available',
     toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
+    toggleMic: vi.fn(() => true),
     ...overrides,
   };
 }

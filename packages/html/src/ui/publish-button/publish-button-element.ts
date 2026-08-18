@@ -139,6 +139,8 @@ export class PublishButtonElement extends MediaElement {
       unpublish: publish.unpublish,
       cameraState: captureSource.cameraState,
       screenShareState: captureSource.screenShareState,
+      micState: captureSource.micState,
+      micExplicit: captureSource.micExplicit,
     };
   }
 }

@@ -10,6 +10,9 @@ afterEach(cleanup);
 function createWrapper({
   publishState = 'idle' as MediaPublishSessionState,
   captureState = 'active' as MediaCaptureState,
+  micState = 'idle' as MediaCaptureState,
+  micActive = false,
+  micExplicit = false,
   publish = vi.fn(() => Promise.resolve()),
   unpublish = vi.fn(),
 } = {}) {
@@ -22,12 +25,15 @@ function createWrapper({
     // `captureSource` feature slice
     cameraActive: captureState === 'active',
     screenShareActive: false,
+    micActive,
+    micExplicit,
     cameraState: captureState,
     screenShareState: 'idle',
-    micState: 'idle',
+    micState,
     screenShareAvailability: 'available',
     toggleCamera: vi.fn(),
     toggleScreenShare: vi.fn(),
+    toggleMic: vi.fn(),
   });
 
   return { Wrapper, publish, unpublish };
@@ -53,6 +59,41 @@ describe('PublishButton', () => {
     const button = screen.getByTestId('publish');
     expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(button.hasAttribute('data-disabled')).toBe(true);
+
+    fireEvent.click(button);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('enables and starts a session from a mic-only capture', () => {
+    const { Wrapper, publish } = createWrapper({
+      captureState: 'idle',
+      micState: 'active',
+      micActive: true,
+      micExplicit: true,
+    });
+
+    render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
+
+    const button = screen.getByTestId('publish');
+    expect(button.hasAttribute('aria-disabled')).toBe(false);
+    expect(button.hasAttribute('data-disabled')).toBe(false);
+
+    fireEvent.click(button);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays disabled on an implied mic without explicit intent', () => {
+    const { Wrapper, publish } = createWrapper({
+      captureState: 'idle',
+      micState: 'active',
+      micActive: false,
+      micExplicit: false,
+    });
+
+    render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
+
+    const button = screen.getByTestId('publish');
+    expect(button.getAttribute('aria-disabled')).toBe('true');
 
     fireEvent.click(button);
     expect(publish).not.toHaveBeenCalled();

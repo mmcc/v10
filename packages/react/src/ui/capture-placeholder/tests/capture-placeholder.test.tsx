@@ -9,16 +9,24 @@ afterEach(() => {
   cleanup();
 });
 
-function createWrapper({ captureState = 'idle' as MediaCaptureState } = {}) {
+function createWrapper({
+  captureState = 'idle' as MediaCaptureState,
+  micState = 'idle' as MediaCaptureState,
+  micActive = false,
+  micExplicit = false,
+} = {}) {
   return createPlayerWrapper({
     cameraActive: false,
     screenShareActive: false,
+    micActive,
+    micExplicit,
     cameraState: captureState,
     screenShareState: 'idle',
-    micState: 'idle',
+    micState,
     screenShareAvailability: 'available',
     toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
+    toggleMic: vi.fn(() => true),
   }).Wrapper;
 }
 
@@ -47,5 +55,37 @@ describe('CapturePlaceholder', () => {
     const placeholder = screen.getByTestId('placeholder');
     expect(placeholder.textContent).toBe('Custom content');
     expect(placeholder.hasAttribute('aria-label')).toBe(false);
+  });
+
+  it('reports a mic-only capture as active and clears the guidance', () => {
+    const Wrapper = createWrapper({ micState: 'active', micActive: true, micExplicit: true });
+
+    render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
+
+    const placeholder = screen.getByTestId('placeholder');
+    expect(placeholder.getAttribute('data-capture-state')).toBe('active');
+    expect(placeholder.textContent).toBe('');
+  });
+
+  it('keeps the guidance up when only an implied mic is live', () => {
+    const Wrapper = createWrapper({ micState: 'active', micActive: false, micExplicit: false });
+
+    render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
+
+    const placeholder = screen.getByTestId('placeholder');
+    expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
+    expect(placeholder.textContent).toBe('Enable camera and microphone');
+  });
+
+  it('keeps permission guidance after a mic-only denial consumes the intent', () => {
+    const Wrapper = createWrapper({ micState: 'denied', micActive: false, micExplicit: true });
+
+    render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
+
+    const placeholder = screen.getByTestId('placeholder');
+    expect(placeholder.getAttribute('data-capture-state')).toBe('denied');
+    expect(placeholder.textContent).toBe(
+      'Camera and microphone access is blocked. Update your browser permissions to continue.'
+    );
   });
 });

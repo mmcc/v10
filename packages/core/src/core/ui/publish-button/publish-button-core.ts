@@ -21,7 +21,7 @@ export interface PublishButtonProps {
  * store slices.
  */
 export type PublishButtonMediaState = MediaPublishState &
-  Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState'>;
+  Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState' | 'micState' | 'micExplicit'>;
 
 export interface PublishButtonState extends ButtonState {
   /** Current publish session lifecycle. */
@@ -82,7 +82,7 @@ export class PublishButtonCore {
   getState(): PublishButtonState {
     const media = this.#media!;
     const session = media.publishState;
-    const captureState = aggregateCaptureState(media.cameraState, media.screenShareState);
+    const captureState = aggregateCaptureState(media);
 
     this.state.patch({
       session,
@@ -104,7 +104,7 @@ export class PublishButtonCore {
     }
 
     if (session === 'stopping') return;
-    if (aggregateCaptureState(media.cameraState, media.screenShareState) !== 'active') return;
+    if (aggregateCaptureState(media) !== 'active') return;
 
     try {
       // idle/error → start (or retry) a session.

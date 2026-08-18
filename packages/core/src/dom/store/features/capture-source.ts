@@ -9,6 +9,8 @@ export const captureSourceFeature = definePlayerFeature({
   state: ({ target }): MediaCaptureSourceState => ({
     cameraActive: false,
     screenShareActive: false,
+    micActive: false,
+    micExplicit: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
@@ -29,6 +31,18 @@ export const captureSourceFeature = definePlayerFeature({
       media.screenShareActive = next;
       return next;
     },
+
+    toggleMic() {
+      const { media } = target();
+      // The contract keeps `micActive` optional because the capability
+      // predicate admits older hosts without the slot — writing one there
+      // would create an inert expando that sync() reads back as real
+      // intent.
+      if (!isMediaCaptureSourceCapable(media) || !('micActive' in media)) return false;
+      const next = !media.micActive;
+      media.micActive = next;
+      return next;
+    },
   }),
 
   attach({ target, signal, set }) {
@@ -40,18 +54,35 @@ export const captureSourceFeature = definePlayerFeature({
       screenShareAvailability: canScreenShare() ? 'available' : 'unsupported',
     });
 
+    // Provenance latch behind `micExplicit`: the pipeline consumes
+    // `micActive` on `denied`/`ended` while parking `micState` there, so
+    // the explicit claim must survive that consumption — and reset the
+    // moment a new (implied) lifecycle starts, so a video-driven mic never
+    // inherits it. Known boundary: an explicit attempt that terminates
+    // before this feature attaches (persisted denial rejecting before a
+    // React passive effect runs) reads as implied on the first sync — the
+    // host would have to persist provenance for the latch to recover it.
+    let micExplicit = false;
+
     // Defaulted reads: the capability predicate checks presence of the
     // core fields, not the whole widened contract, so a media host from
     // an older generation may lack e.g. `micState` — the slice must never
     // hold `undefined` where UIs expect a lifecycle value.
-    const sync = () =>
+    const sync = () => {
+      const micActive = media.micActive ?? false;
+      const micState = media.micState ?? 'idle';
+      if (micActive) micExplicit = true;
+      else if (micState !== 'denied' && micState !== 'ended') micExplicit = false;
       set({
         cameraActive: media.cameraActive ?? false,
         screenShareActive: media.screenShareActive ?? false,
+        micActive,
+        micExplicit,
         cameraState: media.cameraState ?? 'idle',
         screenShareState: media.screenShareState ?? 'idle',
-        micState: media.micState ?? 'idle',
+        micState,
       });
+    };
 
     sync();
 
