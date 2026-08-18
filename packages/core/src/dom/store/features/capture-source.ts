@@ -10,6 +10,7 @@ export const captureSourceFeature = definePlayerFeature({
     cameraActive: false,
     screenShareActive: false,
     micActive: false,
+    micExplicit: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
@@ -52,19 +53,32 @@ export const captureSourceFeature = definePlayerFeature({
       screenShareAvailability: canScreenShare() ? 'available' : 'unsupported',
     });
 
+    // Provenance latch behind `micExplicit`: the pipeline consumes
+    // `micActive` on `denied`/`ended` while parking `micState` there, so
+    // the explicit claim must survive that consumption — and reset the
+    // moment a new (implied) lifecycle starts, so a video-driven mic never
+    // inherits it.
+    let micExplicit = false;
+
     // Defaulted reads: the capability predicate checks presence of the
     // core fields, not the whole widened contract, so a media host from
     // an older generation may lack e.g. `micState` — the slice must never
     // hold `undefined` where UIs expect a lifecycle value.
-    const sync = () =>
+    const sync = () => {
+      const micActive = media.micActive ?? false;
+      const micState = media.micState ?? 'idle';
+      if (micActive) micExplicit = true;
+      else if (micState !== 'denied' && micState !== 'ended') micExplicit = false;
       set({
         cameraActive: media.cameraActive ?? false,
         screenShareActive: media.screenShareActive ?? false,
-        micActive: media.micActive ?? false,
+        micActive,
+        micExplicit,
         cameraState: media.cameraState ?? 'idle',
         screenShareState: media.screenShareState ?? 'idle',
-        micState: media.micState ?? 'idle',
+        micState,
       });
+    };
 
     sync();
 

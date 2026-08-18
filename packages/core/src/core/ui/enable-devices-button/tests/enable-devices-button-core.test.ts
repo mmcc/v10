@@ -8,6 +8,7 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
     cameraActive: false,
     screenShareActive: false,
     micActive: false,
+    micExplicit: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
@@ -54,13 +55,13 @@ describe('EnableDevicesButtonCore', () => {
 
     it('reflects a mic-only capture as active', () => {
       const core = new EnableDevicesButtonCore();
-      core.setMedia(createMediaState({ micState: 'active', micActive: true }));
+      core.setMedia(createMediaState({ micState: 'active', micActive: true, micExplicit: true }));
       expect(core.getState().captureState).toBe('active');
     });
 
     it('ignores an implied mic when reporting the capture state', () => {
       const core = new EnableDevicesButtonCore();
-      core.setMedia(createMediaState({ micState: 'active', micActive: false }));
+      core.setMedia(createMediaState({ micState: 'active', micExplicit: false }));
       expect(core.getState().captureState).toBe('idle');
     });
 

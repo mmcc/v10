@@ -12,7 +12,7 @@ function createMediaState(overrides: Partial<PublishButtonMediaState> = {}): Pub
     cameraState: 'active',
     screenShareState: 'idle',
     micState: 'idle',
-    micActive: false,
+    micExplicit: false,
     ...overrides,
   };
 }
@@ -57,19 +57,19 @@ describe('PublishButtonCore', () => {
 
     it('is enabled when the explicit mic is the only active source', () => {
       const core = new PublishButtonCore();
-      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micActive: true }));
+      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micExplicit: true }));
       expect(core.getState().disabled).toBe(false);
     });
 
     it('stays disabled on an implied mic — video-driven audio must not justify publish on its own', () => {
       const core = new PublishButtonCore();
-      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micActive: false }));
+      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micExplicit: false }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('stays disabled on mic denial residue after the intent is consumed', () => {
       const core = new PublishButtonCore();
-      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'denied', micActive: false }));
+      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'denied', micExplicit: true }));
       expect(core.getState().disabled).toBe(true);
     });
 
@@ -220,7 +220,7 @@ describe('PublishButtonCore', () => {
 
     it('publishes from a mic-only capture', async () => {
       const core = new PublishButtonCore();
-      const media = createMediaState({ cameraState: 'idle', micState: 'active', micActive: true });
+      const media = createMediaState({ cameraState: 'idle', micState: 'active', micExplicit: true });
 
       await core.toggle(media);
 
@@ -229,7 +229,7 @@ describe('PublishButtonCore', () => {
 
     it('does not publish on an implied mic alone', async () => {
       const core = new PublishButtonCore();
-      const media = createMediaState({ cameraState: 'idle', micState: 'active', micActive: false });
+      const media = createMediaState({ cameraState: 'idle', micState: 'active', micExplicit: false });
 
       await core.toggle(media);
 

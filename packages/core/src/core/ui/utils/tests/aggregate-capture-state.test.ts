@@ -13,7 +13,7 @@ function source(overrides: Partial<AggregatableCaptureSource> = {}): Aggregatabl
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
-    micActive: false,
+    micExplicit: false,
     ...overrides,
   };
 }
@@ -46,34 +46,36 @@ describe('aggregateCaptureState', () => {
     expect(aggregateCaptureState(source({ cameraState: 'ended', screenShareState: 'denied' }))).toBe('denied');
   });
 
-  it('counts the mic like a video pipeline under explicit intent', () => {
+  it('counts the mic like a video pipeline when its lifecycle is explicitly claimed', () => {
     for (const status of PRECEDENCE) {
-      expect(aggregateCaptureState(source({ micState: status, micActive: true }))).toBe(status);
+      expect(aggregateCaptureState(source({ micState: status, micExplicit: true }))).toBe(status);
     }
   });
 
   it('mic-only acquiring outranks a denied video pipeline', () => {
-    expect(aggregateCaptureState(source({ cameraState: 'denied', micState: 'acquiring', micActive: true }))).toBe(
+    expect(aggregateCaptureState(source({ cameraState: 'denied', micState: 'acquiring', micExplicit: true }))).toBe(
       'acquiring'
     );
   });
 
-  // The load-bearing rule: an implied mic (acquired as a side effect of
-  // video intent) must never enable capture-gated controls on its own —
-  // e.g. a mic that outlives a dismissed screen picker by a beat.
-  it("ignores an implied mic's in-flight states", () => {
-    expect(aggregateCaptureState(source({ micState: 'active' }))).toBe('idle');
-    expect(aggregateCaptureState(source({ micState: 'acquiring' }))).toBe('idle');
-    expect(aggregateCaptureState(source({ cameraState: 'ended', micState: 'active' }))).toBe('ended');
+  // The parked terminal residue of a mic-only attempt — micActive already
+  // consumed, micExplicit latched by the store feature — must keep
+  // surfacing so a denied voice-only page can explain itself.
+  it('counts the explicit mic terminal residue after the intent is consumed', () => {
+    expect(aggregateCaptureState(source({ micState: 'denied', micExplicit: true }))).toBe('denied');
+    expect(aggregateCaptureState(source({ micState: 'ended', micExplicit: true }))).toBe('ended');
   });
 
-  // The acquire pipeline consumes micActive on denied/ended while parking
-  // micState there so UIs can say why capture stopped — a mic-only denial
-  // must still surface after consumption, and terminal states can never
-  // enable a publish control anyway.
-  it('counts the mic terminal residue after the intent is consumed', () => {
-    expect(aggregateCaptureState(source({ micState: 'denied' }))).toBe('denied');
-    expect(aggregateCaptureState(source({ micState: 'ended' }))).toBe('ended');
+  // The load-bearing rule: an implied mic (acquired as a side effect of
+  // video intent) must never surface capture feedback on its own — neither
+  // an 'active' that would enable publish controls (a mic outliving a
+  // dismissed screen picker by a beat) nor a 'denied' that would blame
+  // permissions a camera-only page never asked for.
+  it('ignores an implied mic entirely', () => {
+    for (const status of PRECEDENCE) {
+      expect(aggregateCaptureState(source({ micState: status }))).toBe('idle');
+    }
+    expect(aggregateCaptureState(source({ cameraState: 'ended', micState: 'active' }))).toBe('ended');
     expect(aggregateCaptureState(source({ cameraState: 'acquiring', micState: 'denied' }))).toBe('acquiring');
   });
 });

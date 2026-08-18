@@ -8,6 +8,7 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
     cameraActive: true,
     screenShareActive: false,
     micActive: false,
+    micExplicit: false,
     cameraState: 'active',
     screenShareState: 'idle',
     micState: 'idle',

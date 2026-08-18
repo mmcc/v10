@@ -395,6 +395,13 @@ export interface MediaCaptureSourceState {
   screenShareActive: boolean;
   /** Whether the mic is an explicit capture source (audio-only; video intent still implies the mic). */
   micActive: boolean;
+  /**
+   * Whether the lifecycle in `micState` — including a terminal
+   * `denied`/`ended` parked after the pipeline consumed `micActive` —
+   * belongs to an explicitly requested mic. Stays `false` for a mic
+   * acquired only as a side effect of video intent.
+   */
+  micExplicit: boolean;
   /** Camera pipeline lifecycle. */
   cameraState: MediaCaptureState;
   /** Screen-share pipeline lifecycle. */

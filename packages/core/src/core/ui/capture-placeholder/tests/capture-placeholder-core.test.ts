@@ -8,6 +8,7 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
     cameraActive: false,
     screenShareActive: false,
     micActive: false,
+    micExplicit: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
@@ -48,7 +49,7 @@ describe('CapturePlaceholderCore', () => {
 
     it('clears the placeholder for a mic-only capture', () => {
       const core = new CapturePlaceholderCore();
-      core.setMedia(createMediaState({ micState: 'active', micActive: true }));
+      core.setMedia(createMediaState({ micState: 'active', micActive: true, micExplicit: true }));
 
       const state = core.getState();
       expect(state.captureState).toBe('active');
@@ -57,7 +58,7 @@ describe('CapturePlaceholderCore', () => {
 
     it('keeps the CTA up when only an implied mic is live', () => {
       const core = new CapturePlaceholderCore();
-      core.setMedia(createMediaState({ micState: 'active', micActive: false }));
+      core.setMedia(createMediaState({ micState: 'active', micExplicit: false }));
 
       const state = core.getState();
       expect(state.captureState).toBe('idle');
@@ -68,7 +69,7 @@ describe('CapturePlaceholderCore', () => {
       // The acquire pipeline sets micActive back to false on denial while
       // parking micState — the guidance must survive that consumption.
       const core = new CapturePlaceholderCore();
-      core.setMedia(createMediaState({ micState: 'denied', micActive: false }));
+      core.setMedia(createMediaState({ micState: 'denied', micExplicit: true }));
 
       const state = core.getState();
       expect(state.captureState).toBe('denied');

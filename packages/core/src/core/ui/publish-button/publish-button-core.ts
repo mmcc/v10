@@ -21,7 +21,7 @@ export interface PublishButtonProps {
  * store slices.
  */
 export type PublishButtonMediaState = MediaPublishState &
-  Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState' | 'micState' | 'micActive'>;
+  Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState' | 'micState' | 'micExplicit'>;
 
 export interface PublishButtonState extends ButtonState {
   /** Current publish session lifecycle. */

@@ -40,6 +40,7 @@ function createCaptureSourceStore(initial: Partial<MediaCaptureSourceState> = {}
       cameraActive: false,
       screenShareActive: false,
       micActive: false,
+      micExplicit: false,
       cameraState: 'idle',
       screenShareState: 'idle',
       micState: 'idle',
@@ -136,7 +137,7 @@ describe('CapturePlaceholderElement', () => {
 
     await placeholder.updateComplete;
 
-    setState({ micState: 'active', micActive: true });
+    setState({ micState: 'active', micActive: true, micExplicit: true });
     await placeholder.updateComplete;
 
     expect(placeholder.getAttribute('data-capture-state')).toBe('active');
@@ -144,7 +145,7 @@ describe('CapturePlaceholderElement', () => {
 
     // An implied mic (video intent gone, mic lingering) must not keep the
     // placeholder cleared on its own.
-    setState({ micActive: false });
+    setState({ micActive: false, micExplicit: false });
     await placeholder.updateComplete;
 
     expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
@@ -156,7 +157,7 @@ describe('CapturePlaceholderElement', () => {
 
     await placeholder.updateComplete;
 
-    setState({ micState: 'denied', micActive: false });
+    setState({ micState: 'denied', micActive: false, micExplicit: true });
     await placeholder.updateComplete;
 
     expect(placeholder.getAttribute('data-capture-state')).toBe('denied');

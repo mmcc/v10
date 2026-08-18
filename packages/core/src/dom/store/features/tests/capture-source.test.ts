@@ -214,6 +214,57 @@ describe('captureSourceFeature', () => {
       media.dispatchEvent(new Event('capturesourcechange'));
 
       expect(store.state.micActive).toBe(true);
+      expect(store.state.micExplicit).toBe(true);
+    });
+
+    it('latches `micExplicit` across intent consumption on a terminal outcome', () => {
+      const media = createCaptureMedia({ micActive: true, micState: 'acquiring' });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+      expect(store.state.micExplicit).toBe(true);
+
+      // The pipeline consumes the intent on denial while parking the state.
+      media.micActive = false;
+      media.micState = 'denied';
+      media.dispatchEvent(new Event('capturestatechange'));
+
+      expect(store.state.micActive).toBe(false);
+      expect(store.state.micExplicit).toBe(true);
+    });
+
+    it('never claims an implied mic lifecycle as explicit', () => {
+      const media = createCaptureMedia({ cameraActive: true, micState: 'acquiring' });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+      expect(store.state.micExplicit).toBe(false);
+
+      media.micState = 'denied';
+      media.dispatchEvent(new Event('capturestatechange'));
+
+      expect(store.state.micExplicit).toBe(false);
+    });
+
+    it('resets the explicit claim when a new implied lifecycle starts', () => {
+      const media = createCaptureMedia({ micActive: true, micState: 'acquiring' });
+
+      const store = createStore<PlayerTarget>()(captureSourceFeature);
+      store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
+
+      media.micActive = false;
+      media.micState = 'denied';
+      media.dispatchEvent(new Event('capturestatechange'));
+      expect(store.state.micExplicit).toBe(true);
+
+      // Video intent re-fires the mic pipeline over the parked denial —
+      // the fresh attempt is implied, so the explicit claim must not leak
+      // onto it.
+      media.cameraActive = true;
+      media.micState = 'acquiring';
+      media.dispatchEvent(new Event('capturestatechange'));
+
+      expect(store.state.micExplicit).toBe(false);
     });
 
     it('`toggleMic()` flips the media mic intent without touching the video intents', () => {

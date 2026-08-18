@@ -140,7 +140,7 @@ export class PublishButtonElement extends MediaElement {
       cameraState: captureSource.cameraState,
       screenShareState: captureSource.screenShareState,
       micState: captureSource.micState,
-      micActive: captureSource.micActive,
+      micExplicit: captureSource.micExplicit,
     };
   }
 }
