@@ -174,11 +174,12 @@ export class FakePublishMedia
       void this.#acquireMic();
     } else {
       this.#micAcquireToken++;
-      this.#releaseMicStream();
-      this.#micAcquiring = false;
-      this.#micDenied = false;
-      this.#micEnded = false;
-      this.dispatchEvent(new Event('capturestatechange'));
+      this.#updateMicState(() => {
+        this.#releaseMicStream();
+        this.#micAcquiring = false;
+        this.#micDenied = false;
+        this.#micEnded = false;
+      });
       this.#unpublishWithoutSources();
     }
   }
@@ -395,10 +396,11 @@ export class FakePublishMedia
   /** The explicit audio-only pipeline behind `micActive`; video capture keeps merging its own mic audio. */
   async #acquireMic(): Promise<void> {
     const token = ++this.#micAcquireToken;
-    this.#releaseMicStream();
-    this.#micAcquiring = true;
-    this.#micDenied = false;
-    this.dispatchEvent(new Event('capturestatechange'));
+    this.#updateMicState(() => {
+      this.#releaseMicStream();
+      this.#micAcquiring = true;
+      this.#micDenied = false;
+    });
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -409,20 +411,33 @@ export class FakePublishMedia
         return;
       }
       for (const track of stream.getAudioTracks()) track.enabled = !this.#micMuted;
-      this.#micAcquiring = false;
-      this.#micEnded = false;
-      this.#micStream = stream;
+      this.#updateMicState(() => {
+        this.#micAcquiring = false;
+        this.#micEnded = false;
+        this.#micStream = stream;
+      });
       this.#watchMicTracks(stream);
-      this.dispatchEvent(new Event('capturestatechange'));
       // Device labels stay redacted until a grant, so refresh after acquiring.
       void this.#refreshDevices();
     } catch (error) {
       if (token !== this.#micAcquireToken) return;
-      this.#micAcquiring = false;
-      this.#micDenied = error instanceof DOMException && error.name === 'NotAllowedError';
-      this.dispatchEvent(new Event('capturestatechange'));
+      this.#updateMicState(() => {
+        this.#micAcquiring = false;
+        this.#micDenied = error instanceof DOMException && error.name === 'NotAllowedError';
+      });
       this.#consumeIntent('mic');
     }
+  }
+
+  /**
+   * Mirrors `#setCaptureState`'s dedupe for the derived mic lifecycle:
+   * merged video audio can hold `micState` at 'active' across explicit
+   * pipeline changes, and an unchanged state must not fire the event.
+   */
+  #updateMicState(mutate: () => void): void {
+    const before = this.micState;
+    mutate();
+    if (this.micState !== before) this.dispatchEvent(new Event('capturestatechange'));
   }
 
   #watchMicTracks(stream: MediaStream): void {
@@ -431,9 +446,10 @@ export class FakePublishMedia
         'ended',
         () => {
           if (this.#micStream !== stream) return;
-          this.#releaseMicStream();
-          this.#micEnded = true;
-          this.dispatchEvent(new Event('capturestatechange'));
+          this.#updateMicState(() => {
+            this.#releaseMicStream();
+            this.#micEnded = true;
+          });
           this.#consumeIntent('mic');
         },
         { once: true }
