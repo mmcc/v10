@@ -11,6 +11,7 @@ function createWrapper({
   publishState = 'idle' as MediaPublishSessionState,
   captureState = 'active' as MediaCaptureState,
   micState = 'idle' as MediaCaptureState,
+  micActive = false,
   micExplicit = false,
   publish = vi.fn(() => Promise.resolve()),
   unpublish = vi.fn(),
@@ -24,7 +25,7 @@ function createWrapper({
     // `captureSource` feature slice
     cameraActive: captureState === 'active',
     screenShareActive: false,
-    micActive: micExplicit,
+    micActive,
     micExplicit,
     cameraState: captureState,
     screenShareState: 'idle',
@@ -64,7 +65,12 @@ describe('PublishButton', () => {
   });
 
   it('enables and starts a session from a mic-only capture', () => {
-    const { Wrapper, publish } = createWrapper({ captureState: 'idle', micState: 'active', micExplicit: true });
+    const { Wrapper, publish } = createWrapper({
+      captureState: 'idle',
+      micState: 'active',
+      micActive: true,
+      micExplicit: true,
+    });
 
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 
@@ -77,7 +83,12 @@ describe('PublishButton', () => {
   });
 
   it('stays disabled on an implied mic without explicit intent', () => {
-    const { Wrapper, publish } = createWrapper({ captureState: 'idle', micState: 'active', micExplicit: false });
+    const { Wrapper, publish } = createWrapper({
+      captureState: 'idle',
+      micState: 'active',
+      micActive: false,
+      micExplicit: false,
+    });
 
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 

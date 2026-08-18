@@ -33,6 +33,7 @@ function createPublisherStore({
   publishState = 'idle',
   cameraState = 'active',
   micState = 'idle',
+  micActive = false,
   micExplicit = false,
   publish = vi.fn(() => Promise.resolve()),
   unpublish = vi.fn(),
@@ -40,6 +41,7 @@ function createPublisherStore({
   publishState?: MediaPublishState['publishState'] | undefined;
   cameraState?: MediaCaptureSourceState['cameraState'] | undefined;
   micState?: MediaCaptureSourceState['micState'] | undefined;
+  micActive?: MediaCaptureSourceState['micActive'] | undefined;
   micExplicit?: MediaCaptureSourceState['micExplicit'] | undefined;
   publish?: MediaPublishState['publish'] | undefined;
   unpublish?: MediaPublishState['unpublish'] | undefined;
@@ -54,7 +56,7 @@ function createPublisherStore({
       unpublish,
       cameraActive: cameraState === 'active',
       screenShareActive: false,
-      micActive: micExplicit,
+      micActive,
       micExplicit,
       cameraState,
       screenShareState: 'idle',
@@ -159,7 +161,7 @@ describe('PublishButtonElement', () => {
 
   it('enables and starts a session from a mic-only capture', async () => {
     const publish = vi.fn(() => Promise.resolve());
-    const { button } = setup({ cameraState: 'idle', micState: 'active', micExplicit: true, publish });
+    const { button } = setup({ cameraState: 'idle', micState: 'active', micActive: true, micExplicit: true, publish });
 
     await button.updateComplete;
 
@@ -173,7 +175,13 @@ describe('PublishButtonElement', () => {
 
   it('stays disabled on an implied mic without explicit intent', async () => {
     const publish = vi.fn(() => Promise.resolve());
-    const { button } = setup({ cameraState: 'idle', micState: 'active', micExplicit: false, publish });
+    const { button } = setup({
+      cameraState: 'idle',
+      micState: 'active',
+      micActive: false,
+      micExplicit: false,
+      publish,
+    });
 
     await button.updateComplete;
 

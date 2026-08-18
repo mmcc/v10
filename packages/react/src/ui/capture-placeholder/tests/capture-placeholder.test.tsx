@@ -12,12 +12,13 @@ afterEach(() => {
 function createWrapper({
   captureState = 'idle' as MediaCaptureState,
   micState = 'idle' as MediaCaptureState,
+  micActive = false,
   micExplicit = false,
 } = {}) {
   return createPlayerWrapper({
     cameraActive: false,
     screenShareActive: false,
-    micActive: micExplicit,
+    micActive,
     micExplicit,
     cameraState: captureState,
     screenShareState: 'idle',
@@ -57,7 +58,7 @@ describe('CapturePlaceholder', () => {
   });
 
   it('reports a mic-only capture as active and clears the guidance', () => {
-    const Wrapper = createWrapper({ micState: 'active', micExplicit: true });
+    const Wrapper = createWrapper({ micState: 'active', micActive: true, micExplicit: true });
 
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
@@ -67,7 +68,7 @@ describe('CapturePlaceholder', () => {
   });
 
   it('keeps the guidance up when only an implied mic is live', () => {
-    const Wrapper = createWrapper({ micState: 'active', micExplicit: false });
+    const Wrapper = createWrapper({ micState: 'active', micActive: false, micExplicit: false });
 
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
@@ -77,7 +78,7 @@ describe('CapturePlaceholder', () => {
   });
 
   it('keeps permission guidance after a mic-only denial consumes the intent', () => {
-    const Wrapper = createWrapper({ micState: 'denied', micExplicit: true });
+    const Wrapper = createWrapper({ micState: 'denied', micActive: false, micExplicit: true });
 
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
