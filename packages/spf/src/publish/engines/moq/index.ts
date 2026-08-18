@@ -9,6 +9,7 @@ export { MoqPublishMediaElement, MoqPublishMediaMixin, moqPublishMediaDefaultPro
 export type {
   ActiveEncodingsFacts,
   AudioEncoderActor,
+  AudioEncodeTuning,
   CaptureDeviceFacts,
   CaptureSourceKind,
   CaptureStatus,

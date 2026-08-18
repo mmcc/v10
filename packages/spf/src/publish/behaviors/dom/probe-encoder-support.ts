@@ -14,11 +14,14 @@
  * bitstream format so the avcC extradata exists to publish out-of-band —
  * see `videoCandidates`) with a VP8 fallback, at the track
  * resolution/framerate; Opus at the track sample rate with a 48 kHz
- * fallback. A `config.{camera,screen}.codec` prepends itself to the
- * ladder rather than replacing it. The screen ladder defaults to a lower
- * framerate than the camera's (static degrade-screen-first tuning, per
- * the multi-source design record's "Encoder budget" decision — no dynamic
- * policy in v1).
+ * fallback. A `config.{camera,screen,audio}.codec` prepends itself to the
+ * ladder rather than replacing it — for audio the preferred codec probes
+ * at every ladder sample rate before Opus does (codec preference
+ * outranks rate preference), so `audio: { codec: 'mp4a.40.2' }` publishes
+ * AAC where the browser can encode it and falls back to Opus where it
+ * can't. The screen ladder defaults to a lower framerate than the
+ * camera's (static degrade-screen-first tuning, per the multi-source
+ * design record's "Encoder budget" decision — no dynamic policy in v1).
  *
  * Each probe is a single-positive-state reactor mirroring the acquire
  * behaviors: the probe runs in the positive state's `effects:` so a
@@ -78,11 +81,22 @@ export interface VideoEncodeTuning {
   codec?: string;
 }
 
+export interface AudioEncodeTuning {
+  bitrate?: number;
+  /**
+   * Preferred WebCodecs audio codec string (e.g. `'mp4a.40.2'` for
+   * AAC-LC). Prepended to the Opus default rather than replacing it, so
+   * an unsupported preference degrades to Opus instead of failing the
+   * kind.
+   */
+  codec?: string;
+}
+
 /** Per-kind encode tuning (mirrors `MoqPublishEngineConfig`). */
 export interface ProbeEncoderSupportConfig {
   camera?: VideoEncodeTuning;
   screen?: VideoEncodeTuning;
-  audio?: { bitrate?: number };
+  audio?: AudioEncodeTuning;
   selectEncoderConfig?: SelectEncoderConfig;
 }
 
@@ -147,14 +161,20 @@ function screenCandidates(track: CaptureTrackFacts, tuning: VideoEncodeTuning | 
   });
 }
 
-function audioCandidates(track: CaptureTrackFacts, audio: ProbeEncoderSupportConfig['audio']): AudioEncoderConfig[] {
+function audioCandidates(track: CaptureTrackFacts, audio: AudioEncodeTuning | undefined): AudioEncoderConfig[] {
+  const codecs = [...new Set([...(audio?.codec ? [audio.codec] : []), DEFAULT_AUDIO_CODEC])];
   const sampleRates = [...new Set([track.sampleRate ?? OPUS_SAMPLE_RATE, OPUS_SAMPLE_RATE])];
-  return sampleRates.map((sampleRate) => ({
-    codec: DEFAULT_AUDIO_CODEC,
-    sampleRate,
-    numberOfChannels: track.channelCount ?? 1,
-    bitrate: audio?.bitrate ?? DEFAULT_AUDIO_BITRATE,
-  }));
+  // Codec-major: the preferred codec exhausts its sample rates before the
+  // default gets a turn — the preference exists for egress compatibility,
+  // which a rate tweak can't buy back.
+  return codecs.flatMap((codec) =>
+    sampleRates.map((sampleRate) => ({
+      codec,
+      sampleRate,
+      numberOfChannels: track.channelCount ?? 1,
+      bitrate: audio?.bitrate ?? DEFAULT_AUDIO_BITRATE,
+    }))
+  );
 }
 
 /**

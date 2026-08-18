@@ -24,6 +24,7 @@ import type { CaptureDeviceFacts } from '../../behaviors/dom/enumerate-capture-d
 import { enumerateCaptureDevices } from '../../behaviors/dom/enumerate-capture-devices';
 import type {
   ActiveEncodingsFacts,
+  AudioEncodeTuning,
   EncoderSupportFacts,
   SelectEncoderConfig,
   VideoEncodeTuning,
@@ -48,6 +49,7 @@ import type { ConnectPublishTransport, PublishEndpoint, PublishSessionActor } fr
 export type {
   ActiveEncodingsFacts,
   AudioEncoderActor,
+  AudioEncodeTuning,
   CaptureDeviceFacts,
   CaptureSourceKind,
   CaptureStatus,
@@ -174,7 +176,8 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   video?: VideoEncodeTuning;
   /** Screen-share video tuning; defaults to a lower framerate/bitrate than `camera` (static degrade-screen-first). */
   screen?: VideoEncodeTuning;
-  audio?: { bitrate?: number };
+  /** Audio tuning; `codec` prepends a preference to the Opus default ladder. */
+  audio?: AudioEncodeTuning;
   /** Resolve probed encoder support into the active encodings. */
   selectEncoderConfig?: SelectEncoderConfig;
   /**
