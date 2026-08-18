@@ -39,12 +39,14 @@ function createCaptureSourceStore(initial: Partial<MediaCaptureSourceState> = {}
     state: () => ({
       cameraActive: false,
       screenShareActive: false,
+      micActive: false,
       cameraState: 'idle',
       screenShareState: 'idle',
       micState: 'idle',
       screenShareAvailability: 'available',
       toggleCamera: vi.fn(() => true),
       toggleScreenShare: vi.fn(() => true),
+      toggleMic: vi.fn(() => true),
       ...initial,
     }),
     attach: (context) => {
@@ -127,5 +129,25 @@ describe('CapturePlaceholderElement', () => {
 
     expect(placeholder.hasAttribute('aria-label')).toBe(false);
     expect(placeholder.getAttribute('data-capture-state')).toBe('denied');
+  });
+
+  it('reports a mic-only capture as active and clears the guidance', async () => {
+    const { placeholder, setState } = setup();
+
+    await placeholder.updateComplete;
+
+    setState({ micState: 'active', micActive: true });
+    await placeholder.updateComplete;
+
+    expect(placeholder.getAttribute('data-capture-state')).toBe('active');
+    expect(placeholder.textContent).toBe('');
+
+    // An implied mic (video intent gone, mic lingering) must not keep the
+    // placeholder cleared on its own.
+    setState({ micActive: false });
+    await placeholder.updateComplete;
+
+    expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
+    expect(placeholder.textContent).toBe('Enable camera and microphone');
   });
 });

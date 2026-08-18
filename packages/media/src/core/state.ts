@@ -393,11 +393,13 @@ export interface MediaCaptureSourceState {
   cameraActive: boolean;
   /** Whether screen share is an active capture source. */
   screenShareActive: boolean;
+  /** Whether the mic is an explicit capture source (audio-only; video intent still implies the mic). */
+  micActive: boolean;
   /** Camera pipeline lifecycle. */
   cameraState: MediaCaptureState;
   /** Screen-share pipeline lifecycle. */
   screenShareState: MediaCaptureState;
-  /** Microphone pipeline lifecycle (read-only; the mic has no intent slot). */
+  /** Microphone pipeline lifecycle. */
   micState: MediaCaptureState;
   /** Whether screen capture can be requested on this platform. */
   screenShareAvailability: MediaFeatureAvailability;
@@ -405,6 +407,8 @@ export interface MediaCaptureSourceState {
   toggleCamera(): boolean;
   /** Toggle screen share on or off. Returns `true` when sharing. */
   toggleScreenShare(): boolean;
+  /** Toggle the explicit mic intent (prompting for permission as needed). Returns `true` when acquiring. */
+  toggleMic(): boolean;
 }
 
 export interface MediaCaptureDevicesState {

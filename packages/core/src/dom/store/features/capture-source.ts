@@ -9,6 +9,7 @@ export const captureSourceFeature = definePlayerFeature({
   state: ({ target }): MediaCaptureSourceState => ({
     cameraActive: false,
     screenShareActive: false,
+    micActive: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
@@ -27,6 +28,17 @@ export const captureSourceFeature = definePlayerFeature({
       if (!isMediaCaptureSourceCapable(media)) return false;
       const next = !media.screenShareActive;
       media.screenShareActive = next;
+      return next;
+    },
+
+    toggleMic() {
+      const { media } = target();
+      // Also guarded on the property itself: a media host from an older
+      // generation has no mic intent slot, and writing one would create an
+      // inert expando that sync() reads back as real intent.
+      if (!isMediaCaptureSourceCapable(media) || !('micActive' in media)) return false;
+      const next = !media.micActive;
+      media.micActive = next;
       return next;
     },
   }),
@@ -48,6 +60,7 @@ export const captureSourceFeature = definePlayerFeature({
       set({
         cameraActive: media.cameraActive ?? false,
         screenShareActive: media.screenShareActive ?? false,
+        micActive: media.micActive ?? false,
         cameraState: media.cameraState ?? 'idle',
         screenShareState: media.screenShareState ?? 'idle',
         micState: media.micState ?? 'idle',

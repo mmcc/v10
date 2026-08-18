@@ -7,12 +7,14 @@ function createMediaState(overrides: Partial<MediaCaptureSourceState> = {}): Med
   return {
     cameraActive: false,
     screenShareActive: false,
+    micActive: false,
     cameraState: 'idle',
     screenShareState: 'idle',
     micState: 'idle',
     screenShareAvailability: 'available',
     toggleCamera: vi.fn(() => true),
     toggleScreenShare: vi.fn(() => true),
+    toggleMic: vi.fn(() => true),
     ...overrides,
   };
 }
@@ -42,6 +44,24 @@ describe('CapturePlaceholderCore', () => {
       core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'active' }));
 
       expect(core.getState().captureState).toBe('active');
+    });
+
+    it('clears the placeholder for a mic-only capture', () => {
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ micState: 'active', micActive: true }));
+
+      const state = core.getState();
+      expect(state.captureState).toBe('active');
+      expect(state.label).toBe('');
+    });
+
+    it('keeps the CTA up when only an implied mic is live', () => {
+      const core = new CapturePlaceholderCore();
+      core.setMedia(createMediaState({ micState: 'active', micActive: false }));
+
+      const state = core.getState();
+      expect(state.captureState).toBe('idle');
+      expect(state.label).toBe('Enable camera and microphone');
     });
 
     it('prefers the more in-progress status when the two disagree', () => {

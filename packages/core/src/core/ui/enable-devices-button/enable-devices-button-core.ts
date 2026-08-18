@@ -72,7 +72,7 @@ export class EnableDevicesButtonCore {
     const media = this.#media!;
 
     this.state.patch({
-      captureState: aggregateCaptureState(media.cameraState, media.screenShareState),
+      captureState: aggregateCaptureState(media),
       // Disabled only while the CAMERA pipeline is mid-acquisition — the
       // sources are independently acquirable, so an open screen-share
       // picker must not grey out the camera CTA (matching activate()'s

@@ -11,6 +11,8 @@ function createMediaState(overrides: Partial<PublishButtonMediaState> = {}): Pub
     unpublish: vi.fn(),
     cameraState: 'active',
     screenShareState: 'idle',
+    micState: 'idle',
+    micActive: false,
     ...overrides,
   };
 }
@@ -51,6 +53,18 @@ describe('PublishButtonCore', () => {
       const core = new PublishButtonCore();
       core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'active' }));
       expect(core.getState().disabled).toBe(false);
+    });
+
+    it('is enabled when the explicit mic is the only active source', () => {
+      const core = new PublishButtonCore();
+      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micActive: true }));
+      expect(core.getState().disabled).toBe(false);
+    });
+
+    it('stays disabled on an implied mic — video-driven audio must not justify publish on its own', () => {
+      const core = new PublishButtonCore();
+      core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micActive: false }));
+      expect(core.getState().disabled).toBe(true);
     });
 
     it('is disabled while connecting', () => {
@@ -192,6 +206,24 @@ describe('PublishButtonCore', () => {
     it('does not publish without active capture', async () => {
       const core = new PublishButtonCore();
       const media = createMediaState({ cameraState: 'acquiring', screenShareState: 'idle' });
+
+      await core.toggle(media);
+
+      expect(media.publish).not.toHaveBeenCalled();
+    });
+
+    it('publishes from a mic-only capture', async () => {
+      const core = new PublishButtonCore();
+      const media = createMediaState({ cameraState: 'idle', micState: 'active', micActive: true });
+
+      await core.toggle(media);
+
+      expect(media.publish).toHaveBeenCalled();
+    });
+
+    it('does not publish on an implied mic alone', async () => {
+      const core = new PublishButtonCore();
+      const media = createMediaState({ cameraState: 'idle', micState: 'active', micActive: false });
 
       await core.toggle(media);
 

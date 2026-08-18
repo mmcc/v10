@@ -53,6 +53,8 @@ export const PublishButton = forwardRef<HTMLButtonElement, PublishButtonProps>(
             unpublish: publish.unpublish,
             cameraState: captureSource.cameraState,
             screenShareState: captureSource.screenShareState,
+            micState: captureSource.micState,
+            micActive: captureSource.micActive,
           }
         : null;
 
