@@ -640,8 +640,14 @@ describe('deriveCatalog', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     disposals.push(() => warn.mockRestore());
     const { publisher, sent } = makePublisherStub();
-    // `catalog` collides with a reserved name and must not be advertised.
-    const { state, context } = setupBehavior(undefined, [{ name: 'overlay', role: 'data' }, { name: 'catalog' }]);
+    // `catalog` collides with a reserved name and must not be advertised;
+    // `ticker` declares a media role, which must not reach the catalog
+    // (it would advertise an undecodable renderable track).
+    const { state, context } = setupBehavior(undefined, [
+      { name: 'overlay', role: 'data' },
+      { name: 'catalog' },
+      { name: 'ticker', role: 'video' },
+    ]);
 
     state.endpoint.set(ENDPOINT);
     state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: AUDIO_CONFIG });
@@ -650,7 +656,7 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
-    expect(trackNames(sent[0]!)).toEqual(['video', 'audio', 'overlay']);
+    expect(trackNames(sent[0]!)).toEqual(['video', 'audio', 'overlay', 'ticker']);
     if (sent[0]!.type !== 'frame') return;
     const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
     const overlay = catalog.tracks.find((track: { name: string }) => track.name === 'overlay');
@@ -661,6 +667,11 @@ describe('deriveCatalog', () => {
       name: 'overlay',
       role: 'data',
     });
+    const ticker = catalog.tracks.find((track: { name: string }) => track.name === 'ticker');
+    expect(ticker).not.toHaveProperty('role');
+    // The drop warnings belong to the serve registry (`setupTrackPublishers`);
+    // catalog derivation resolves the same configs silently.
+    expect(warn).not.toHaveBeenCalled();
 
     // The data entry is static — an encodings change re-derives a catalog
     // that still carries it.
@@ -669,6 +680,6 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
-    expect(trackNames(sent[1]!)).toEqual(['audio', 'overlay']);
+    expect(trackNames(sent[1]!)).toEqual(['audio', 'overlay', 'ticker']);
   });
 });

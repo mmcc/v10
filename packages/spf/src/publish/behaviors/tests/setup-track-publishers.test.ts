@@ -260,15 +260,24 @@ describe('setupTrackPublishers', () => {
     expect(objects[0]!.objectId).toBe(0);
   });
 
-  it('drops data tracks whose name collides with a reserved or earlier track', async () => {
+  it('drops data tracks whose name collides with a reserved or earlier track, or cannot key a record', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     disposals.push(() => warn.mockRestore());
     const { actor, peer } = makeSessionActor();
     const { state, context } = setupBehavior({
-      dataTracks: [{ name: 'video' }, { name: 'overlay' }, { name: 'overlay' }],
+      // `__proto__` and `constructor` would corrupt or misread the
+      // name-keyed records (producers, trackBindings) — refused up front.
+      dataTracks: [
+        { name: 'video' },
+        { name: 'overlay' },
+        { name: 'overlay' },
+        { name: '__proto__' },
+        { name: 'constructor' },
+      ],
     });
-    // One warning per dropped config: the reserved `video` and the duplicate `overlay`.
-    expect(warn).toHaveBeenCalledTimes(2);
+    // One warning per dropped config: reserved `video`, duplicate
+    // `overlay`, and the two prototype-member names.
+    expect(warn).toHaveBeenCalledTimes(4);
 
     state.endpoint.set(ENDPOINT);
     // Audio-only encodings: the engine itself never registers `video`, so

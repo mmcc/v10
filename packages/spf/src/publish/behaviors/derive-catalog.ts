@@ -277,6 +277,8 @@ function deriveCatalogSetup({
 }): Reactor<DeriveCatalogFsmState | 'destroying' | 'destroyed'> {
   // Resolved through the same filter the serve registry applies, so the
   // catalog never advertises a data track the session refused to register.
+  // Silent on purpose: `setupTrackPublishers` owns the drop warnings, or
+  // each invalid config would report once per consuming behavior.
   const dataTracks = resolveDataTracks(config.dataTracks);
 
   // The latch memory: the encoding each kind was last advertised with.

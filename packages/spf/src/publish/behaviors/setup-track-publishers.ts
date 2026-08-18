@@ -50,6 +50,7 @@ import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { peek, type ReadonlySignal, type Signal, signal } from '../../core/signals/primitives';
 import { LOC_PROPERTY, MICROSECONDS_PER_SECOND } from '../../media/moq/loc';
+import { isMediaCatalogRole } from '../../media/moq/parse-catalog';
 import type { TrackPublisherActor } from '../actors/track-publisher';
 import { createTrackPublisherActor } from '../actors/track-publisher';
 import type {
@@ -105,7 +106,10 @@ export interface PublishDataTrackConfig {
    * MSF role label emitted on the track's catalog entry (e.g. `'data'`).
    * Any non-media value keeps the track out of a subscriber's renderable
    * set; omitted, the entry carries no role and is classified the same
-   * way from its absent media fields.
+   * way from its absent media fields. A media role (`'video'`, `'audio'`,
+   * `'caption'`, …) is refused — it would advertise the track as
+   * renderable media with no codec — and stripped with a dev warning; the
+   * track still publishes.
    */
   role?: string;
   /**
@@ -137,26 +141,50 @@ export interface DataTrackProducer {
 }
 
 /**
- * Drop data-track configs whose name collides with an engine-owned track
- * or an earlier data track. Shared by this behavior (the serve registry)
- * and `deriveCatalog` (the advertisement) so the catalog never names a
- * track the session refused to register.
+ * Resolve data-track configs into the set the engine actually publishes:
+ * names colliding with an engine-owned track or an earlier data track are
+ * dropped, names unusable as record keys (empty, or an `Object.prototype`
+ * member such as `__proto__`/`constructor` — the producers record and the
+ * session's `trackBindings` are name-keyed plain objects) are dropped, and
+ * a media catalog role is stripped from an otherwise valid track (see
+ * `PublishDataTrackConfig.role`). Shared by this behavior (the serve
+ * registry) and `deriveCatalog` (the advertisement) so the catalog never
+ * names a track the session refused to register; only the registry owner
+ * passes `warn`, so each dropped config reports once per engine.
  */
 export function resolveDataTracks(
-  configs: readonly PublishDataTrackConfig[] | undefined
+  configs: readonly PublishDataTrackConfig[] | undefined,
+  { warn = false }: { warn?: boolean } = {}
 ): readonly PublishDataTrackConfig[] {
   const resolved: PublishDataTrackConfig[] = [];
   const taken = new Set(RESERVED_TRACK_NAMES);
+  const report = (message: string) => {
+    if (warn && __DEV__) console.warn(`[moq-publish] ${message}`);
+  };
   for (const track of configs ?? []) {
     if (taken.has(track.name)) {
-      if (__DEV__) {
-        console.warn(
-          `[moq-publish] data track "${track.name}" collides with a reserved or duplicate track name and was dropped`
-        );
-      }
+      report(`data track "${track.name}" collides with a reserved or duplicate track name and was dropped`);
+      continue;
+    }
+    // `name in {}` catches every Object.prototype member, including the
+    // `__proto__` accessor: assigning such a name on a plain record would
+    // mutate its prototype or shadow an inherited member, and reading it
+    // from `trackBindings` before any subscription would return the
+    // inherited value instead of "unbound".
+    if (track.name === '' || track.name in {}) {
+      report(`data track name "${track.name}" is not usable as a track key and was dropped`);
       continue;
     }
     taken.add(track.name);
+    if (track.role !== undefined && isMediaCatalogRole(track.role)) {
+      // A media role would land the entry in a subscriber's renderable
+      // set as an undecodable track — the track publishes, its media
+      // label does not.
+      report(`data track "${track.name}" declares media role "${track.role}"; the role was dropped`);
+      const { role: _role, ...withoutRole } = track;
+      resolved.push(withoutRole);
+      continue;
+    }
     resolved.push(track);
   }
   return resolved;
@@ -184,7 +212,12 @@ export interface SetupTrackPublishersContext {
 export interface SetupTrackPublishersConfig {
   /** Groups the transport may fall behind before dropping to the keyframe. */
   maxQueuedGroups?: number;
-  /** Application data tracks published on the broadcast beside the media. */
+  /**
+   * Application data tracks published on the broadcast beside the media.
+   * Beside, not instead: the publisher cluster comes up with the first
+   * active media encoding, so a broadcast with data tracks and no media
+   * source publishes nothing — a data-only broadcast is out of scope.
+   */
   dataTracks?: PublishDataTrackConfig[];
 }
 
@@ -276,8 +309,9 @@ function setupTrackPublishersSetup({
   config?: SetupTrackPublishersConfig;
 }): Reactor<SetupTrackPublishersFsmState | 'destroying' | 'destroyed'> {
   // Config-declared and session-independent — resolved once so a rebuilt
-  // cluster registers the same names the catalog advertises.
-  const dataTracks = resolveDataTracks(config.dataTracks);
+  // cluster registers the same names the catalog advertises. This is the
+  // warning call site: `deriveCatalog` resolves the same configs silently.
+  const dataTracks = resolveDataTracks(config.dataTracks, { warn: true });
 
   // Written by the owner effect, tracked by the encoding-sync and
   // binding-sync effects, so a session rebuild re-adds the media

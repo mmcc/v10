@@ -193,7 +193,10 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
    * timed metadata, overlays, and other page-produced payload streams.
    * Each is registered and served by the engine like the media tracks
    * (same announce, same catalog) and exposed as a page-facing producer
-   * handle on `context.dataTrackProducers`.
+   * handle on `context.dataTrackProducers`. Beside the media, not instead
+   * of it: the track publishers come up with the first active media
+   * encoding, so a data-only broadcast (no camera/screen/mic) publishes
+   * nothing and is out of scope.
    */
   dataTracks?: PublishDataTrackConfig[];
   /** Transport seam; default constructs a real `WebTransport`. */

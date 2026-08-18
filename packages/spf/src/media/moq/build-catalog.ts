@@ -69,8 +69,11 @@ export interface MsfCatalogDataTrackInput {
   name: string;
   /**
    * MSF role label (§5.2.6) classifying the non-media track for
-   * consumers, e.g. `'data'` or `'metadata'`. Anything outside the media
-   * roles keeps the track out of a subscriber's renderable-track set.
+   * consumers, e.g. `'data'` or `'metadata'`. MUST NOT be a media role
+   * (`isMediaCatalogRole`): the entry carries no codec or media fields,
+   * so a media role would round-trip into an undecodable renderable
+   * track. Like codec strings, the caller resolves what to declare — the
+   * publish engine strips media roles before building (`resolveDataTracks`).
    */
   role?: string;
 }
