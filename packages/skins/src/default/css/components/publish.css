@@ -24,7 +24,7 @@
 
   &[data-publish-state="live"] {
     color: oklch(1 0 0);
-    background: var(--media-publish-live-color);
+    background: var(--publish-live-color);
   }
 
   /* Transitional states: subdued and non-interactive cursor. */
@@ -40,8 +40,8 @@
 
   /* Error: translucent red so it reads as attention without mimicking live. */
   &[data-publish-state="error"] {
-    color: var(--media-publish-live-color);
-    background: oklch(from var(--media-publish-live-color) l c h / 0.15);
+    color: var(--publish-live-color);
+    background: oklch(from var(--publish-live-color) l c h / 0.15);
   }
 }
 
@@ -65,15 +65,15 @@
   gap: calc(var(--spacing) * 2);
   align-items: center;
   padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
-  color: var(--media-color-primary, oklch(1 0 0));
+  color: oklch(1 0 0);
   pointer-events: none;
-  background-color: var(--media-publish-status-background);
+  background-color: var(--publish-status-background);
   border-radius: calc(Infinity * 1px);
   box-shadow:
-    0 0 0 1px var(--media-surface-outer-border-color),
-    0 1px 3px 0 var(--media-surface-shadow-color),
-    inset 0 1px 0 0 var(--media-surface-inner-border-color);
-  backdrop-filter: var(--media-surface-backdrop-filter);
+    0 0 0 1px var(--surface-outer-border-color),
+    0 1px 3px 0 var(--surface-shadow-color),
+    inset 0 1px 0 0 var(--surface-inner-border-color);
+  backdrop-filter: var(--surface-backdrop-filter);
 
   @container media-root (width > 42rem) {
     --inset-factor: 3;
@@ -113,7 +113,7 @@
 
   &[data-publish-state="live"] {
     color: oklch(1 0 0);
-    background-color: var(--media-publish-live-color);
+    background-color: var(--publish-live-color);
 
     &::before {
       background-color: oklch(1 0 0);
@@ -121,8 +121,8 @@
   }
 
   &[data-publish-state="error"] {
-    color: var(--media-publish-live-color);
-    background-color: oklch(from var(--media-publish-live-color) l c h / 0.15);
+    color: var(--publish-live-color);
+    background-color: oklch(from var(--publish-live-color) l c h / 0.15);
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -157,12 +157,12 @@
     opacity: 0.5;
   }
   &[data-quality="good"] {
-    color: var(--media-quality-good-color);
+    color: var(--quality-good-color);
   }
   &[data-quality="fair"] {
-    color: var(--media-quality-fair-color);
+    color: var(--quality-fair-color);
   }
   &[data-quality="poor"] {
-    color: var(--media-quality-poor-color);
+    color: var(--quality-poor-color);
   }
 }

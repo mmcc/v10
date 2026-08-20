@@ -54,7 +54,7 @@
 }
 
 .media-default-skin .media-capture-placeholder[data-capture-state="denied"] .media-capture-placeholder__message {
-  color: var(--media-publish-live-color);
+  color: var(--publish-live-color);
   opacity: 1;
 }
 
@@ -114,7 +114,7 @@
     width: calc(var(--spacing) * 3.5);
     height: calc(var(--spacing) * 3.5);
     opacity: 0.65;
-    filter: drop-shadow(0 1px 0 var(--media-current-shadow-color));
+    filter: drop-shadow(0 1px 0 var(--shadow-current-color));
     /* The chevron asset points right; aim it at the menu, which opens above. */
     rotate: -90deg;
     transition:
@@ -198,5 +198,5 @@
 /* Muted affordance — tint the visible (slashed) icon. */
 .media-button--camera[data-muted] .media-icon,
 .media-button--mic[data-muted] .media-icon {
-  color: var(--media-publish-live-color);
+  color: var(--publish-live-color);
 }
