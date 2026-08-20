@@ -21,7 +21,7 @@ export const capturePlaceholder = {
     // While idle/ended the message would repeat the enable-devices CTA text —
     // let the CTA carry it and only show acquiring/denied guidance here.
     'data-[capture-state=idle]:hidden data-[capture-state=ended]:hidden',
-    'group-data-[capture-state=denied]/capture:text-(--media-publish-live-color)',
+    'group-data-[capture-state=denied]/capture:text-(--publish-live-color)',
     'group-data-[capture-state=denied]/capture:opacity-100'
   ),
 };
@@ -80,7 +80,7 @@ export const deviceControl = {
   ),
   /** Chevron inside the caret — the asset points right, so aim it at the menu above. */
   caretIcon: cn(
-    'size-3.5 -rotate-90 opacity-65 drop-shadow-[0_1px_0_var(--media-current-shadow-color)]',
+    'size-3.5 -rotate-90 opacity-65 drop-shadow-[0_1px_0_var(--shadow-current-color)]',
     'transition-[rotate,opacity] duration-150 ease-out motion-reduce:duration-0',
     'group-hover/caret:opacity-100 group-focus-visible/caret:opacity-100 group-aria-expanded/caret:opacity-100',
     // Point back at the toggle while the picker is open.
@@ -98,7 +98,7 @@ export const captureIconState = {
     on: 'hidden opacity-0 group-not-data-muted:block group-not-data-muted:opacity-100',
     off: cn(
       'hidden opacity-0 group-data-muted:block group-data-muted:opacity-100',
-      'group-data-muted:text-(--media-publish-live-color)'
+      'group-data-muted:text-(--publish-live-color)'
     ),
   },
   mic: {
@@ -106,7 +106,7 @@ export const captureIconState = {
     on: 'hidden opacity-0 group-not-data-muted:block group-not-data-muted:opacity-100',
     off: cn(
       'hidden opacity-0 group-data-muted:block group-data-muted:opacity-100',
-      'group-data-muted:text-(--media-publish-live-color)'
+      'group-data-muted:text-(--publish-live-color)'
     ),
   },
 };
