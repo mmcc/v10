@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { isResolvedPresentation } from '../../types';
 import { getTracksByType } from '../../utils/tracks';
 import { buildMsfCatalog, MSF_CATALOG_VERSION } from '../build-catalog';
@@ -37,6 +38,7 @@ describe('buildMsfCatalog', () => {
     expect(isResolvedPresentation(presentation)).toBe(true);
     const video = getTracksByType(presentation, 'video') as MoqVideoTrack[];
     const audio = getTracksByType(presentation, 'audio') as MoqAudioTrack[];
+
     expect(video).toHaveLength(1);
     expect(audio).toHaveLength(1);
 
@@ -81,6 +83,7 @@ describe('buildMsfCatalog', () => {
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
 
     const video = getTracksByType(presentation, 'video') as MoqVideoTrack[];
+
     expect(video).toHaveLength(1);
     expect(getTracksByType(presentation, 'audio')).toHaveLength(0);
     expect(video[0]!.codecs).toEqual(['vp8']);
@@ -97,12 +100,14 @@ describe('buildMsfCatalog', () => {
     });
 
     const raw = JSON.parse(text);
+
     // The pair the parse side reads: rendered together, never alternates.
     expect(raw.tracks.every((track: Record<string, unknown>) => track.renderGroup === 1)).toBe(true);
     expect(raw.tracks.some((track: Record<string, unknown>) => 'altGroup' in track)).toBe(false);
 
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
     const videoSet = presentation.selectionSets.find((set) => set.type === 'video')!;
+
     expect(videoSet.switchingSets.map((switchingSet) => switchingSet.id)).toEqual([
       'moq-video-main',
       // Derived from the presentation-unique track id (namespace + name).
@@ -122,6 +127,7 @@ describe('buildMsfCatalog', () => {
 
     const raw = JSON.parse(text);
     const overlay = raw.tracks.find((track: Record<string, unknown>) => track.name === 'overlay');
+
     // Shared publication fields plus name + role — no media fields, and no
     // renderGroup (the track composes nothing on screen).
     expect(overlay).toEqual({
@@ -132,11 +138,13 @@ describe('buildMsfCatalog', () => {
       role: 'data',
     });
     const events = raw.tracks.find((track: Record<string, unknown>) => track.name === 'events');
+
     expect(events).not.toHaveProperty('role');
 
     // The parse side classifies both as engine plumbing, not media: the
     // renderable track set is exactly what it was without them.
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+
     expect(isResolvedPresentation(presentation)).toBe(true);
     expect(getTracksByType(presentation, 'video')).toHaveLength(1);
     expect(getTracksByType(presentation, 'audio')).toHaveLength(1);
@@ -155,6 +163,7 @@ describe('buildMsfCatalog', () => {
     // The wire shape §5.2.16-17 readers (and non-SPF consumers) parse:
     // inline base64 entries referenced per track.
     const raw = JSON.parse(text);
+
     expect(raw.tracks.map((track: Record<string, unknown>) => track.initRef)).toEqual(['video-init', 'audio-init']);
     expect(raw.initDataList).toEqual([
       { id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x1e\xff\xe1') },
@@ -164,6 +173,7 @@ describe('buildMsfCatalog', () => {
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
     const video = getTracksByType(presentation, 'video') as MoqVideoTrack[];
     const audio = getTracksByType(presentation, 'audio') as MoqAudioTrack[];
+
     expect(video[0]!.moq.initData).toEqual(avcC);
     expect(audio[0]!.moq.initData).toEqual(audioSpecificConfig);
     expect(new Uint8Array(toVideoDecoderConfig(video[0]!)!.description as ArrayBuffer)).toEqual(avcC);
@@ -174,6 +184,7 @@ describe('buildMsfCatalog', () => {
     const raw = JSON.parse(
       buildMsfCatalog({ namespace: NAMESPACE, audio: { name: 'audio', codec: 'opus' }, generatedAt: 1746104606044 })
     );
+
     expect(raw.version).toBe(MSF_CATALOG_VERSION);
     expect(raw.isComplete).toBe(true);
     expect(raw.generatedAt).toBe(1746104606044);

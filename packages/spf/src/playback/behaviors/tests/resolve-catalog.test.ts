@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import { isResolvedPresentation, type MaybeResolvedPresentation } from '../../../media/types';
 import { getTracksByType } from '../../../media/utils/tracks';
@@ -49,6 +50,7 @@ function createFakeSessionActor() {
     ready: Promise.resolve(),
     subscribe(options: { trackNamespace: string[]; trackName: string }, handlers: SubscriptionHandlers = {}) {
       const record = { options, handlers, cancelled: false };
+
       subscriptions.push(record);
       return {
         requestId: (subscriptions.length - 1) * 2,
@@ -60,6 +62,7 @@ function createFakeSessionActor() {
     },
     fetch(options: unknown, handlers: FetchHandlers = {}) {
       const record = { options, handlers, cancelled: false };
+
       fetches.push(record);
       return {
         requestId: 100,
@@ -90,6 +93,7 @@ function createFakeSessionActor() {
     refreshAuthToken,
     destroy: () => {},
   };
+
   return { actor, subscriptions, fetches, refreshAuthToken };
 }
 
@@ -128,8 +132,8 @@ const publishDone = { statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 
 const flush = () => Promise.resolve().then(() => Promise.resolve());
 
 /**
- * Comfortably past the first restart backoff: attempt 0 is 500ms jittered
- * ±25%, so any wait above 625ms is deterministic.
+ * Comfortably past the first restart backoff: attempt 0 is 500ms jittered ±25%, so any wait above 625ms is
+ * deterministic.
  */
 const PAST_FIRST_BACKOFF_MS = 1000;
 
@@ -187,6 +191,7 @@ describe('resolveCatalog', () => {
 
     await vi.waitFor(() => {
       const presentation = deps.state.presentation.get();
+
       expect(isResolvedPresentation(presentation)).toBe(true);
       expect(getTracksByType(presentation!, 'audio')).toHaveLength(1);
     });
@@ -224,6 +229,7 @@ describe('resolveCatalog', () => {
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -323,6 +329,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions, fetches } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -359,6 +366,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions, fetches } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -407,6 +415,7 @@ describe('resolveCatalog', () => {
     const actor: MoqSessionActor = { ...base.actor, refreshAuthToken };
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -452,6 +461,7 @@ describe('resolveCatalog', () => {
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -477,6 +487,7 @@ describe('resolveCatalog', () => {
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -517,6 +528,7 @@ describe('resolveCatalog', () => {
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -547,6 +559,7 @@ describe('resolveCatalog', () => {
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -597,6 +610,7 @@ describe('resolveCatalog', () => {
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -630,6 +644,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions, fetches } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
     expect(subscriptions).toHaveLength(1);
 
@@ -653,6 +668,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions, fetches } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
 
     fetches[0]!.handlers.onEntry?.(fetchEntry(5, 0, CATALOG));
@@ -691,6 +707,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
 
     subscriptions[0]!.handlers.onError?.({
@@ -716,6 +733,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup({ ...deps, config: { subscribeRetry: { maxAttempts: 0 } } });
+
     await flush();
 
     subscriptions[0]!.handlers.onError?.({
@@ -737,6 +755,7 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
+
     await flush();
 
     subscriptions[0]!.handlers.onError?.({
@@ -759,12 +778,14 @@ describe('resolveCatalog', () => {
     const { actor, subscriptions } = createFakeSessionActor();
     const httpDeps = makeDeps(actor, { url: 'https://example.com/live.m3u8' });
     const httpReactor = resolveCatalog.setup(httpDeps);
+
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(subscriptions).toHaveLength(0);
     httpReactor.destroy();
 
     const noSessionDeps = makeDeps(undefined, { url: MOQ_URL });
     const noSessionReactor = resolveCatalog.setup(noSessionDeps);
+
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(subscriptions).toHaveLength(0);
     noSessionReactor.destroy();

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import { createMoqtSession } from '../../../network/moqt/session';
 import { createTransportPair, type TransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
@@ -10,11 +11,9 @@ import {
 } from '../open-publish-session';
 
 /**
- * Source-switch regression coverage: a camera device change drives
- * `cameraState` through `active → acquiring → active` independently of
- * `screenShareState`, and an open session must ride either pipeline's
- * transient reacquire out — closing it sends PUBLISH_DONE for every track
- * and drops the transport, which a relay treats as the end of the
+ * Source-switch regression coverage: a camera device change drives `cameraState` through `active → acquiring → active`
+ * independently of `screenShareState`, and an open session must ride either pipeline's transient reacquire out —
+ * closing it sends PUBLISH_DONE for every track and drops the transport, which a relay treats as the end of the
  * broadcast.
  */
 
@@ -30,6 +29,7 @@ function makeAcceptingPeer(pair: TransportPair) {
       onClosed: (info) => closes.push(info),
     },
   });
+
   disposals.push(() => peer.destroy());
   return { peer, closes };
 }
@@ -49,6 +49,7 @@ function setupBehavior(connectTransport: ConnectPublishTransport) {
     publishSessionActor: signal<OpenPublishSessionContext['publishSessionActor']>(undefined),
   };
   const reactor = openPublishSession.setup({ state, context, config: { connectTransport } });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }

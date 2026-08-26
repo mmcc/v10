@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import type { MediaCaptureState } from '@videojs/media';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createPlayerWrapper } from '../../../testing/mocks';
 import { CapturePlaceholder } from '../capture-placeholder';
@@ -37,6 +37,7 @@ describe('CapturePlaceholder', () => {
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
     const placeholder = screen.getByTestId('placeholder');
+
     expect(placeholder.textContent).toBe('Enable camera and microphone');
     expect(placeholder.getAttribute('aria-label')).toBe('Enable camera and microphone');
     expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
@@ -53,6 +54,7 @@ describe('CapturePlaceholder', () => {
     );
 
     const placeholder = screen.getByTestId('placeholder');
+
     expect(placeholder.textContent).toBe('Custom content');
     expect(placeholder.hasAttribute('aria-label')).toBe(false);
   });
@@ -63,6 +65,7 @@ describe('CapturePlaceholder', () => {
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
     const placeholder = screen.getByTestId('placeholder');
+
     expect(placeholder.getAttribute('data-capture-state')).toBe('active');
     expect(placeholder.textContent).toBe('');
   });
@@ -73,6 +76,7 @@ describe('CapturePlaceholder', () => {
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
     const placeholder = screen.getByTestId('placeholder');
+
     expect(placeholder.getAttribute('data-capture-state')).toBe('idle');
     expect(placeholder.textContent).toBe('Enable camera and microphone');
   });
@@ -83,6 +87,7 @@ describe('CapturePlaceholder', () => {
     render(<CapturePlaceholder data-testid="placeholder" />, { wrapper: Wrapper });
 
     const placeholder = screen.getByTestId('placeholder');
+
     expect(placeholder.getAttribute('data-capture-state')).toBe('denied');
     expect(placeholder.textContent).toBe(
       'Camera and microphone access is blocked. Update your browser permissions to continue.'

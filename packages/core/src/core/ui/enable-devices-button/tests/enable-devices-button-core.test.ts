@@ -1,5 +1,6 @@
 import type { MediaCaptureSourceState } from '@videojs/media';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { EnableDevicesButtonState } from '../enable-devices-button-core';
 import { EnableDevicesButtonCore } from '../enable-devices-button-core';
 
@@ -33,6 +34,7 @@ describe('EnableDevicesButtonCore', () => {
   describe('getState', () => {
     it('is enabled when idle', () => {
       const core = new EnableDevicesButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'idle' }));
 
       const state = core.getState();
@@ -43,30 +45,35 @@ describe('EnableDevicesButtonCore', () => {
 
     it('is disabled while the camera is acquiring', () => {
       const core = new EnableDevicesButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'acquiring' }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('stays enabled while the screen share is acquiring — the pipelines are independent', () => {
       const core = new EnableDevicesButtonCore();
+
       core.setMedia(createMediaState({ screenShareState: 'acquiring' }));
       expect(core.getState().disabled).toBe(false);
     });
 
     it('reflects a mic-only capture as active', () => {
       const core = new EnableDevicesButtonCore();
+
       core.setMedia(createMediaState({ micState: 'active', micActive: true, micExplicit: true }));
       expect(core.getState().captureState).toBe('active');
     });
 
     it('ignores an implied mic when reporting the capture state', () => {
       const core = new EnableDevicesButtonCore();
+
       core.setMedia(createMediaState({ micState: 'active', micExplicit: false }));
       expect(core.getState().captureState).toBe('idle');
     });
 
     it('is disabled via props', () => {
       const core = new EnableDevicesButtonCore({ disabled: true });
+
       core.setMedia(createMediaState());
       expect(core.getState().disabled).toBe(true);
     });
@@ -75,6 +82,7 @@ describe('EnableDevicesButtonCore', () => {
   describe('getLabel', () => {
     it('returns the default label', () => {
       const core = new EnableDevicesButtonCore();
+
       expect(core.getLabel(createState())).toMatchObject({
         key: 'publish.enableDevices',
         text: 'Enable camera and microphone',
@@ -83,6 +91,7 @@ describe('EnableDevicesButtonCore', () => {
 
     it('returns custom string label', () => {
       const core = new EnableDevicesButtonCore({ label: 'Allow devices' });
+
       expect(core.getLabel(createState())).toBe('Allow devices');
     });
   });
@@ -91,12 +100,14 @@ describe('EnableDevicesButtonCore', () => {
     it('returns aria-label', () => {
       const core = new EnableDevicesButtonCore();
       const attrs = core.getAttrs(createState());
+
       expect(attrs['aria-label']).toMatchObject({ key: 'publish.enableDevices' });
     });
 
     it('sets aria-disabled from derived disabled state', () => {
       const core = new EnableDevicesButtonCore();
       const attrs = core.getAttrs(createState({ disabled: true }));
+
       expect(attrs['aria-disabled']).toBe('true');
     });
   });

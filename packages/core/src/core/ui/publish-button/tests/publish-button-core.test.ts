@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { PublishButtonMediaState, PublishButtonState } from '../publish-button-core';
 import { PublishButtonCore } from '../publish-button-core';
 
@@ -30,6 +31,7 @@ describe('PublishButtonCore', () => {
   describe('getState', () => {
     it('projects the publish session', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ publishState: 'live' }));
       const state = core.getState();
 
@@ -39,54 +41,63 @@ describe('PublishButtonCore', () => {
 
     it('is enabled when idle with active capture', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState());
       expect(core.getState().disabled).toBe(false);
     });
 
     it('is disabled when neither capture pipeline is active', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'idle' }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('is enabled when only the screen share is active', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'idle', screenShareState: 'active' }));
       expect(core.getState().disabled).toBe(false);
     });
 
     it('is enabled when the explicit mic is the only active source', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micExplicit: true }));
       expect(core.getState().disabled).toBe(false);
     });
 
     it('stays disabled on an implied mic — video-driven audio must not justify publish on its own', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'idle', micState: 'active', micExplicit: false }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('stays disabled on mic denial residue after the intent is consumed', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ cameraState: 'idle', micState: 'denied', micExplicit: true }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('is disabled while connecting', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ publishState: 'connecting' }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('is disabled while stopping', () => {
       const core = new PublishButtonCore();
+
       core.setMedia(createMediaState({ publishState: 'stopping' }));
       expect(core.getState().disabled).toBe(true);
     });
 
     it('is disabled via props', () => {
       const core = new PublishButtonCore({ disabled: true });
+
       core.setMedia(createMediaState());
       expect(core.getState().disabled).toBe(true);
     });
@@ -95,6 +106,7 @@ describe('PublishButtonCore', () => {
   describe('getLabel', () => {
     it('returns go live when idle', () => {
       const core = new PublishButtonCore();
+
       expect(core.getLabel(createState({ session: 'idle' }))).toMatchObject({
         key: 'publish.goLive',
         text: 'Go live',
@@ -103,6 +115,7 @@ describe('PublishButtonCore', () => {
 
     it('returns go live when errored', () => {
       const core = new PublishButtonCore();
+
       expect(core.getLabel(createState({ session: 'error' }))).toMatchObject({
         key: 'publish.goLive',
         text: 'Go live',
@@ -111,6 +124,7 @@ describe('PublishButtonCore', () => {
 
     it('returns stop stream when live', () => {
       const core = new PublishButtonCore();
+
       expect(core.getLabel(createState({ session: 'live' }))).toMatchObject({
         key: 'publish.stopStream',
         text: 'Stop stream',
@@ -119,6 +133,7 @@ describe('PublishButtonCore', () => {
 
     it('returns connecting while connecting', () => {
       const core = new PublishButtonCore();
+
       expect(core.getLabel(createState({ session: 'connecting' }))).toMatchObject({
         key: 'publish.connecting',
         text: 'Connecting…',
@@ -127,6 +142,7 @@ describe('PublishButtonCore', () => {
 
     it('returns stopping while stopping', () => {
       const core = new PublishButtonCore();
+
       expect(core.getLabel(createState({ session: 'stopping' }))).toMatchObject({
         key: 'publish.stopping',
         text: 'Stopping…',
@@ -135,6 +151,7 @@ describe('PublishButtonCore', () => {
 
     it('returns custom string label', () => {
       const core = new PublishButtonCore({ label: 'Broadcast' });
+
       expect(core.getLabel(createState())).toBe('Broadcast');
     });
   });
@@ -143,12 +160,14 @@ describe('PublishButtonCore', () => {
     it('returns aria-label', () => {
       const core = new PublishButtonCore();
       const attrs = core.getAttrs(createState({ session: 'idle' }));
+
       expect(attrs['aria-label']).toMatchObject({ key: 'publish.goLive', text: 'Go live' });
     });
 
     it('sets aria-disabled from derived disabled state', () => {
       const core = new PublishButtonCore();
       const attrs = core.getAttrs(createState({ disabled: true }));
+
       expect(attrs['aria-disabled']).toBe('true');
     });
   });

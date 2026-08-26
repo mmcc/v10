@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../../core/signals/primitives';
 import {
   type ActiveEncodingsFacts,
@@ -18,14 +19,14 @@ function setupProbe(config: ProbeEncoderSupportConfig = {}) {
     activeEncodings: signal<ProbeEncoderSupportState['activeEncodings']>(undefined),
     publishError: signal<ProbeEncoderSupportState['publishError']>(undefined),
   };
+
   disposals.push(probeEncoderSupport.setup({ state, config }));
   return { state };
 }
 
 /**
- * Force the video ladder's verdict. `supported()` is read per candidate, so
- * a test can flip a machine from "nothing encodes" to "everything does"
- * between probe runs.
+ * Force the video ladder's verdict. `supported()` is read per candidate, so a test can flip a machine from "nothing
+ * encodes" to "everything does" between probe runs.
  */
 function mockVideoEncoderSupport(supported: () => boolean): void {
   vi.spyOn(VideoEncoder, 'isConfigSupported').mockImplementation(async (config) => ({
@@ -35,9 +36,8 @@ function mockVideoEncoderSupport(supported: () => boolean): void {
 }
 
 /**
- * Force the audio ladder's verdict per candidate. Needed for any AAC arm:
- * headless Chromium ships no AAC encoder, so the preference walk would
- * always fall back to Opus under the real `isConfigSupported`.
+ * Force the audio ladder's verdict per candidate. Needed for any AAC arm: headless Chromium ships no AAC encoder, so
+ * the preference walk would always fall back to Opus under the real `isConfigSupported`.
  */
 function mockAudioEncoderSupport(supported: (config: AudioEncoderConfig) => boolean): void {
   vi.spyOn(AudioEncoder, 'isConfigSupported').mockImplementation(async (config) => ({
@@ -53,6 +53,7 @@ const MIC_TRACK = { sampleRate: 48_000, channelCount: 1 };
 describe('probeEncoderSupport', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -67,11 +68,13 @@ describe('probeEncoderSupport', () => {
       expect(state.encoderSupport.get()?.audio).toBeDefined();
     });
     const support = state.encoderSupport.get()!;
+
     // Chromium always ships at least VP8 + Opus encoders.
     expect(support.camera!.length).toBeGreaterThanOrEqual(1);
     expect(support.audio!.length).toBeGreaterThanOrEqual(1);
 
     const active = state.activeEncodings.get()!;
+
     expect(active.camera).toBe(support.camera![0]);
     expect(active.camera).toMatchObject({ width: 320, height: 240, framerate: 30 });
     expect(active.audio).toMatchObject({ codec: 'opus', sampleRate: 48_000, numberOfChannels: 1 });
@@ -297,6 +300,7 @@ describe('probeEncoderSupport', () => {
 
   it('retracts its encode error when the kind re-probes successfully', async () => {
     let encodable = false;
+
     mockVideoEncoderSupport(() => encodable);
     const { state } = setupProbe();
 
@@ -370,6 +374,7 @@ describe('probeEncoderSupport', () => {
     // `publishError` is a single-value multi-writer slot: a capture failure
     // written after ours is the live one, and our retraction is not its.
     const captureError = { code: 'capture', message: 'device exploded' } as const;
+
     state.publishError.set(captureError);
     state.cameraTracks.set(undefined);
 

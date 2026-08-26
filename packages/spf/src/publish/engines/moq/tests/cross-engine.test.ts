@@ -1,33 +1,25 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { createRelayHub } from '../../../tests/helpers/relay-hub';
 import { createMoqPublishEngine } from '../engine';
 import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-harness';
 
 /**
- * Cross-engine regression suite: the real publish engine (DEFAULT encoder
- * config — H.264 in `avc` (AVCC) bitstream format, with the avcC
- * published out-of-band as the catalog's `initDataList`; see
- * `probe-encoder-support.ts` for the carriage history) publishing through
- * an in-memory draft-19 relay hub to the real playback engine rendering
- * onto a canvas.
+ * Cross-engine regression suite: the real publish engine (DEFAULT encoder config — H.264 in `avc` (AVCC) bitstream
+ * format, with the avcC published out-of-band as the catalog's `initDataList`; see `probe-encoder-support.ts` for the
+ * carriage history) publishing through an in-memory draft-19 relay hub to the real playback engine rendering onto a
+ * canvas.
  *
- * Covers the real-world publisher bugs:
- * - a LATE-joining subscriber (after ≥1 group boundary) must reach decoded
- *   video with the default codec config;
- * - screen share starting ADDITIVELY mid-session — the whole point of the
- *   multi-source redesign — must keep the session and the camera's served
- *   tracks alive (no track-ending subscribe-stream FIN, no reconnect)
- *   while the new `screen` track arrives on the subscriber as its own
- *   content: a second video switching set, never a quality alternate the
- *   ABR ranker may swap the camera for;
- * - audio (the mic's own always-on pipeline) must keep flowing to the
- *   subscriber throughout, unaffected by screen starting or stopping.
+ * Covers the real-world publisher bugs: - a LATE-joining subscriber (after ≥1 group boundary) must reach decoded video
+ * with the default codec config; - screen share starting ADDITIVELY mid-session — the whole point of the multi-source
+ * redesign — must keep the session and the camera's served tracks alive (no track-ending subscribe-stream FIN, no
+ * reconnect) while the new `screen` track arrives on the subscriber as its own content: a second video switching set,
+ * never a quality alternate the ABR ranker may swap the camera for; - audio (the mic's own always-on pipeline) must
+ * keep flowing to the subscriber throughout, unaffected by screen starting or stopping.
  *
- * Ingest is announce-and-serve (moq-relay 0.14.7): the session goes live
- * on the ANNOUNCE, and a track publisher writes nothing until the hub
- * subscribes to that track — so the wire-level flow assertions prime
- * standing upstream demand on the hub first, standing in for the other
- * viewers a real relay would be pulling for.
+ * Ingest is announce-and-serve (moq-relay 0.14.7): the session goes live on the ANNOUNCE, and a track publisher writes
+ * nothing until the hub subscribes to that track — so the wire-level flow assertions prime standing upstream demand on
+ * the hub first, standing in for the other viewers a real relay would be pulling for.
  */
 
 const disposals: (() => void)[] = [];
@@ -36,19 +28,20 @@ const CAMERA_SIZE = { width: 320, height: 240 } as const;
 const SCREEN_SIZE = { width: 480, height: 360 } as const;
 
 /**
- * Stub capture: camera and mic each get their own video-only / audio-only
- * stream (dispatched on which of `video`/`audio` the constraints ask for —
- * mirroring the two independent `getUserMedia` callers); screen share's
+ * Stub capture: camera and mic each get their own video-only / audio-only stream (dispatched on which of
+ * `video`/`audio` the constraints ask for — mirroring the two independent `getUserMedia` callers); screen share's
  * `getDisplayMedia` returns a different-resolution video-only stream.
  */
 function installCaptureStubs(): void {
   vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints?: MediaStreamConstraints) => {
     if (constraints?.audio) return makeSyntheticStream(CAMERA_SIZE, true, disposals); // audio-only ask: the mic pipeline
+
     return makeSyntheticStream(CAMERA_SIZE, false, disposals); // video-only ask: the camera pipeline
   });
   const mediaDevices = navigator.mediaDevices as MediaDevices & {
     getDisplayMedia: (constraints?: unknown) => Promise<MediaStream>;
   };
+
   vi.spyOn(mediaDevices, 'getDisplayMedia').mockImplementation(async () =>
     makeSyntheticStream(SCREEN_SIZE, false, disposals)
   );
@@ -57,12 +50,14 @@ function installCaptureStubs(): void {
 describe('publish engine ↔ playback engine (relay hub)', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
   it('late join decodes default-config video, and screen share adds a second live track without disturbing camera', async () => {
     installCaptureStubs();
     const hub = createRelayHub();
+
     disposals.push(() => hub.destroy());
 
     // ── Publish (default codec config: avc1, avc format) ─────────────────
@@ -70,6 +65,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
       groupDurationSec: 1,
       connectTransport: hub.connectPublisher,
     });
+
     disposals.push(() => void publisher.destroy());
 
     publisher.state.endpoint.set({ url: 'https://relay.test/moq', namespace: ['live'] });
@@ -106,6 +102,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     await vi.waitFor(
       () => {
         const renderer = signals.context.videoRendererActor.get();
+
         expect(renderer?.snapshot.get().context.framesDecoded ?? 0).toBeGreaterThan(0);
         expect(renderer?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
       },
@@ -151,6 +148,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     await vi.waitFor(
       () => {
         const videoSet = signals.state.presentation.get()?.selectionSets?.find((set) => set.type === 'video');
+
         expect(videoSet?.switchingSets.map((switchingSet) => switchingSet.tracks.map((track) => track.id))).toEqual([
           ['live/video'],
           ['live/screen'],
@@ -204,6 +202,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     );
     // …and the camera subscriber keeps scheduling them.
     const scheduledAfterScreen = signals.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled;
+
     await vi.waitFor(
       () => {
         expect(signals.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled).toBeGreaterThan(
@@ -227,6 +226,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     await vi.waitFor(
       () => {
         const endedTracks = hub.trackEnds.filter((end) => end.kind === 'subscribe-fin').map((end) => end.trackName);
+
         expect(endedTracks).toContain('video');
         expect(endedTracks).toContain('screen');
         expect(endedTracks).toContain('audio');

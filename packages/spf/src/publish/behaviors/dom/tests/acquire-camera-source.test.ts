@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
 import {
@@ -29,6 +30,7 @@ function setupAcquire() {
   const state = makeState();
   const context = makeContext();
   const reactor = acquireCameraSource.setup({ state, context });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -38,16 +40,17 @@ function deferred<T>() {
   const promise = new Promise<T>((res) => {
     resolve = res;
   });
+
   return { promise, resolve };
 }
 
 /**
- * A real `MediaStream` with a real video track: canvas capture. A real
- * track gives real `getSettings()` / `stop()` / `'ended'` semantics in
- * headless Chromium, where no fake camera exists.
+ * A real `MediaStream` with a real video track: canvas capture. A real track gives real `getSettings()` / `stop()` /
+ * `'ended'` semantics in headless Chromium, where no fake camera exists.
  */
 function makeRealCameraStream(): MediaStream {
   const canvas = document.createElement('canvas');
+
   canvas.width = 640;
   canvas.height = 480;
   canvas.getContext('2d')!.fillRect(0, 0, 10, 10);
@@ -96,6 +99,7 @@ const asStream = (stream: FakeMediaStream) => stream as unknown as MediaStream;
 describe('acquireCameraSource', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -112,15 +116,18 @@ describe('acquireCameraSource', () => {
     expect(getUserMedia).toHaveBeenCalledWith({ video: true, audio: false });
 
     const stream = context.cameraStream.get();
+
     expect(stream).toBe(realStream);
     expect(stream!.getVideoTracks().length).toBeGreaterThan(0);
 
     const tracks = state.cameraTracks.get();
+
     expect(tracks?.width).toBe(640);
     expect(tracks?.height).toBe(480);
     expect(tracks?.frameRate).toBeGreaterThan(0);
 
     const acquired = stream!.getTracks();
+
     state.cameraActive.set(false);
 
     await vi.waitFor(() => {
@@ -128,6 +135,7 @@ describe('acquireCameraSource', () => {
       expect(context.cameraStream.get()).toBeUndefined();
     });
     expect(state.cameraTracks.get()).toBeUndefined();
+
     for (const track of acquired) expect(track.readyState).toBe('ended');
   });
 
@@ -181,6 +189,7 @@ describe('acquireCameraSource', () => {
     });
     expect(context.cameraStream.get()).toBe(asStream(freshStream));
     expect(state.cameraTracks.get()?.deviceId).toBe('cam-2');
+
     for (const track of freshStream.getTracks()) expect(track.stop).not.toHaveBeenCalled();
   });
 
@@ -278,6 +287,7 @@ describe('acquireCameraSource', () => {
   it('releases the stream and lands in ended when the track ends outside our control', async () => {
     const videoTrack = new FakeMediaStreamTrack('video');
     const stream = new FakeMediaStream([videoTrack]);
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
     const { state, context } = setupAcquire();
 
@@ -305,6 +315,7 @@ describe('acquireCameraSource', () => {
   it('stops the owned stream on destroy', async () => {
     const videoTrack = new FakeMediaStreamTrack('video');
     const stream = new FakeMediaStream([videoTrack]);
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
     const { state, context, reactor } = setupAcquire();
 

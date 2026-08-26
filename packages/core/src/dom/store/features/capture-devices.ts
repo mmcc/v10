@@ -1,6 +1,7 @@
 import type { MediaCaptureDevicesState } from '@videojs/media';
 import { isMediaCaptureDevicesCapable } from '@videojs/media';
 import { listen } from '@videojs/utils/dom';
+
 import { definePlayerFeature } from '../../feature';
 
 export const captureDevicesFeature = definePlayerFeature({
@@ -14,19 +15,20 @@ export const captureDevicesFeature = definePlayerFeature({
     selectCamera(deviceId) {
       const { media } = target();
       if (!isMediaCaptureDevicesCapable(media)) return;
+
       media.videoInputDeviceId = deviceId;
     },
 
     selectMicrophone(deviceId) {
       const { media } = target();
       if (!isMediaCaptureDevicesCapable(media)) return;
+
       media.audioInputDeviceId = deviceId;
     },
   }),
 
   attach({ target, signal, set }) {
     const { media } = target;
-
     if (!isMediaCaptureDevicesCapable(media)) return;
 
     // Selections have no dedicated change event, so re-sync them alongside

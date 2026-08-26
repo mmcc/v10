@@ -2,6 +2,7 @@ import type { MediaCaptureTracksState } from '@videojs/media';
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { micMuteText, micUnmuteText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
@@ -58,6 +59,7 @@ export class MicButtonCore {
 
   getState(): MicButtonState {
     const media = this.#media!;
+
     this.state.patch({ micMuted: media.micMuted });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });
 
@@ -66,6 +68,7 @@ export class MicButtonCore {
 
   toggle(media: MediaCaptureTracksState): void {
     if (this.#props.disabled) return;
+
     media.toggleMicMuted();
   }
 }

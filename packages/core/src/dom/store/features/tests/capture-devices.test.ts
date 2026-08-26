@@ -1,6 +1,7 @@
 import type { MediaCaptureDeviceInfo } from '@videojs/media';
 import { createStore } from '@videojs/store';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { captureDevicesFeature } from '../capture-devices';
@@ -17,6 +18,7 @@ const MIC_A: MediaCaptureDeviceInfo = { deviceId: 'mic-a', kind: 'audioinput', l
 
 function createDevicesMedia(initial: Partial<CaptureDevicesCapableMedia> = {}): CaptureDevicesCapableMedia {
   const media = new EventTarget() as CaptureDevicesCapableMedia;
+
   media.captureDevices = initial.captureDevices ?? [];
   media.videoInputDeviceId = initial.videoInputDeviceId ?? '';
   media.audioInputDeviceId = initial.audioInputDeviceId ?? '';
@@ -29,6 +31,7 @@ describe('captureDevicesFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(captureDevicesFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.cameras).toEqual([]);
@@ -41,6 +44,7 @@ describe('captureDevicesFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(captureDevicesFeature);
+
       store.attach({ media: video, container: null });
 
       expect(() => store.selectCamera('cam-a')).not.toThrow();
@@ -57,6 +61,7 @@ describe('captureDevicesFeature', () => {
       });
 
       const store = createStore<PlayerTarget>()(captureDevicesFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.cameras).toEqual([CAMERA_A, CAMERA_B]);
@@ -69,6 +74,7 @@ describe('captureDevicesFeature', () => {
       const media = createDevicesMedia({ captureDevices: [CAMERA_A] });
 
       const store = createStore<PlayerTarget>()(captureDevicesFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.captureDevices = [CAMERA_A, CAMERA_B, MIC_A];
@@ -86,6 +92,7 @@ describe('captureDevicesFeature', () => {
       const media = createDevicesMedia({ captureDevices: [CAMERA_A, CAMERA_B] });
 
       const store = createStore<PlayerTarget>()(captureDevicesFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       store.selectCamera('cam-b');
@@ -97,6 +104,7 @@ describe('captureDevicesFeature', () => {
       const media = createDevicesMedia({ captureDevices: [MIC_A] });
 
       const store = createStore<PlayerTarget>()(captureDevicesFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       store.selectMicrophone('mic-a');

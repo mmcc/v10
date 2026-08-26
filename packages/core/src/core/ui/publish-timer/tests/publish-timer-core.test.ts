@@ -1,5 +1,6 @@
 import type { MediaPublishState } from '@videojs/media';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { PublishTimerState } from '../publish-timer-core';
 import { PublishTimerCore } from '../publish-timer-core';
 
@@ -31,6 +32,7 @@ describe('PublishTimerCore', () => {
   describe('getState', () => {
     it('formats elapsed time from publishStartedAt and now', () => {
       const core = new PublishTimerCore({ now: 100_000 + 90_000 });
+
       core.setMedia(createMediaState({ publishState: 'live', publishStartedAt: 100_000 }));
 
       const state = core.getState();
@@ -41,6 +43,7 @@ describe('PublishTimerCore', () => {
 
     it('formats hours as H:MM:SS', () => {
       const core = new PublishTimerCore({ now: 3_661_000 });
+
       core.setMedia(createMediaState({ publishState: 'live', publishStartedAt: 0 }));
 
       expect(core.getState().elapsedText).toBe('1:01:01');
@@ -48,6 +51,7 @@ describe('PublishTimerCore', () => {
 
     it('returns zero before the session first goes live', () => {
       const core = new PublishTimerCore({ now: 90_000 });
+
       core.setMedia(createMediaState({ publishState: 'idle', publishStartedAt: Number.NaN }));
 
       expect(core.getState().elapsedText).toBe('0:00');
@@ -55,6 +59,7 @@ describe('PublishTimerCore', () => {
 
     it('clamps negative elapsed time to zero', () => {
       const core = new PublishTimerCore({ now: 50_000 });
+
       core.setMedia(createMediaState({ publishState: 'live', publishStartedAt: 100_000 }));
 
       expect(core.getState().elapsedText).toBe('0:00');
@@ -64,6 +69,7 @@ describe('PublishTimerCore', () => {
       vi.spyOn(Date, 'now').mockReturnValue(160_000);
 
       const core = new PublishTimerCore();
+
       core.setMedia(createMediaState({ publishState: 'live', publishStartedAt: 100_000 }));
 
       expect(core.getState().elapsedText).toBe('1:00');
@@ -73,6 +79,7 @@ describe('PublishTimerCore', () => {
   describe('getLabel', () => {
     it('returns the default label', () => {
       const core = new PublishTimerCore();
+
       expect(core.getLabel(createState())).toMatchObject({
         key: 'publish.streamDuration',
         text: 'Stream duration',
@@ -81,6 +88,7 @@ describe('PublishTimerCore', () => {
 
     it('returns custom string label', () => {
       const core = new PublishTimerCore({ label: 'Elapsed' });
+
       expect(core.getLabel(createState())).toBe('Elapsed');
     });
   });
@@ -89,6 +97,7 @@ describe('PublishTimerCore', () => {
     it('returns aria-label', () => {
       const core = new PublishTimerCore();
       const attrs = core.getAttrs(createState());
+
       expect(attrs['aria-label']).toMatchObject({ key: 'publish.streamDuration', text: 'Stream duration' });
     });
   });

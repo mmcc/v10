@@ -1,6 +1,7 @@
 import type { MediaCaptureState } from '@videojs/media';
 import { createStore } from '@videojs/store';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { captureSourceFeature } from '../capture-source';
@@ -16,6 +17,7 @@ interface CaptureSourceCapableMedia extends EventTarget {
 
 function createCaptureMedia(initial: Partial<CaptureSourceCapableMedia> = {}): CaptureSourceCapableMedia {
   const media = new EventTarget() as CaptureSourceCapableMedia;
+
   media.cameraActive = initial.cameraActive ?? false;
   media.screenShareActive = initial.screenShareActive ?? false;
   media.micActive = initial.micActive ?? false;
@@ -41,6 +43,7 @@ describe('captureSourceFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.cameraActive).toBe(false);
@@ -54,6 +57,7 @@ describe('captureSourceFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.toggleCamera()).toBe(false);
@@ -67,6 +71,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: true, cameraState: 'active' });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.cameraActive).toBe(true);
@@ -78,6 +83,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia();
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.screenShareAvailability).toBe('unsupported');
@@ -93,6 +99,7 @@ describe('captureSourceFeature', () => {
         const media = createCaptureMedia();
 
         const store = createStore<PlayerTarget>()(captureSourceFeature);
+
         store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
         expect(store.state.screenShareAvailability).toBe('available');
@@ -103,6 +110,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia();
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.screenShareActive = true;
@@ -115,6 +123,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: true, cameraState: 'acquiring' });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.cameraState = 'denied';
@@ -125,12 +134,14 @@ describe('captureSourceFeature', () => {
 
     it('defaults widened-contract fields an older media host lacks instead of storing undefined', () => {
       const media = createCaptureMedia({ cameraActive: true, cameraState: 'active' });
+
       // The capability predicate checks the core fields only — a host
       // predating micState/micActive still passes it.
       delete (media as { micState?: unknown }).micState;
       delete (media as { micActive?: unknown }).micActive;
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.micState).toBe('idle');
@@ -140,9 +151,11 @@ describe('captureSourceFeature', () => {
 
     it('`toggleMic()` refuses a host without a mic intent slot instead of writing an inert one', () => {
       const media = createCaptureMedia();
+
       delete (media as { micActive?: unknown }).micActive;
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleMic()).toBe(false);
@@ -154,6 +167,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: true, micState: 'acquiring' });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
       expect(store.state.micState).toBe('acquiring');
 
@@ -169,6 +183,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia();
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleCamera()).toBe(true);
@@ -182,6 +197,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: true });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleScreenShare()).toBe(true);
@@ -198,6 +214,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: false, screenShareActive: false });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleScreenShare()).toBe(true);
@@ -208,6 +225,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia();
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.micActive = true;
@@ -221,6 +239,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ micActive: true, micState: 'acquiring' });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
       expect(store.state.micExplicit).toBe(true);
 
@@ -237,6 +256,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: true, micState: 'acquiring' });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
       expect(store.state.micExplicit).toBe(false);
 
@@ -250,6 +270,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ micActive: true, micState: 'acquiring' });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.micActive = false;
@@ -271,6 +292,7 @@ describe('captureSourceFeature', () => {
       const media = createCaptureMedia({ cameraActive: true });
 
       const store = createStore<PlayerTarget>()(captureSourceFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleMic()).toBe(true);

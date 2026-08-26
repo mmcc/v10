@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { MediaPublishSessionState } from '@videojs/media';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createPlayerWrapper } from '../../../testing/mocks';
 import { PublishTimer } from '../publish-timer';
@@ -30,6 +30,7 @@ describe('PublishTimer', () => {
     render(<PublishTimer data-testid="timer" />, { wrapper: Wrapper });
 
     const timer = screen.getByTestId('timer');
+
     expect(timer.textContent).toBe('0:00');
     expect(timer.getAttribute('data-publish-state')).toBe('idle');
   });
@@ -40,6 +41,7 @@ describe('PublishTimer', () => {
     render(<PublishTimer data-testid="timer" />, { wrapper: Wrapper });
 
     const timer = screen.getByTestId('timer');
+
     expect(timer.textContent).toBe('1:05');
 
     act(() => {

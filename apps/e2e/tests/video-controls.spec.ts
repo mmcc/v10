@@ -1,5 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
+
 import { ALL_VIDEO_PAGES, type PageEntry, VIDEO_PAGES } from '../fixtures/media';
+import { mockPresentation } from '../fixtures/presentation';
 import { DATA_ATTRS, SELECTORS } from '../fixtures/selectors';
 import { PlayerPage } from '../page-objects/player';
 
@@ -10,82 +12,14 @@ function getMediaVolume(page: Page): Promise<number> {
   return page.evaluate((selector) => {
     const media = document.querySelector(selector) as HTMLMediaElement | null;
     const actual = (media?.querySelector?.('video') as HTMLMediaElement) ?? media;
+
     return actual?.volume ?? 1;
   }, SELECTORS.media);
 }
 
-async function mockPresentation(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    let fullscreenElement: Element | null = null;
-    let pipElement: Element | null = null;
-
-    Object.defineProperties(document, {
-      fullscreenElement: { configurable: true, get: () => fullscreenElement },
-      fullscreenEnabled: { configurable: true, get: () => true },
-      pictureInPictureElement: { configurable: true, get: () => pipElement },
-      pictureInPictureEnabled: { configurable: true, get: () => true },
-    });
-
-    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
-      configurable: true,
-      value: async function requestFullscreen(this: HTMLElement) {
-        fullscreenElement = this;
-        document.dispatchEvent(new Event('fullscreenchange'));
-      },
-    });
-
-    Object.defineProperty(document, 'exitFullscreen', {
-      configurable: true,
-      value: async () => {
-        fullscreenElement = null;
-        document.dispatchEvent(new Event('fullscreenchange'));
-      },
-    });
-
-    Object.defineProperty(HTMLVideoElement.prototype, 'requestPictureInPicture', {
-      configurable: true,
-      value: async function requestPictureInPicture(this: HTMLVideoElement) {
-        pipElement = this;
-        this.dispatchEvent(new Event('enterpictureinpicture'));
-        return {};
-      },
-    });
-
-    Object.defineProperties(HTMLVideoElement.prototype, {
-      webkitPresentationMode: {
-        configurable: true,
-        get: function webkitPresentationMode(this: HTMLVideoElement) {
-          return pipElement === this ? 'picture-in-picture' : 'inline';
-        },
-      },
-      webkitSetPresentationMode: {
-        configurable: true,
-        value: function webkitSetPresentationMode(this: HTMLVideoElement, mode: string) {
-          const wasPip = pipElement === this;
-          pipElement = mode === 'picture-in-picture' ? this : null;
-
-          if (!wasPip && pipElement === this) {
-            this.dispatchEvent(new Event('enterpictureinpicture'));
-          } else if (wasPip && pipElement !== this) {
-            this.dispatchEvent(new Event('leavepictureinpicture'));
-          }
-        },
-      },
-    });
-
-    Object.defineProperty(document, 'exitPictureInPicture', {
-      configurable: true,
-      value: async () => {
-        const video = pipElement;
-        pipElement = null;
-        video?.dispatchEvent(new Event('leavepictureinpicture'));
-      },
-    });
-  });
-}
-
 for (const { name, path, skipBrowsers } of ALL_VIDEO_PAGES as readonly PageEntry[]) {
   const rateMenu = !path.includes('/cdn-video') && !path.includes('/ejected');
+
   test.describe(`Video Controls — ${name}`, () => {
     test.skip(({ browserName }) => {
       return skipBrowsers?.includes(browserName as 'chromium' | 'webkit' | 'firefox') ?? false;
@@ -103,11 +37,13 @@ for (const { name, path, skipBrowsers } of ALL_VIDEO_PAGES as readonly PageEntry
     test('all controls are present with correct attributes', async () => {
       await expect(player.muteButton).toHaveAttribute(DATA_ATTRS.volumeLevel);
       await expect(player.fullscreenButton).toHaveAttribute(DATA_ATTRS.availability);
+
       // PiP is unsupported on WebKit and the button receives the `hidden` attribute.
       // Only assert `data-availability` when the pip button is visible.
       if (await player.pipButton.isVisible()) {
         await expect(player.pipButton).toHaveAttribute(DATA_ATTRS.availability);
       }
+
       await expect(player.settingsButton).toBeAttached();
       await expect(player.duration).not.toHaveText('');
       await player.showControls();
@@ -139,6 +75,7 @@ for (const { name, path, skipBrowsers } of ALL_VIDEO_PAGES as readonly PageEntry
             return page.evaluate((selector) => {
               const el = document.querySelector(selector);
               const media = (el?.querySelector?.('video') as HTMLMediaElement) ?? (el as HTMLMediaElement);
+
               return media?.currentTime ?? 0;
             }, SELECTORS.media);
           },
@@ -186,9 +123,11 @@ for (const { name, path, skipBrowsers } of ALL_VIDEO_PAGES as readonly PageEntry
 test.describe('Video Controls — Ejected HTML registration', () => {
   test('upgrades connected markup before registration', async ({ page }) => {
     const errors: string[] = [];
+
     page.on('pageerror', (error) => errors.push(error.message));
 
     const player = new PlayerPage(page);
+
     await page.goto(EJECTED_HTML_VIDEO_PATH);
     await player.waitForMediaReady();
     await player.showControls();
@@ -225,6 +164,24 @@ for (const { name, path } of UI_VIDEO_PAGES) {
       await expect.poll(() => getMediaVolume(page)).toBeLessThan(0.5);
     });
 
+    test('volume popover stays anchored after scrolling the page', async ({ page }) => {
+      await page.evaluate(() => {
+        document.body.style.minHeight = '300vh';
+        document.body.style.paddingTop = '150vh';
+        window.scrollTo(0, window.innerHeight * 1.5);
+      });
+      await player.showControls();
+      await player.muteButton.hover();
+      await expect(player.volumeSlider).toBeVisible();
+
+      const triggerBox = await player.muteButton.boundingBox();
+      const popupBox = await page.locator('.media-popover--volume').first().boundingBox();
+      if (!triggerBox || !popupBox) throw new Error('Volume popover not visible');
+
+      expect(popupBox.y + popupBox.height).toBeLessThanOrEqual(triggerBox.y);
+      expect(popupBox.y + popupBox.height).toBeGreaterThanOrEqual(triggerBox.y - 16);
+    });
+
     test('controls remain visible while the settings menu is open', async ({ page }) => {
       await player.showControls();
       await player.settingsButton.click();
@@ -258,6 +215,24 @@ for (const { name, path } of UI_VIDEO_PAGES) {
       }
     });
 
+    test('time slider preserves hover after a mouse drag release', async ({ page }) => {
+      await player.showControls();
+
+      const box = await player.timeSlider.boundingBox();
+      if (!box) throw new Error('Time slider not visible');
+
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 1, y);
+      await page.mouse.up();
+
+      await expect(player.timeSlider).not.toHaveAttribute(DATA_ATTRS.dragging);
+      await expect(player.timeSlider).toHaveAttribute(DATA_ATTRS.pointing, '');
+    });
+
     test('settings button shows its tooltip on focus and still opens the menu', async ({ page }) => {
       await player.showControls();
       await player.settingsButton.focus();
@@ -268,6 +243,7 @@ for (const { name, path } of UI_VIDEO_PAGES) {
       const triggerBox = await player.settingsButton.boundingBox();
       const tooltipBox = await player.settingsTooltip.boundingBox();
       if (!playerBox || !triggerBox || !tooltipBox) throw new Error('Settings tooltip not visible');
+
       expect(tooltipBox.x).toBeGreaterThanOrEqual(playerBox.x);
       expect(tooltipBox.y).toBeGreaterThanOrEqual(playerBox.y);
       expect(tooltipBox.x + tooltipBox.width).toBeLessThanOrEqual(playerBox.x + playerBox.width);

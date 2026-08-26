@@ -23,10 +23,10 @@
 .media-default-skin .media-capture-placeholder__content {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--spacing) * 3);
+  gap: calc(var(--media-spacing) * 3);
   align-items: center;
-  max-width: calc(var(--spacing) * 80);
-  padding: calc(var(--spacing) * 4);
+  max-width: calc(var(--media-spacing) * 80);
+  padding: calc(var(--media-spacing) * 4);
 }
 
 .media-default-skin .media-capture-placeholder__icon {
@@ -36,7 +36,7 @@
 }
 
 .media-default-skin .media-capture-placeholder__message {
-  font-size: var(--font-size-medium);
+  font-size: var(--media-font-size-medium);
   overflow-wrap: anywhere;
   opacity: 0.7;
 
@@ -54,7 +54,7 @@
 }
 
 .media-default-skin .media-capture-placeholder[data-capture-state="denied"] .media-capture-placeholder__message {
-  color: var(--publish-live-color);
+  color: var(--media-publish-live-color);
   opacity: 1;
 }
 
@@ -97,7 +97,7 @@
 /* Segments sit flush inside a control, so the group holding them needs more
    room than the shared 1px — proximity is what shows the pairing. */
 .media-default-skin .media-button-group--devices {
-  gap: calc(var(--spacing) * 2);
+  gap: calc(var(--media-spacing) * 2);
 }
 
 /* Caret segment — narrower and dimmer than the toggle so it reads as part of
@@ -107,14 +107,14 @@
 .media-default-skin .media-device-control__caret {
   position: relative;
   display: grid;
-  width: calc(var(--spacing) * 6);
+  width: calc(var(--media-spacing) * 6);
   padding: 0;
 
   & .media-icon {
-    width: calc(var(--spacing) * 3.5);
-    height: calc(var(--spacing) * 3.5);
+    width: calc(var(--media-spacing) * 3.5);
+    height: calc(var(--media-spacing) * 3.5);
     opacity: 0.65;
-    filter: drop-shadow(0 1px 0 var(--shadow-current-color));
+    filter: drop-shadow(0 1px 0 var(--media-shadow-current-color));
     /* The chevron asset points right; aim it at the menu, which opens above. */
     rotate: -90deg;
     transition:
@@ -198,5 +198,5 @@
 /* Muted affordance — tint the visible (slashed) icon. */
 .media-button--camera[data-muted] .media-icon,
 .media-button--mic[data-muted] .media-icon {
-  color: var(--publish-live-color);
+  color: var(--media-publish-live-color);
 }

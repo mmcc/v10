@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
 import { type SyncPreviewContext, type SyncPreviewState, syncPreview } from '../sync-preview';
@@ -19,6 +20,7 @@ function makeContext(initial: SyncPreviewContext = {}): ContextSignals<SyncPrevi
 
 function makePreviewElement(): HTMLVideoElement {
   const element = document.createElement('video');
+
   // A real play() on a raw MediaStream pends forever in headless — the
   // behavior treats it fire-and-forget, so a resolved spy keeps tests fast.
   vi.spyOn(element, 'play').mockResolvedValue(undefined);
@@ -54,6 +56,7 @@ describe('syncPreview', () => {
 
   it('ignores the screen stream while previewSource is camera', async () => {
     const element = makePreviewElement();
+
     context.previewElement.set(element);
     context.screenStream.set(new MediaStream());
 
@@ -65,6 +68,7 @@ describe('syncPreview', () => {
     const element = makePreviewElement();
     const cameraStream = new MediaStream();
     const screenStream = new MediaStream();
+
     context.previewElement.set(element);
     context.cameraStream.set(cameraStream);
     context.screenStream.set(screenStream);
@@ -82,6 +86,7 @@ describe('syncPreview', () => {
   it('clears srcObject when the selected stream goes away', async () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
+
     context.previewElement.set(element);
     context.cameraStream.set(stream);
     await vi.waitFor(() => {
@@ -99,6 +104,7 @@ describe('syncPreview', () => {
     const first = makePreviewElement();
     const second = makePreviewElement();
     const stream = new MediaStream();
+
     context.previewElement.set(first);
     context.cameraStream.set(stream);
     await vi.waitFor(() => {
@@ -116,6 +122,7 @@ describe('syncPreview', () => {
   it('cleanup clears the preview wiring', async () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
+
     context.previewElement.set(element);
     context.cameraStream.set(stream);
     await vi.waitFor(() => {
@@ -130,6 +137,7 @@ describe('syncPreview', () => {
   it('leaves an externally replaced srcObject alone', async () => {
     const element = makePreviewElement();
     const stream = new MediaStream();
+
     context.previewElement.set(element);
     context.cameraStream.set(stream);
     await vi.waitFor(() => {
@@ -137,6 +145,7 @@ describe('syncPreview', () => {
     });
 
     const external = new MediaStream();
+
     element.srcObject = external;
     context.cameraStream.set(undefined);
 

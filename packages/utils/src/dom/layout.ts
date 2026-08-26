@@ -32,6 +32,7 @@ export function getElementSize(
   let height = box === 'layout' ? element.offsetHeight || rect.height : rect.height;
 
   if (overflow === 'width' || overflow === 'both') width = Math.max(width, element.scrollWidth);
+
   if (overflow === 'height' || overflow === 'both') height = Math.max(height, element.scrollHeight);
 
   return { width, height };
@@ -68,6 +69,15 @@ export function getInlineExtent(edges: LogicalBoxEdges): number {
 
 export function getBlockExtent(edges: LogicalBoxEdges): number {
   return edges.blockStart + edges.blockEnd;
+}
+
+function getPaddingOrigin(element: Element): { x: number; y: number } {
+  const style = getComputedStyle(element);
+
+  return {
+    x: Number.parseFloat(style.paddingLeft) || 0,
+    y: Number.parseFloat(style.paddingTop) || 0,
+  };
 }
 
 export interface ChildMeasurement {
@@ -123,6 +133,7 @@ export function measureElementChildren(
     : { inlineStart: 0, inlineEnd: 0, blockStart: 0, blockEnd: 0 };
   const inlinePadding = getInlineExtent(padding);
   const blockPadding = getBlockExtent(padding);
+  const paddingOrigin = includePadding ? getPaddingOrigin(container) : { x: 0, y: 0 };
 
   if (elements.length === 0) return { width: inlinePadding, height: blockPadding };
 
@@ -130,8 +141,8 @@ export function measureElementChildren(
     elements.map((element) => ({
       element,
       size: measure(element, width),
-      offsetLeft: element.offsetLeft,
-      offsetTop: element.offsetTop,
+      offsetLeft: element.offsetLeft - paddingOrigin.x,
+      offsetTop: element.offsetTop - paddingOrigin.y,
     }));
 
   let measurements = collect();

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
 import { type EnumerateCaptureDevicesState, enumerateCaptureDevices } from '../enumerate-capture-devices';
@@ -20,13 +21,16 @@ const disposals: (() => void)[] = [];
 function setupEnumerate() {
   const state = makeState();
   const cleanup = enumerateCaptureDevices.setup({ state });
+
   if (cleanup) disposals.push(cleanup);
+
   return { state, cleanup };
 }
 
 describe('enumerateCaptureDevices', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -48,6 +52,7 @@ describe('enumerateCaptureDevices', () => {
 
   it('re-enumerates on devicechange', async () => {
     const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+
     setupEnumerate();
 
     await vi.waitFor(() => {
@@ -63,10 +68,12 @@ describe('enumerateCaptureDevices', () => {
 
   it('discards an older enumeration that resolves after a newer one', async () => {
     const resolvers: ((devices: MediaDeviceInfo[]) => void)[] = [];
+
     vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockImplementation(
       () => new Promise((resolve) => resolvers.push(resolve))
     );
     const { state } = setupEnumerate();
+
     await vi.waitFor(() => {
       expect(resolvers).toHaveLength(1);
     });
@@ -123,6 +130,7 @@ describe('enumerateCaptureDevices', () => {
   it('re-enumerates on a mic grant while the camera is already active — both statuses stay tracked', async () => {
     const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
     const { state } = setupEnumerate();
+
     await vi.waitFor(() => {
       expect(enumerate).toHaveBeenCalledTimes(1);
     });

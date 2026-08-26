@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
 import {
@@ -33,6 +34,7 @@ function setupAcquire() {
   const state = makeState();
   const context = makeContext();
   const reactor = acquireMicrophone.setup({ state, context });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -74,6 +76,7 @@ const asStream = (stream: FakeMediaStream) => stream as unknown as MediaStream;
 describe('acquireMicrophone', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -95,6 +98,7 @@ describe('acquireMicrophone', () => {
 
   it('acquires for screen share alone too — either video source is enough', async () => {
     const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
     const { state } = setupAcquire();
 
@@ -152,12 +156,15 @@ describe('acquireMicrophone', () => {
     });
     expect(getUserMedia).toHaveBeenCalledTimes(2);
     expect(getUserMedia).toHaveBeenLastCalledWith({ audio: { deviceId: { exact: 'mic-2' } }, video: false });
+
     for (const track of first.getTracks()) expect(track.stop).toHaveBeenCalled();
+
     expect(context.micStream.get()).toBe(asStream(second));
   });
 
   it('releases when neither camera nor screen is active anymore', async () => {
     const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
     const { state, context } = setupAcquire();
 
@@ -172,6 +179,7 @@ describe('acquireMicrophone', () => {
       expect(state.micState.get()).toBe('idle');
       expect(context.micStream.get()).toBeUndefined();
     });
+
     for (const track of stream.getTracks()) expect(track.stop).toHaveBeenCalled();
   });
 
@@ -196,8 +204,10 @@ describe('acquireMicrophone', () => {
     // with nothing live. Both behaviors run composed, sharing the gate
     // signals the way the real engine wires them.
     const screenTrack = new FakeMediaStreamTrack();
+
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(new FakeMediaStream([screenTrack])));
     const micTrack = new FakeMediaStreamTrack();
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(new FakeMediaStream([micTrack])));
 
     const state = makeState();
@@ -212,8 +222,10 @@ describe('acquireMicrophone', () => {
       state: screenState,
       context: { screenStream: signal<MediaStream | undefined>(undefined) },
     });
+
     disposals.push(() => screenReactor.destroy());
     const micReactor = acquireMicrophone.setup({ state, context });
+
     disposals.push(() => micReactor.destroy());
 
     state.screenShareActive.set(true);
@@ -321,6 +333,7 @@ describe('acquireMicrophone', () => {
 
   it('releases when micActive drops and no video source holds the gate', async () => {
     const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
     const { state, context } = setupAcquire();
 
@@ -335,6 +348,7 @@ describe('acquireMicrophone', () => {
       expect(state.micState.get()).toBe('idle');
       expect(context.micStream.get()).toBeUndefined();
     });
+
     for (const track of stream.getTracks()) expect(track.stop).toHaveBeenCalled();
   });
 
@@ -378,6 +392,7 @@ describe('acquireMicrophone', () => {
 
   it('consumes micActive when a sole-source mic ends out-of-band, keeping the terminal status', async () => {
     const stream = new FakeMediaStream([new FakeMediaStreamTrack()]);
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(asStream(stream));
     const { state, context } = setupAcquire();
 

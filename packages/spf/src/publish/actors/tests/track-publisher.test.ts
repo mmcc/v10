@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { toLocFrame } from '../../../media/moq/loc';
 import { packageLocFrame } from '../../../media/moq/loc-packaging';
 import { StreamReader } from '../../../network/moqt/bytes';
@@ -28,11 +29,14 @@ function makeStreamFactory() {
     },
     openUniStream: async (): Promise<WritableStream<Uint8Array>> => {
       const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+
       streams.push(record);
       return new WritableStream<Uint8Array>({
         write(chunk) {
           record.chunks.push(chunk);
+
           if (!factory.gate) return undefined;
+
           return new Promise<void>((resolve) => {
             releases.push(resolve);
           });
@@ -47,6 +51,7 @@ function makeStreamFactory() {
       });
     },
   };
+
   return factory;
 }
 
@@ -54,6 +59,7 @@ function readableFrom(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
       for (const chunk of chunks) controller.enqueue(chunk);
+
       controller.close();
     },
   });
@@ -65,13 +71,16 @@ async function parseSubgroup(stream: FakeUniStream) {
   const type = await reader.readVarint();
   const header = await readSubgroupHeader(reader, type);
   const objects: MoqtObject[] = [];
+
   for await (const object of readSubgroupObjects(reader, header)) objects.push(object);
+
   return { header, objects };
 }
 
 /** LOC-package a fake encoded chunk into a frame message payload. */
 function locFrame(timestampUs: number, bytes: number[], config?: Uint8Array) {
   const data = new Uint8Array(bytes);
+
   return packageLocFrame(
     {
       type: config ? 'key' : 'delta',
@@ -91,10 +100,12 @@ describe('createTrackPublisherActor', () => {
   it('maps keyframes to group boundaries and round-trips LOC frames through the reader', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
     publisher.send({ type: 'bind', trackAlias: 5 });
 
     const config = new Uint8Array([9, 9]);
     const key0 = locFrame(0, [1, 2, 3], config);
+
     publisher.send({
       type: 'frame',
       payload: key0.payload,
@@ -103,6 +114,7 @@ describe('createTrackPublisherActor', () => {
       timestampUs: 0,
     });
     const delta1 = locFrame(33_333, [4, 5]);
+
     publisher.send({
       type: 'frame',
       payload: delta1.payload,
@@ -111,6 +123,7 @@ describe('createTrackPublisherActor', () => {
       timestampUs: 33_333,
     });
     const key1 = locFrame(66_666, [6], config);
+
     publisher.send({
       type: 'frame',
       payload: key1.payload,
@@ -127,6 +140,7 @@ describe('createTrackPublisherActor', () => {
     });
 
     const group0 = await parseSubgroup(factory.streams[0]!);
+
     expect(group0.header.trackAlias).toBe(5);
     expect(group0.header.groupId).toBe(0);
     expect(group0.header.endOfGroup).toBe(true);
@@ -134,15 +148,18 @@ describe('createTrackPublisherActor', () => {
 
     // The subscriber-side LOC extraction sees exactly what was packaged.
     const frame0 = toLocFrame(group0.objects[0]!)!;
+
     expect(frame0.isKey).toBe(true);
     expect(frame0.timestampUs).toBe(0);
     expect(frame0.payload).toEqual(new Uint8Array([1, 2, 3]));
     expect(frame0.videoConfig).toEqual(config);
     const frame1 = toLocFrame(group0.objects[1]!)!;
+
     expect(frame1.isKey).toBe(false);
     expect(frame1.timestampUs).toBe(33_333);
 
     const group1 = await parseSubgroup(factory.streams[1]!);
+
     expect(group1.header.groupId).toBe(1);
     expect(group1.objects.map((o) => o.objectId)).toEqual([0]);
     expect(toLocFrame(group1.objects[0]!)!.isKey).toBe(true);
@@ -167,10 +184,12 @@ describe('createTrackPublisherActor', () => {
       openUniStream: factory.openUniStream,
       groupPerFrame: true,
     });
+
     publisher.send({ type: 'bind', trackAlias: 3 });
 
     for (let i = 0; i < 3; i++) {
       const frame = locFrame(i * 20_000, [i]);
+
       // groupPerFrame ignores the keyframe flag — audio frames arrive unmarked.
       publisher.send({
         type: 'frame',
@@ -185,11 +204,14 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams).toHaveLength(3);
       expect(factory.streams.every((stream) => stream.closed)).toBe(true);
     });
+
     for (let i = 0; i < 3; i++) {
       const { header, objects } = await parseSubgroup(factory.streams[i]!);
+
       expect(header.groupId).toBe(i);
       expect(objects.map((o) => o.objectId)).toEqual([0]);
     }
+
     await vi.waitFor(() => {
       expect(counters(publisher)).toMatchObject({ publishedGroups: 3, publishedObjects: 3, queuedGroups: 0 });
     });
@@ -209,6 +231,7 @@ describe('createTrackPublisherActor', () => {
     const streams: FakeUniStream[] = [];
     const openUniStream = async (): Promise<WritableStream<Uint8Array>> => {
       const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+
       streams.push(record);
       return new WritableStream<Uint8Array>({
         write(chunk) {
@@ -229,10 +252,12 @@ describe('createTrackPublisherActor', () => {
       });
     };
     const publisher = createTrackPublisherActor({ openUniStream, groupPerFrame: true });
+
     publisher.send({ type: 'bind', trackAlias: 3 });
 
     for (let i = 0; i < 10; i++) {
       const frame = locFrame(i * 20_000, [i]);
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -262,9 +287,11 @@ describe('createTrackPublisherActor', () => {
   it('ignores delta frames before the first keyframe', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
     publisher.send({ type: 'bind', trackAlias: 1 });
 
     const delta = locFrame(0, [1]);
+
     publisher.send({
       type: 'frame',
       payload: delta.payload,
@@ -280,15 +307,18 @@ describe('createTrackPublisherActor', () => {
 
   it('drops stale groups behind transport backpressure and resumes at the next keyframe', async () => {
     const factory = makeStreamFactory();
+
     factory.gate = true;
     const publisher = createTrackPublisherActor({
       openUniStream: factory.openUniStream,
       maxQueuedGroups: 1,
     });
+
     publisher.send({ type: 'bind', trackAlias: 2 });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1, 2], new Uint8Array([7]));
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -327,6 +357,7 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams[1]!.closed).toBe(true);
     });
     const { header, objects } = await parseSubgroup(factory.streams[1]!);
+
     expect(header.groupId).toBe(2);
     expect(objects.map((o) => o.objectId)).toEqual([0]);
     await vi.waitFor(() => {
@@ -347,9 +378,11 @@ describe('createTrackPublisherActor', () => {
         resolveOpen = resolve;
       });
     const publisher = createTrackPublisherActor({ openUniStream });
+
     publisher.send({ type: 'bind', trackAlias: 7 });
 
     const key = locFrame(0, [1, 2], new Uint8Array([7]));
+
     publisher.send({ type: 'frame', payload: key.payload, properties: key.properties, keyframe: true, timestampUs: 0 });
     await vi.waitFor(() => {
       expect(resolveOpen).toBeDefined();
@@ -361,6 +394,7 @@ describe('createTrackPublisherActor', () => {
     // stream (never FINned, never reset).
     publisher.destroy();
     const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+
     streams.push(record);
     resolveOpen!(
       new WritableStream<Uint8Array>({
@@ -392,9 +426,11 @@ describe('createTrackPublisherActor', () => {
       },
       onError,
     });
+
     publisher.send({ type: 'bind', trackAlias: 1 });
 
     const frame = locFrame(0, [1]);
+
     publisher.send({
       type: 'frame',
       payload: frame.payload,
@@ -412,10 +448,12 @@ describe('createTrackPublisherActor', () => {
   it('counts opened groups (streams) on the snapshot, including unfinished ones', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
     publisher.send({ type: 'bind', trackAlias: 6 });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1], new Uint8Array([7]));
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -424,6 +462,7 @@ describe('createTrackPublisherActor', () => {
         timestampUs,
       });
     };
+
     sendKey(0);
     sendKey(1_000_000);
     // Group 1 is still open (no boundary/FIN yet): the opened count —
@@ -442,12 +481,15 @@ describe('createTrackPublisherActor', () => {
 
   it('destroy() under backpressure resets abandoned groups and unblocks their writes', async () => {
     const factory = makeStreamFactory();
+
     factory.gate = true;
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
     publisher.send({ type: 'bind', trackAlias: 4 });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1, 2], new Uint8Array([7]));
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -490,8 +532,10 @@ describe('createTrackPublisherActor', () => {
   it('destroy() finishes the open stream best-effort', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
     publisher.send({ type: 'bind', trackAlias: 1 });
     const frame = locFrame(0, [1], new Uint8Array([7]));
+
     publisher.send({
       type: 'frame',
       payload: frame.payload,
@@ -520,6 +564,7 @@ describe('createTrackPublisherActor', () => {
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
 
     const key = locFrame(0, [1, 2], new Uint8Array([7]));
+
     publisher.send({ type: 'frame', payload: key.payload, properties: key.properties, keyframe: true, timestampUs: 0 });
     await new Promise((resolve) => setTimeout(resolve, 20));
     // An unbound stream would carry an alias the peer never registered —
@@ -535,6 +580,7 @@ describe('createTrackPublisherActor', () => {
 
     const sendFrame = (timestampUs: number, key: boolean) => {
       const frame = locFrame(timestampUs, [1], key ? new Uint8Array([7]) : undefined);
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -556,6 +602,7 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams[0]!.closed).toBe(true);
     });
     const { header, objects } = await parseSubgroup(factory.streams[0]!);
+
     expect(header.trackAlias).toBe(9);
     expect(objects.map((o) => o.objectId)).toEqual([0, 1]);
     expect(toLocFrame(objects[0]!)!.timestampUs).toBe(2_000_000);
@@ -576,6 +623,7 @@ describe('createTrackPublisherActor', () => {
       [1_000, 2],
     ] as const) {
       const frame = locFrame(timestampUs, [byte]);
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -584,6 +632,7 @@ describe('createTrackPublisherActor', () => {
         timestampUs,
       });
     }
+
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(factory.streams).toHaveLength(0);
 
@@ -593,6 +642,7 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams[0]!.closed).toBe(true);
     });
     const first = await parseSubgroup(factory.streams[0]!);
+
     expect(first.header.trackAlias).toBe(4);
     expect(toLocFrame(first.objects[0]!)!.timestampUs).toBe(1_000);
 
@@ -603,6 +653,7 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams[1]!.closed).toBe(true);
     });
     const second = await parseSubgroup(factory.streams[1]!);
+
     expect(second.header.trackAlias).toBe(6);
     expect(second.header.groupId).toBe(1);
     expect(toLocFrame(second.objects[0]!)!.timestampUs).toBe(1_000);
@@ -615,6 +666,7 @@ describe('createTrackPublisherActor', () => {
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1], new Uint8Array([7]));
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -643,6 +695,7 @@ describe('createTrackPublisherActor', () => {
     });
     expect(counters(publisher).droppedGroups).toBe(1);
     const second = await parseSubgroup(factory.streams[1]!);
+
     expect(second.header.trackAlias).toBe(3);
     expect(second.header.groupId).toBe(1);
     publisher.destroy();
@@ -661,6 +714,7 @@ describe('createTrackPublisherActor', () => {
       });
     const makeStream = (): { record: FakeUniStream; stream: WritableStream<Uint8Array> } => {
       const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+
       streams.push(record);
       return {
         record,
@@ -682,6 +736,7 @@ describe('createTrackPublisherActor', () => {
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1], new Uint8Array([7]));
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -706,17 +761,20 @@ describe('createTrackPublisherActor', () => {
     });
 
     const second = makeStream();
+
     grants[1]!(second.stream);
     publisher.send({ type: 'end' });
     await vi.waitFor(() => {
       expect(second.record.closed).toBe(true);
     });
     const parsed = await parseSubgroup(second.record);
+
     expect(parsed.header.trackAlias).toBe(3);
 
     // The abandoned open finally lands: its stream belongs to a dropped
     // group and is aborted on arrival, untouched.
     const first = makeStream();
+
     grants[0]!(first.stream);
     await vi.waitFor(() => {
       expect(first.record.aborted).toBe(true);
@@ -728,11 +786,13 @@ describe('createTrackPublisherActor', () => {
   it('unbind drops in-flight groups without the error path and a re-bind resumes', async () => {
     const onError = vi.fn();
     const factory = makeStreamFactory();
+
     factory.gate = true;
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, onError });
 
     const sendKey = (timestampUs: number) => {
       const frame = locFrame(timestampUs, [1, 2], new Uint8Array([7]));
+
       publisher.send({
         type: 'frame',
         payload: frame.payload,
@@ -773,6 +833,7 @@ describe('createTrackPublisherActor', () => {
       expect(factory.streams[1]!.closed).toBe(true);
     });
     const { header } = await parseSubgroup(factory.streams[1]!);
+
     expect(header.trackAlias).toBe(8);
     publisher.destroy();
   });

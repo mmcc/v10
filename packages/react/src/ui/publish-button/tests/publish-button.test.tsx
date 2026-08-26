@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { MediaCaptureState, MediaPublishSessionState } from '@videojs/media';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createPlayerWrapper } from '../../../testing/mocks';
 import { PublishButton } from '../publish-button';
@@ -46,6 +46,7 @@ describe('PublishButton', () => {
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 
     const button = screen.getByTestId('publish');
+
     expect(button.textContent).toBe('Go live');
     expect(button.getAttribute('data-publish-state')).toBe('idle');
     expect(button.hasAttribute('data-disabled')).toBe(false);
@@ -57,6 +58,7 @@ describe('PublishButton', () => {
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 
     const button = screen.getByTestId('publish');
+
     expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(button.hasAttribute('data-disabled')).toBe(true);
 
@@ -75,6 +77,7 @@ describe('PublishButton', () => {
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 
     const button = screen.getByTestId('publish');
+
     expect(button.hasAttribute('aria-disabled')).toBe(false);
     expect(button.hasAttribute('data-disabled')).toBe(false);
 
@@ -93,6 +96,7 @@ describe('PublishButton', () => {
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 
     const button = screen.getByTestId('publish');
+
     expect(button.getAttribute('aria-disabled')).toBe('true');
 
     fireEvent.click(button);
@@ -116,6 +120,7 @@ describe('PublishButton', () => {
     render(<PublishButton data-testid="publish" />, { wrapper: Wrapper });
 
     const button = screen.getByTestId('publish');
+
     expect(button.textContent).toBe('Stop stream');
     expect(button.getAttribute('data-publish-state')).toBe('live');
 

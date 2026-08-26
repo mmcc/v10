@@ -1,40 +1,43 @@
-/** @jsxImportSource @videojs/jsx */
+/** @jsxImportSource vjsc/components */
 
-import { Slot } from '@videojs/jsx';
-import { describe, it } from 'vitest';
 import {
   Controls,
   FullscreenButton,
+  Menu,
   MuteButton,
   PlayButton,
   Popover,
   SeekButton,
   Slider,
-  Text,
   Time,
   TimeSlider,
   Tooltip,
+  VolumePopover,
   VolumeSlider,
-} from '../components.generated';
+} from '@videojs/core/vjsc';
+import { describe, it } from 'vite-plus/test';
+import { Slot, Text } from 'vjsc/components';
 
 describe('constrained JSX', () => {
   it('accepts typed components and nested compound parts', () => {
     void (
-      <Controls.Root className="controls">
-        <Tooltip.Provider delay={300}>
-          <Controls.Group>
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger>
-                <PlayButton className={['button', undefined, false]} />
-              </Tooltip.Trigger>
-              <Tooltip.Popup>
-                <Tooltip.Label />
-                <Tooltip.Shortcut />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-            <SeekButton seconds={-10} />
-          </Controls.Group>
-        </Tooltip.Provider>
+      <Controls.Root>
+        <Controls.Content className="controls">
+          <Tooltip.Provider delay={300}>
+            <Controls.Group>
+              <Tooltip.Root side="top">
+                <Tooltip.Trigger>
+                  <PlayButton className={['button', undefined, false]} />
+                </Tooltip.Trigger>
+                <Tooltip.Popup>
+                  <Tooltip.Label />
+                  <Tooltip.Shortcut />
+                </Tooltip.Popup>
+              </Tooltip.Root>
+              <SeekButton seconds={-10} />
+            </Controls.Group>
+          </Tooltip.Provider>
+        </Controls.Content>
       </Controls.Root>
     );
 
@@ -73,6 +76,26 @@ describe('constrained JSX', () => {
       </Popover.Root>
     );
 
+    void (
+      <VolumePopover.Root openOnHover>
+        <VolumePopover.Trigger>
+          <MuteButton />
+        </VolumePopover.Trigger>
+        <VolumePopover.Popup>
+          <VolumeSlider.Root orientation="vertical" />
+        </VolumePopover.Popup>
+      </VolumePopover.Root>
+    );
+
+    void (
+      <Menu.Root>
+        <Menu.Trigger>Settings</Menu.Trigger>
+        <Menu.Popup>
+          <Menu.Content />
+        </Menu.Popup>
+      </Menu.Root>
+    );
+
     void (<FullscreenButton key="fullscreen" />);
     void (<Text>10</Text>);
   });
@@ -94,6 +117,8 @@ describe('constrained JSX', () => {
     void (<Time.Value type="elapsed" />);
     // @ts-expect-error - invalid slider orientation
     void (<VolumeSlider.Root orientation="diagonal" />);
+    // @ts-expect-error - submenu state is derived by framework adapters
+    void (<Menu.Root isSubmenu />);
   });
 
   it('rejects platform intrinsic elements', () => {

@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { MoqPublishMedia } from '@videojs/spf/moq-publish-video';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { MoqPublishVideo } from '../moq-publish-video';
 
@@ -11,6 +11,7 @@ describe('MoqPublishVideo', () => {
     const { container } = render(<MoqPublishVideo data-testid="preview" />);
 
     const video = container.querySelector('video') as HTMLVideoElement;
+
     expect(video).toBeTruthy();
     expect(video.getAttribute('data-testid')).toBe('preview');
     expect(video.muted).toBe(true);
@@ -25,6 +26,7 @@ describe('MoqPublishVideo', () => {
     const { container, rerender } = render(<MoqPublishVideo muted={false} autoPlay={false} />);
 
     const video = container.querySelector('video') as HTMLVideoElement;
+
     expect(video.muted).toBe(true);
     expect(video.hasAttribute('autoplay')).toBe(true);
 
@@ -41,6 +43,7 @@ describe('MoqPublishVideo', () => {
     expect(publishEndpoint).toHaveBeenCalledWith('https://relay.example.com/moq');
     // The publisher prop is consumed by the media host, not spread onto the element.
     const video = container.querySelector('video') as HTMLVideoElement;
+
     expect(video.hasAttribute('publishendpoint')).toBe(false);
 
     publishEndpoint.mockRestore();

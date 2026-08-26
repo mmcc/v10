@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { LOC_PROPERTY, toLocFrame } from '../loc';
 import { type EncodedChunkLike, microsecondsToLocTimestamp, packageLocFrame } from '../loc-packaging';
 
@@ -42,6 +43,7 @@ describe('packageLocFrame', () => {
     const packaged = packageLocFrame(chunkOf(bytes, { timestamp: 1_500_000 }));
 
     const frame = toLocFrame({ objectId: 0, properties: packaged.properties, payload: packaged.payload });
+
     expect(frame).toMatchObject({ timestampUs: 1_500_000, isKey: true, payload: bytes });
     expect(frame?.videoConfig).toBeUndefined();
   });
@@ -52,6 +54,7 @@ describe('packageLocFrame', () => {
     expect(packaged.properties).toContainEqual({ type: LOC_PROPERTY.TIMESTAMP, value: 180_000 });
     expect(packaged.properties).toContainEqual({ type: LOC_PROPERTY.TIMESCALE, value: 90_000 });
     const frame = toLocFrame({ objectId: 2, properties: packaged.properties, payload: packaged.payload });
+
     expect(frame).toMatchObject({ timestampUs: 2_000_000, isKey: false });
   });
 
@@ -65,8 +68,10 @@ describe('packageLocFrame', () => {
     expect(delta.properties.some(({ type }) => type === LOC_PROPERTY.VIDEO_CONFIG)).toBe(false);
 
     const keyFrame = toLocFrame({ objectId: 0, properties: key.properties, payload: key.payload });
+
     expect(keyFrame?.videoConfig).toEqual(config);
     const deltaFrame = toLocFrame({ objectId: 1, properties: delta.properties, payload: delta.payload });
+
     expect(deltaFrame?.videoConfig).toBeUndefined();
   });
 
@@ -81,6 +86,7 @@ describe('packageLocFrame', () => {
     // Same key-only rule as Video Config — WebCodecs audio chunks are all
     // 'key' in practice, but the packaging contract is kind-agnostic.
     const delta = packageLocFrame(chunkOf(bytes, { type: 'delta', timestamp: 2 }), { audioConfig: config });
+
     expect(delta.properties.some(({ type }) => type === LOC_PROPERTY.AUDIO_CONFIG)).toBe(false);
   });
 

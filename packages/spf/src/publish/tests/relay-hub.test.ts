@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { createMoqtPublishSession } from '../session/publish-session';
 import { createRelayHub } from './helpers/relay-hub';
 
 /**
- * The relay hub against the real publish-session driver — the hub's own
- * announce-and-serve contract, at the seams the cross-engine suites are
- * too coarse to pin down.
+ * The relay hub against the real publish-session driver — the hub's own announce-and-serve contract, at the seams the
+ * cross-engine suites are too coarse to pin down.
  */
 describe('createRelayHub', () => {
   it('re-pulls a track the publisher ended and re-registered while demand stands', async () => {
@@ -15,11 +15,13 @@ describe('createRelayHub', () => {
     const session = createMoqtPublishSession(transport, {
       callbacks: { onSubscribe: (subscribe) => served.push(subscribe.trackName) },
     });
+
     await session.ready;
     session.announce(['live']);
 
     // Standing demand pulls the registered track once the announce lands.
     const first = session.registerTrack({ trackNamespace: ['live'], trackName: 'video' });
+
     hub.subscribeUpstream('video');
     await vi.waitFor(() => {
       expect(hub.subscribes).toEqual(['video']);

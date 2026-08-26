@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MenuItemDataAttrs } from '../../../../core/ui/menu/menu-item-data-attrs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
+import { MenuItemDataAttrs } from '../../../../core/ui/menu/item-data';
 import type { UIFocusEvent, UIKeyboardEvent } from '../../event';
 import { createPopupGroup } from '../../popover/popup-group';
 import { getRootPositionOptions, isMenuNavigationKey } from '../create-menu';
@@ -45,17 +46,20 @@ describe('createMenu', () => {
 
   afterEach(() => {
     for (const item of items) cleanupElement(item);
+
     items = [];
   });
 
   function addItem(text: string): HTMLButtonElement {
     const element = createItemElement(text);
+
     items.push(element);
     return element;
   }
 
   it('starts closed', () => {
     const { menu } = createTestMenu();
+
     expect(menu.input.current).toEqual({ active: false, status: 'idle' });
   });
 
@@ -139,6 +143,7 @@ describe('createMenu', () => {
       const parent = createTestMenu();
       const child = createTestMenu();
       const grandchild = createTestMenu();
+
       parent.menu.registerSubmenu(child.menu);
       child.menu.registerSubmenu(grandchild.menu);
       parent.menu.open();
@@ -151,6 +156,20 @@ describe('createMenu', () => {
 
       expect(child.onOpenChange).toHaveBeenCalledWith(false, { reason: 'imperative-action' });
       expect(grandchild.onOpenChange).toHaveBeenCalledWith(false, { reason: 'imperative-action' });
+    });
+
+    it('clears the parent highlight when a registered submenu opens', () => {
+      const parent = createTestMenu();
+      const child = createTestMenu();
+      const item = addItem('Submenu');
+
+      parent.menu.registerItem(item);
+      parent.menu.registerSubmenu(child.menu);
+      parent.menu.highlight(item, { focus: false });
+
+      child.menu.open();
+
+      expect(item.hasAttribute(MenuItemDataAttrs.highlighted)).toBe(false);
     });
 
     it('closes the previously open grouped menu when another opens', () => {
@@ -185,12 +204,30 @@ describe('createMenu', () => {
       vi.useRealTimers();
     });
 
+    it('does not apply a pending initial highlight after it is cleared', () => {
+      vi.useFakeTimers();
+
+      const { menu } = createTestMenu();
+      const item = addItem('Alpha');
+
+      menu.registerItem(item);
+      menu.open();
+      menu.highlight(null);
+
+      vi.runAllTimers();
+
+      expect(item.hasAttribute(MenuItemDataAttrs.highlighted)).toBe(false);
+
+      vi.useRealTimers();
+    });
+
     it('focuses the checked radio item when opening', () => {
       vi.useFakeTimers();
 
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       b.setAttribute('role', 'menuitemradio');
       b.setAttribute('aria-checked', 'true');
       const focus = vi.spyOn(b, 'focus');
@@ -204,6 +241,7 @@ describe('createMenu', () => {
       expect(b.getAttribute(MenuItemDataAttrs.highlighted)).toBe('');
       expect(a.hasAttribute(MenuItemDataAttrs.highlighted)).toBe(false);
       expect(focus).toHaveBeenCalledOnce();
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
 
       vi.useRealTimers();
     });
@@ -214,6 +252,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       b.setAttribute('role', 'menuitemradio');
       b.setAttribute('aria-checked', 'true');
       const focus = vi.spyOn(b, 'focus');
@@ -227,6 +266,7 @@ describe('createMenu', () => {
       expect(b.getAttribute(MenuItemDataAttrs.highlighted)).toBe('');
       expect(a.hasAttribute(MenuItemDataAttrs.highlighted)).toBe(false);
       expect(focus).toHaveBeenCalledOnce();
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
 
       vi.useRealTimers();
     });
@@ -237,6 +277,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const checkbox = addItem('Loop');
       const radio = addItem('Auto');
+
       checkbox.setAttribute('role', 'menuitemcheckbox');
       checkbox.setAttribute('aria-checked', 'true');
       radio.setAttribute('role', 'menuitemradio');
@@ -260,6 +301,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       b.setAttribute('aria-selected', 'true');
 
       menu.registerItem(a);
@@ -282,6 +324,7 @@ describe('createMenu', () => {
 
       menu.setTriggerElement(trigger);
       menu.setContentElement(content);
+      menu.setPopupElement(content);
       menu.open();
       onOpenChange.mockClear();
 
@@ -297,6 +340,7 @@ describe('createMenu', () => {
 
       content.append(child);
       menu.setContentElement(content);
+      menu.setPopupElement(content);
       menu.open();
       onOpenChange.mockClear();
 
@@ -312,12 +356,47 @@ describe('createMenu', () => {
 
       menu.setTriggerElement(trigger);
       menu.setContentElement(content);
+      menu.setPopupElement(content);
       menu.open();
       onOpenChange.mockClear();
 
       menu.contentProps.onFocusOut(makeFocusEvent(trigger));
 
       expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
+    it('waits for a closing submenu to restore focus before handling a null focus target', async () => {
+      const parent = createTestMenu();
+      const child = createTestMenu();
+      const content = document.createElement('div');
+      const trigger = document.createElement('button');
+      const submenu = document.createElement('div');
+
+      content.append(trigger, submenu);
+      document.body.append(content);
+      parent.menu.setContentElement(content);
+      parent.menu.setPopupElement(content);
+      child.menu.setTriggerElement(trigger);
+      child.menu.setContentElement(submenu);
+      child.menu.setPopupElement(submenu);
+      parent.menu.registerSubmenu(child.menu);
+      parent.menu.open();
+      child.menu.open();
+      parent.onOpenChange.mockClear();
+
+      child.menu.close('escape');
+      parent.menu.contentProps.onFocusOut(makeFocusEvent(null));
+
+      expect(parent.onOpenChange).not.toHaveBeenCalledWith(false, expect.anything());
+
+      await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      expect(parent.onOpenChange).not.toHaveBeenCalledWith(false, expect.anything());
+
+      parent.menu.destroy();
+      child.menu.destroy();
+      content.remove();
     });
   });
 
@@ -349,10 +428,12 @@ describe('createMenu', () => {
     it('handles navigation keys while the open trigger has focus', () => {
       const { menu } = createTestMenu();
       const element = addItem('Auto');
+
       menu.registerItem(element);
       menu.open();
 
       const event = makeKeyEvent('ArrowDown');
+
       menu.triggerProps.onKeyDown(event);
 
       expect(event.preventDefault).toHaveBeenCalled();
@@ -362,9 +443,11 @@ describe('createMenu', () => {
 
     it('swallows left and right keys while the menu is open', () => {
       const { menu } = createTestMenu();
+
       menu.open();
 
       const event = makeKeyEvent('ArrowRight');
+
       menu.triggerProps.onKeyDown(event);
 
       expect(event.preventDefault).toHaveBeenCalled();
@@ -373,9 +456,11 @@ describe('createMenu', () => {
 
     it('lets Escape bubble while the menu is open', () => {
       const { menu } = createTestMenu();
+
       menu.open();
 
       const event = makeKeyEvent('Escape');
+
       menu.triggerProps.onKeyDown(event);
 
       expect(event.stopPropagation).not.toHaveBeenCalled();
@@ -385,6 +470,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
 
       const event = makeKeyEvent('ArrowRight');
+
       menu.triggerProps.onKeyDown(event);
 
       expect(event.stopPropagation).not.toHaveBeenCalled();
@@ -398,6 +484,42 @@ describe('createMenu', () => {
       menu.setTriggerElement(trigger);
       menu.open();
       menu.close('imperative-action');
+
+      await vi.waitFor(() => {
+        expect(menu.input.current.active).toBe(false);
+      });
+
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('does not restore focus when Tab moves focus outside', async () => {
+      const { menu } = createTestMenu();
+      const trigger = document.createElement('button');
+      const content = document.createElement('div');
+      const outside = document.createElement('button');
+      const focus = vi.spyOn(trigger, 'focus');
+
+      menu.setTriggerElement(trigger);
+      menu.setContentElement(content);
+      menu.setPopupElement(content);
+      menu.open();
+      menu.contentProps.onFocusOut(makeFocusEvent(outside));
+
+      await vi.waitFor(() => {
+        expect(menu.input.current.active).toBe(false);
+      });
+
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('does not restore focus after an outside click', async () => {
+      const { menu } = createTestMenu();
+      const trigger = document.createElement('button');
+      const focus = vi.spyOn(trigger, 'focus');
+
+      menu.setTriggerElement(trigger);
+      menu.open();
+      menu.close('outside-click');
 
       await vi.waitFor(() => {
         expect(menu.input.current.active).toBe(false);
@@ -448,12 +570,24 @@ describe('createMenu', () => {
       expect(element.hasAttribute(MenuItemDataAttrs.item)).toBe(true);
     });
 
+    it('highlights an item when it receives focus', () => {
+      const { menu } = createTestMenu();
+      const element = addItem('Alpha');
+
+      menu.registerItem(element);
+      element.focus();
+
+      expect(element.hasAttribute(MenuItemDataAttrs.highlighted)).toBe(true);
+      expect(element.tabIndex).toBe(0);
+    });
+
     it('removes item from navigation on cleanup', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
 
       const cleanup = menu.registerItem(a);
+
       menu.registerItem(b);
       menu.open();
       menu.highlight(a);
@@ -462,6 +596,7 @@ describe('createMenu', () => {
 
       // After cleanup, a is no longer in the set — ArrowDown should wrap to b
       const event = makeKeyEvent('ArrowDown');
+
       menu.contentProps.onKeyDown(event);
 
       expect(menu.input.current.active).toBe(true); // still open
@@ -472,6 +607,7 @@ describe('createMenu', () => {
       const element = addItem('Alpha');
 
       const cleanup = menu.registerItem(element);
+
       menu.highlight(element);
       onHighlightChange.mockClear();
 
@@ -491,6 +627,7 @@ describe('createMenu', () => {
     it('sets data-highlighted attribute and tabIndex=0 on highlighted item', () => {
       const { menu } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.highlight(element);
@@ -499,10 +636,24 @@ describe('createMenu', () => {
       expect(element.tabIndex).toBe(0);
     });
 
+    it('sets the highlight type for pointer highlights', () => {
+      const { menu } = createTestMenu();
+      const element = addItem('Alpha');
+
+      menu.registerItem(element);
+
+      menu.highlight(element, { focus: false, pointer: true });
+      expect(element.getAttribute(MenuItemDataAttrs.highlighted)).toBe('pointer');
+
+      menu.highlight(element);
+      expect(element.getAttribute(MenuItemDataAttrs.highlighted)).toBe('');
+    });
+
     it('removes data-highlighted and resets tabIndex on previously highlighted item', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
 
@@ -514,9 +665,32 @@ describe('createMenu', () => {
       expect(b.getAttribute(MenuItemDataAttrs.highlighted)).toBe('');
     });
 
+    it('lays out an earlier pointer highlight before removing the previous highlight', () => {
+      const { menu } = createTestMenu();
+      const a = addItem('Alpha');
+      const b = addItem('Beta');
+
+      menu.registerItem(a);
+      menu.registerItem(b);
+      menu.highlight(b, { focus: false, pointer: true });
+      const setHighlight = vi.spyOn(a, 'setAttribute');
+      const layout = vi.spyOn(document.body, 'getBoundingClientRect');
+      const removeHighlight = vi.spyOn(b, 'removeAttribute');
+
+      menu.highlight(a, { focus: false, pointer: true });
+
+      expect(setHighlight).toHaveBeenCalledWith(MenuItemDataAttrs.highlighted, 'pointer');
+      expect(layout).toHaveBeenCalledOnce();
+      expect(removeHighlight).toHaveBeenCalledWith(MenuItemDataAttrs.highlighted);
+      expect(setHighlight.mock.invocationCallOrder[0]).toBeLessThan(layout.mock.invocationCallOrder[0] ?? 0);
+      expect(layout.mock.invocationCallOrder[0]).toBeLessThan(removeHighlight.mock.invocationCallOrder[0] ?? 0);
+      layout.mockRestore();
+    });
+
     it('calls onHighlightChange with the new element', () => {
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.highlight(element);
@@ -527,6 +701,7 @@ describe('createMenu', () => {
     it('calls onHighlightChange with null when cleared', () => {
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.highlight(element);
@@ -540,6 +715,7 @@ describe('createMenu', () => {
     it('is a no-op when same item is already highlighted', () => {
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.highlight(element);
@@ -554,6 +730,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(b);
       menu.registerItem(a);
 
@@ -567,6 +744,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const hidden = addItem('Hidden');
       const visible = addItem('Visible');
+
       hidden.hidden = true;
       menu.registerItem(hidden);
       menu.registerItem(visible);
@@ -581,6 +759,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const element = addItem('Alpha');
       const focus = vi.spyOn(element, 'focus');
+
       menu.registerItem(element);
 
       menu.highlightFirstItem({ preventScroll: true });
@@ -592,6 +771,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const element = addItem('Alpha');
       const focus = vi.spyOn(element, 'focus');
+
       menu.registerItem(element);
 
       menu.highlight(element, { focus: false });
@@ -610,6 +790,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
 
@@ -622,6 +803,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(b);
       menu.registerItem(a);
 
@@ -634,6 +816,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.highlight(a);
@@ -648,6 +831,7 @@ describe('createMenu', () => {
       const a = addItem('Alpha');
       const hidden = addItem('Beta');
       const c = addItem('Gamma');
+
       hidden.setAttribute('data-hidden', '');
       menu.registerItem(a);
       menu.registerItem(hidden);
@@ -660,11 +844,27 @@ describe('createMenu', () => {
       expect(c.getAttribute(MenuItemDataAttrs.highlighted)).toBe('');
     });
 
+    it.each(['unavailable', 'unsupported'])('ArrowDown skips %s items', (availability) => {
+      const { menu } = createTestMenu();
+      const hidden = addItem('Hidden');
+      const visible = addItem('Visible');
+
+      hidden.setAttribute('data-availability', availability);
+      menu.registerItem(hidden);
+      menu.registerItem(visible);
+
+      menu.contentProps.onKeyDown(makeKeyEvent('ArrowDown'));
+
+      expect(hidden.hasAttribute(MenuItemDataAttrs.highlighted)).toBe(false);
+      expect(visible.getAttribute(MenuItemDataAttrs.highlighted)).toBe('');
+    });
+
     it('ArrowDown preserves position when the highlighted item becomes hidden', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
       const c = addItem('Gamma');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.registerItem(c);
@@ -680,6 +880,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.highlight(b);
@@ -693,6 +894,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
 
@@ -705,6 +907,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.highlight(b);
@@ -719,6 +922,7 @@ describe('createMenu', () => {
       const a = addItem('Alpha');
       const b = addItem('Beta');
       const c = addItem('Gamma');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.registerItem(c);
@@ -734,6 +938,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.highlight(a);
@@ -748,6 +953,7 @@ describe('createMenu', () => {
       const a = addItem('Alpha');
       const b = addItem('Beta');
       const c = addItem('Gamma');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.registerItem(c);
@@ -763,6 +969,7 @@ describe('createMenu', () => {
       const a = addItem('Alpha');
       const b = addItem('Beta');
       const c = addItem('Gamma');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.registerItem(c);
@@ -777,6 +984,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const element = addItem('Alpha');
       const onClick = vi.fn();
+
       element.addEventListener('click', onClick);
       menu.registerItem(element);
       menu.highlight(element);
@@ -790,6 +998,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const element = addItem('Alpha');
       const onClick = vi.fn();
+
       element.addEventListener('click', onClick);
       menu.registerItem(element);
       menu.highlight(element);
@@ -802,9 +1011,11 @@ describe('createMenu', () => {
     it('ArrowDown calls preventDefault', () => {
       const { menu } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       const event = makeKeyEvent('ArrowDown');
+
       menu.contentProps.onKeyDown(event);
 
       expect(event.preventDefault).toHaveBeenCalled();
@@ -834,6 +1045,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Beta');
+
       menu.registerItem(a);
       menu.registerItem(b);
 
@@ -846,6 +1058,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const hidden = addItem('Beta');
       const visible = addItem('Bravo');
+
       hidden.setAttribute('aria-hidden', 'true');
       menu.registerItem(hidden);
       menu.registerItem(visible);
@@ -862,6 +1075,7 @@ describe('createMenu', () => {
       const b = addItem('Beta');
       const br = addItem('Bravo');
       const bu = addItem('Button');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.registerItem(br);
@@ -881,6 +1095,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const al = addItem('Almond');
+
       menu.registerItem(a);
       menu.registerItem(al);
       menu.highlight(a);
@@ -896,6 +1111,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Almond');
+
       menu.registerItem(a);
       menu.registerItem(b);
 
@@ -914,6 +1130,7 @@ describe('createMenu', () => {
       const { menu } = createTestMenu();
       const a = addItem('Alpha');
       const b = addItem('Almond');
+
       menu.registerItem(a);
       menu.registerItem(b);
       menu.highlight(a);
@@ -932,6 +1149,7 @@ describe('createMenu', () => {
     it('ignores printable chars with modifier keys', () => {
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
       onHighlightChange.mockClear();
 
@@ -964,6 +1182,7 @@ describe('createMenu', () => {
 
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.open();
@@ -983,6 +1202,7 @@ describe('createMenu', () => {
 
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.contentProps.onKeyDown(makeKeyEvent('a'));
@@ -1007,6 +1227,7 @@ describe('createMenu', () => {
 
       const { menu, onHighlightChange } = createTestMenu();
       const element = addItem('Alpha');
+
       menu.registerItem(element);
 
       menu.open();

@@ -26,8 +26,8 @@ export interface MicrophoneOptionsResult {
 }
 
 /**
- * Create microphone picker menu options from the player capture devices
- * state. Returns `null` when the capture devices feature is not configured.
+ * Create microphone picker menu options from the player capture devices state. Returns `null` when the capture devices
+ * feature is not configured.
  *
  * @param props - Optional `label`, `formatDevice`, and `disabled` overrides.
  */
@@ -44,6 +44,7 @@ export function useMicrophoneOptions(props?: MicrophoneOptionsProps): Microphone
 
   if (!media) {
     if (__DEV__) logMissingFeature('useMicrophoneOptions', selectCaptureDevices.displayName ?? 'captureDevices');
+
     return null;
   }
 

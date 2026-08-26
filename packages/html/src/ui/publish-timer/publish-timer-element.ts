@@ -8,10 +8,9 @@ import { PlayerController } from '../../player/player-controller';
 import { MediaUIElement } from '../media-ui-element';
 
 /**
- * `<media-publish-timer>` — elapsed time since the publish session went
- * live. `PublishTimerCore` is tick-less: this element owns a one-second
- * interval that runs only while the session is `live`, passing a fresh
- * `now` to the core on every render.
+ * `<media-publish-timer>` — elapsed time since the publish session went live. `PublishTimerCore` is tick-less: this
+ * element owns a one-second interval that runs only while the session is `live`, passing a fresh `now` to the core on
+ * every render.
  */
 export class PublishTimerElement extends MediaUIElement<PublishTimerCore> {
   static readonly tagName = 'media-publish-timer';
@@ -31,6 +30,7 @@ export class PublishTimerElement extends MediaUIElement<PublishTimerCore> {
 
   override connectedCallback(): void {
     super.connectedCallback();
+
     if (this.destroyed) return;
 
     if (!this.#textNode.parentNode) this.appendChild(this.#textNode);
@@ -51,6 +51,7 @@ export class PublishTimerElement extends MediaUIElement<PublishTimerCore> {
     super.update(changed);
 
     const state = this.core.state.current;
+
     this.#textNode.textContent = state.elapsedText;
     // Guard on the media slice: without it the base update skipped
     // `getState()`, so `session` could be stale from a detached store.
@@ -62,12 +63,14 @@ export class PublishTimerElement extends MediaUIElement<PublishTimerCore> {
       this.#stopInterval();
       return;
     }
+
     // Each tick re-renders, which feeds a fresh `now` through `willUpdate`.
     this.#interval ??= setInterval(() => this.requestUpdate(), 1000);
   }
 
   #stopInterval(): void {
     if (this.#interval === null) return;
+
     clearInterval(this.#interval);
     this.#interval = null;
   }

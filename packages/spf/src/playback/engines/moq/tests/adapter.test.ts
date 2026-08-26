@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { type MoqAudioContext, MoqMediaElement } from '../adapter';
 
 /**
- * Structural `MoqAudioContext` fake: tracks state transitions through
- * resume/suspend spies so tests can assert the adapter's paused-flag
- * alignment without a live audio device.
+ * Structural `MoqAudioContext` fake: tracks state transitions through resume/suspend spies so tests can assert the
+ * adapter's paused-flag alignment without a live audio device.
  */
 function createFakeGain() {
   return {
@@ -37,6 +37,7 @@ function createFakeAudioContext(initialState: AudioContextState) {
       fake.state = 'closed';
     }),
   };
+
   return fake;
 }
 
@@ -56,6 +57,7 @@ describe('MoqMediaMixin', () => {
     // The engine sees a render-facing view whose destination is the gain
     // node (volume path), delegating the clock to the real context.
     const renderContext = media.engine.context.audioContext.get();
+
     expect(renderContext?.destination).toBe(audioContext.gain);
     expect(audioContext.gain.connect).toHaveBeenCalledWith(audioContext.destination);
     expect(renderContext?.currentTime).toBe(audioContext.currentTime);
@@ -97,8 +99,10 @@ describe('MoqMediaMixin', () => {
 
   it('restores paused when resume() rejects, so a blocked play() is not reported as playing', async () => {
     const audioContext = createFakeAudioContext('suspended');
+
     audioContext.resume.mockRejectedValueOnce(new Error('NotAllowedError'));
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     await expect(media.play()).rejects.toThrow('NotAllowedError');
@@ -114,6 +118,7 @@ describe('MoqMediaMixin', () => {
   it('closes the load gate and suspends audio on a src change', async () => {
     const audioContext = createFakeAudioContext('suspended');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     await media.play();
@@ -133,6 +138,7 @@ describe('MoqMediaMixin', () => {
   it('closes the audio context only after the engine has torn down', async () => {
     const audioContext = createFakeAudioContext('running');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.destroy();
@@ -170,6 +176,7 @@ describe('MoqMediaMixin', () => {
   it('ignores a NaN volume write so a non-finite gain never reaches the audio graph', () => {
     const audioContext = createFakeAudioContext('running');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.volume = 0.5;
@@ -217,6 +224,7 @@ describe('MoqMediaMixin', () => {
     const audioContext = createFakeAudioContext('suspended');
     // Chromium's pre-gesture shape: resume() parks until user activation.
     let activate!: () => void;
+
     audioContext.resume.mockImplementation(
       () =>
         new Promise<void>((resolve) => {
@@ -227,6 +235,7 @@ describe('MoqMediaMixin', () => {
         })
     );
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.autoplay = true;
@@ -285,9 +294,11 @@ describe('MoqMediaMixin', () => {
 
   it('keeps audio deferred after a rejected pre-gesture resume until play() succeeds', async () => {
     const audioContext = createFakeAudioContext('suspended');
+
     // Safari's shape: a pre-gesture resume() rejects outright.
     audioContext.resume.mockRejectedValueOnce(new Error('NotAllowedError'));
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.autoplay = true;
@@ -308,6 +319,7 @@ describe('MoqMediaMixin', () => {
   it('attempts autoplay once per load cycle and never restarts an explicit pause', () => {
     const audioContext = createFakeAudioContext('suspended');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.autoplay = true;
@@ -331,6 +343,7 @@ describe('MoqMediaMixin', () => {
   it('begins playback when autoplay is enabled after the source', () => {
     const audioContext = createFakeAudioContext('suspended');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.src = 'moqt://relay.test/live#msf:live--catalog';
@@ -346,6 +359,7 @@ describe('MoqMediaMixin', () => {
   it('chains play() behind a pending src-change suspend instead of trusting the stale running state', async () => {
     const audioContext = createFakeAudioContext('suspended');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
     media.src = 'moqt://relay.test/live#msf:live--catalog';
     await media.play();
@@ -355,6 +369,7 @@ describe('MoqMediaMixin', () => {
     // Real contexts only flip `state` once the control thread acknowledges
     // — model the src-change suspend as in flight with a stale 'running'.
     let ackSuspend!: () => void;
+
     audioContext.suspend.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
@@ -368,6 +383,7 @@ describe('MoqMediaMixin', () => {
     expect(audioContext.state).toBe('running'); // suspend not yet acknowledged
 
     const playing = media.play();
+
     await Promise.resolve();
     // The resume waits for the suspend ack rather than reading the stale
     // state and skipping — a skipped resume would leave the context
@@ -385,6 +401,7 @@ describe('MoqMediaMixin', () => {
   it('defers audio and chains the autoplay resume behind a pending src-change suspend', async () => {
     const audioContext = createFakeAudioContext('suspended');
     const media = new MoqMediaElement({ createAudioContext: () => audioContext });
+
     media.attach(document.createElement('canvas'));
 
     media.autoplay = true;
@@ -393,6 +410,7 @@ describe('MoqMediaMixin', () => {
     expect(audioContext.state).toBe('running');
 
     let ackSuspend!: () => void;
+
     audioContext.suspend.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {

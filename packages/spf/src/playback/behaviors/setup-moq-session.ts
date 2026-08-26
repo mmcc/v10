@@ -1,24 +1,18 @@
 /**
- * **Own the MoQ session actor for the current source.** When
- * `state.presentation` holds a `moqt://` URL and the preload /
- * load-activation gate is met, parses the MSF source (relay URL + `msf:`
- * fragment, §11.1), creates the moq-session actor (which connects), and
- * publishes it on `context.moqSessionActor`. Source change, gate close,
- * and destroy all tear the session down through state exit.
+ * **Own the MoQ session actor for the current source.** When `state.presentation` holds a `moqt://` URL and the preload
+ * / load-activation gate is met, parses the MSF source (relay URL + `msf:` fragment, §11.1), creates the moq-session
+ * actor (which connects), and publishes it on `context.moqSessionActor`. Source change, gate close, and destroy all
+ * tear the session down through state exit.
  *
- * Mirrors `setupMediaSource`'s single-positive-state shape, with
- * `resolvePresentation`-style preload gating:
+ * Mirrors `setupMediaSource`'s single-positive-state shape, with `resolvePresentation`-style preload gating:
  *
- * ```
- * 'preconditions-unmet' → 'idle' → 'session-active'
- * ```
+ *     'preconditions-unmet' → 'idle' → 'session-active'
  *
- * Sole writer of `context.moqSessionActor`; MoQ behaviors downstream
- * (`resolveCatalog`, `subscribeSelected*Track`) only read.
+ * Sole writer of `context.moqSessionActor`; MoQ behaviors downstream (`resolveCatalog`, `subscribeSelected*Track`) only
+ * read.
  *
- * The `authProvider` config seam (MSF §11.4) rides through to the actor:
- * initial token attach on connect/subscribe, refresh + retry on
- * auth-expiry errors.
+ * The `authProvider` config seam (MSF §11.4) rides through to the actor: initial token attach on connect/subscribe,
+ * refresh + retry on auth-expiry errors.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -65,7 +59,9 @@ function deriveState(
   defaultPreload: StandardPreload
 ): MoqSessionFsmState {
   if (!presentation?.url || !isMoqSourceUrl(presentation.url)) return 'preconditions-unmet';
+
   const gateOpen = !!loadActivated || !isBlockingPreload(preload, defaultPreload);
+
   return gateOpen ? 'session-active' : 'idle';
 }
 
@@ -110,6 +106,7 @@ function setupMoqSessionSetup({
         effects: () => {
           const url = sourceUrlSignal.get()!;
           let source: ReturnType<typeof parseMoqSource>;
+
           try {
             source = parseMoqSource(url);
           } catch (error) {
@@ -124,6 +121,7 @@ function setupMoqSessionSetup({
             authProvider: config?.authProvider,
             reconnect: config?.reconnect,
           });
+
           context.moqSessionActor.set(actor);
 
           return () => {

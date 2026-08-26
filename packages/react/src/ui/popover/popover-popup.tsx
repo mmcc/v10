@@ -1,5 +1,3 @@
-'use client';
-
 import type { PopoverState } from '@videojs/core';
 import { forwardRef, useCallback, useMemo, useRef } from 'react';
 
@@ -11,7 +9,10 @@ import { usePopupPosition } from './use-popup-position';
 
 export interface PopoverPopupProps extends UIComponentProps<'div', PopoverState> {}
 
-/** Container for the popover content. Positioned relative to the trigger using CSS anchor positioning with a JavaScript fallback. */
+/**
+ * Container for the popover content. Positioned relative to the trigger using CSS anchor positioning with a JavaScript
+ * fallback.
+ */
 export const PopoverPopup = forwardRef<HTMLDivElement, PopoverPopupProps>(function PopoverPopup(
   { render, className, style, ...elementProps },
   forwardedRef

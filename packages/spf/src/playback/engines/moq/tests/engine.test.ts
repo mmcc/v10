@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { isResolvedPresentation } from '../../../../media/types';
 import { ByteWriter, StreamReader, utf8Encode } from '../../../../network/moqt/bytes';
 import {
@@ -44,14 +45,17 @@ function encodeLocObjectStream(
   payload: Uint8Array
 ): Uint8Array {
   const writer = new ByteWriter();
+
   writer.writeVarint(0x39); // subgroup header: id 0, default priority, PROPERTIES
   writer.writeVarint(trackAlias);
   writer.writeVarint(groupId);
   writer.writeVarint(objectId); // first object on the stream: absolute id
   const properties = new ByteWriter();
+
   properties.writeVarint(0x06); // LOC Timestamp
   properties.writeVarint(timestampUs);
   const propertyBytes = properties.toBytes();
+
   writer.writeVarint(propertyBytes.length);
   writer.writeBytes(propertyBytes);
   writer.writeVarint(payload.length);
@@ -72,6 +76,7 @@ function createFakeRelay(catalog: string = CATALOG) {
   const openUni = (bytes: Uint8Array) => {
     const pipe = new TransformStream<Uint8Array, Uint8Array>();
     const writer = pipe.writable.getWriter();
+
     void writer.write(bytes).then(() => writer.close());
     uniController.enqueue(pipe.readable);
   };
@@ -85,18 +90,23 @@ function createFakeRelay(catalog: string = CATALOG) {
     const low = await reader.readUint8();
     const body = await reader.readBytes(high * 256 + low);
     const message = decodeControlMessage({ type, body });
+
     void deframer;
 
     if (message.kind === 'subscribe') {
       const trackAlias = nextAlias++;
+
       subscriptions.push({ message, trackAlias });
       await writer.write(encodeSubscribeOk(trackAlias));
+
       if (message.trackName === 'catalog') {
         // Serve the current catalog as a live independent object.
         openUni(encodeLocObjectStream(trackAlias, 0, 0, 0, utf8Encode(catalog)));
       }
+
       return;
     }
+
     if (message.kind === 'fetch') {
       // No history — the engine falls back to live catalog objects.
       await writer.write(encodeRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'nothing published'));
@@ -119,6 +129,7 @@ function createFakeRelay(catalog: string = CATALOG) {
     async createBidirectionalStream() {
       const clientToServer = new TransformStream<Uint8Array, Uint8Array>();
       const serverToClient = new TransformStream<Uint8Array, Uint8Array>();
+
       void handleRequestStream({ readable: clientToServer.readable, writable: serverToClient.writable });
       return { readable: serverToClient.readable, writable: clientToServer.writable };
     },
@@ -130,6 +141,7 @@ function createFakeRelay(catalog: string = CATALOG) {
     // Server SETUP arrives immediately after connect.
     queueMicrotask(() => {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
+
       void pipe.writable.getWriter().write(encodeSetup([]));
       uniController.enqueue(pipe.readable);
     });
@@ -149,10 +161,13 @@ async function encodeKeyframe(): Promise<Uint8Array> {
     },
     error: () => {},
   });
+
   encoder.configure({ codec: 'vp8', width: 64, height: 64, bitrate: 200_000 });
   const canvas = new OffscreenCanvas(64, 64);
+
   canvas.getContext('2d')!.fillRect(0, 0, 64, 64);
   const frame = new VideoFrame(canvas, { timestamp: 0 });
+
   encoder.encode(frame, { keyFrame: true });
   frame.close();
   await encoder.flush();
@@ -176,6 +191,7 @@ describe('createMoqEngine', () => {
     });
 
     const canvas = document.createElement('canvas');
+
     signals.context.renderSurface.set(canvas);
     signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
     signals.state.loadActivated.set(true);
@@ -196,6 +212,7 @@ describe('createMoqEngine', () => {
     // Serve a keyframe: it flows subgroup stream → jitter buffer →
     // VideoDecoder → canvas.
     const videoSubscription = relay.subscriptions.find((s) => s.message.trackName === 'video')!;
+
     relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 1, 0, 1_000, await encodeKeyframe()));
 
     await vi.waitFor(
@@ -301,6 +318,7 @@ describe('createMoqEngine', () => {
     relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 2, 0, 200_000, await encodeKeyframe()));
 
     const presentedUs = () => signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+
     await vi.waitFor(() => expect(presentedUs()).toBe(0), { timeout: 5000 });
 
     // Longer than the 200 ms frame gap: with a running clock the second
@@ -362,11 +380,13 @@ describe('createMoqEngine', () => {
       ],
     });
     const catalogSubscription = relay.subscriptions.find((s) => s.message.trackName === 'catalog')!;
+
     relay.openUni(encodeLocObjectStream(catalogSubscription.trackAlias, 1, 0, 0, utf8Encode(updatedCatalog)));
     const trackIds = () =>
       (signals.state.presentation.get()?.selectionSets ?? []).flatMap((selectionSet) =>
         selectionSet.switchingSets.flatMap((switchingSet) => switchingSet.tracks.map((track) => track.id))
       );
+
     await vi.waitFor(() => expect(trackIds()).toContain('live/video2'), { timeout: 5000 });
 
     // Resume: a fresh live-edge join (next-group-start), no catalog churn.
@@ -418,13 +438,16 @@ describe('createMoqEngine', () => {
     const keyframe = await encodeKeyframe();
     const GROUP_COUNT = 30;
     const GROUP_DURATION_US = 100_000;
+
     for (let group = 0; group < GROUP_COUNT; group++) {
       relay.openUni(
         encodeLocObjectStream(videoSubscription.trackAlias, group + 1, 0, group * GROUP_DURATION_US, keyframe)
       );
     }
+
     const newestUs = (GROUP_COUNT - 1) * GROUP_DURATION_US;
     const subscriber = () => signals.context.videoSubscriberActor.get()!;
+
     await vi.waitFor(() => expect(subscriber().snapshot.get().context.newestTimestampUs).toBe(newestUs), {
       timeout: 5000,
     });
@@ -432,6 +455,7 @@ describe('createMoqEngine', () => {
     signals.context.renderSurface.set(document.createElement('canvas'));
     const renderer = () => signals.context.videoRendererActor.get();
     const presentedUs = () => renderer()?.snapshot.get().context.lastPresentedTimestampUs;
+
     await vi.waitFor(() => expect(presentedUs()).toBeDefined(), { timeout: 5000 });
     const firstPresentedUs = presentedUs()!;
 
@@ -446,10 +470,12 @@ describe('createMoqEngine', () => {
     // off this is true from the first frame — the anchor *is* the front of
     // the replay — which is why both cases can wait on the same condition.
     let settledPresentedUs!: number;
+
     await vi.waitFor(
       () => {
         const presented = presentedUs();
         const clockUs = renderer()?.getClockTimeUs();
+
         expect(presented).toBeDefined();
         expect(clockUs).toBeDefined();
         expect(clockUs! - presented!).toBeLessThan(GROUP_DURATION_US);
@@ -539,6 +565,7 @@ describe('createMoqEngine', () => {
     // (`minArrivalSamples: 1`, `warmupSeconds: 0`).
     const videoSubscription = relay.subscriptions.find((sub) => sub.message.trackName === 'video')!;
     const keyframe = await encodeKeyframe();
+
     for (let group = 0; group < 5; group++) {
       relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, group + 1, 0, group * 100_000, keyframe));
     }

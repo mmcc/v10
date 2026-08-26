@@ -1,17 +1,19 @@
+'use client';
+
 import { captionsText } from '@videojs/core/i18n/text/menu';
 import {
+  controlsBackdrop,
   bufferingIndicator,
   button,
   buttonGroupEnd,
   buttonGroupStart,
   container,
   controls,
-  error,
+  dialog,
   icon,
   iconState,
-  inputIndicatorOverlay,
+  inputIndicator,
   menu,
-  overlay,
   popup,
   poster,
   primaryControls,
@@ -20,9 +22,9 @@ import {
   statusIndicator,
   volumeIndicator,
 } from '@videojs/skins/default/tailwind/video.tailwind';
-import { isString } from '@videojs/utils/predicate';
 import { cn } from '@videojs/utils/style';
-import { type ComponentProps, type CSSProperties, forwardRef, type ReactNode } from 'react';
+import { type ComponentProps, forwardRef, type ReactNode } from 'react';
+
 import { useTranslator } from '@/i18n/context';
 import {
   AirPlayEnterIcon,
@@ -68,7 +70,7 @@ import { StatusIndicator } from '@/ui/status-indicator';
 import { Tooltip } from '@/ui/tooltip';
 import { VolumeIndicator } from '@/ui/volume-indicator';
 import { VolumeSlider } from '@/ui/volume-slider';
-import { isRenderProp } from '@/utils/use-render';
+
 import type { LiveVideoSkinProps } from './skin';
 
 const TOP_STATUS_ACTIONS = ['toggleSubtitles', 'toggleFullscreen', 'togglePictureInPicture'] as const;
@@ -157,7 +159,7 @@ function CaptionsTrigger(): ReactNode {
       <Tooltip.Root side="top">
         <Tooltip.Trigger
           render={
-            <CaptionsButton className={iconState.captions.button} render={<Button />}>
+            <CaptionsButton className={cn(button.captions, iconState.captions.button)} render={<Button />}>
               <CaptionsOffIcon className={cn(icon, iconState.captions.off)} />
               <CaptionsOnIcon className={cn(icon, iconState.captions.on)} />
             </CaptionsButton>
@@ -176,51 +178,43 @@ function CaptionsTrigger(): ReactNode {
       <Menu.Trigger
         disabled={disabled}
         render={
-          <CaptionsButton className={iconState.captions.button} render={<Button />}>
+          <CaptionsButton className={cn(button.captions, iconState.captions.button)} render={<Button />}>
             <CaptionsOffIcon className={cn(icon, iconState.captions.off)} />
             <CaptionsOnIcon className={cn(icon, iconState.captions.on)} />
           </CaptionsButton>
         }
       />
-      <Menu.Content className={cn(popup.popover, menu.root)}>
-        <Menu.RadioGroup
-          className={menu.group}
-          value={captions.value}
-          onValueChange={captions.setValue}
-          aria-label={t(captionsText)}
-        >
-          {captions.options.map((option) => (
-            <Menu.RadioItem key={option.value} className={menu.item} value={option.value} disabled={option.disabled}>
-              <span>{option.label}</span>
-              <Menu.ItemIndicator checked={option.value === captions.value} forceMount className={menu.indicator}>
-                <CheckIcon className={cn(icon, menu.icon)} />
-              </Menu.ItemIndicator>
-            </Menu.RadioItem>
-          ))}
-        </Menu.RadioGroup>
-      </Menu.Content>
+      <Menu.Popup className={cn(popup.popover, menu.root)}>
+        <Menu.Content className={menu.content}>
+          <Menu.RadioGroup
+            className={menu.group}
+            value={captions.value}
+            onValueChange={captions.setValue}
+            aria-label={t(captionsText)}
+          >
+            {captions.options.map((option) => (
+              <Menu.RadioItem key={option.value} className={menu.item} value={option.value} disabled={option.disabled}>
+                <bdi dir="auto">{option.label}</bdi>
+                <Menu.ItemIndicator checked={option.value === captions.value} forceMount className={menu.indicator}>
+                  <CheckIcon className={cn(icon, menu.icon)} />
+                </Menu.ItemIndicator>
+              </Menu.RadioItem>
+            ))}
+          </Menu.RadioGroup>
+        </Menu.Content>
+      </Menu.Popup>
     </Menu.Root>
   );
 }
 
 export function LiveVideoSkinTailwind(props: LiveVideoSkinProps): ReactNode {
-  const { children, className, poster: posterProp, placeholder, style, ...rest } = props;
-
-  const containerStyle = placeholder
-    ? ({ '--media-poster-placeholder': `url(${placeholder})`, ...style } as CSSProperties)
-    : style;
+  const { children, className, renderPoster, style, ...rest } = props;
 
   return (
-    <Container className={cn(container(false), className)} style={containerStyle} {...rest}>
+    <Container className={cn(container(false), className)} style={style} {...rest}>
       {children}
 
-      {posterProp && (
-        <Poster
-          src={isString(posterProp) ? posterProp : undefined}
-          render={isRenderProp(posterProp) ? posterProp : undefined}
-          className={poster(false)}
-        />
-      )}
+      <Poster className={poster(false)} render={renderPoster} />
 
       <BufferingIndicator
         render={(props) => (
@@ -231,117 +225,114 @@ export function LiveVideoSkinTailwind(props: LiveVideoSkinProps): ReactNode {
       />
 
       <ErrorDialog.Root>
-        <ErrorDialog.Popup className={error.root}>
-          <div className={error.dialog}>
-            <div className={error.content}>
-              <ErrorDialog.Title className={error.title}></ErrorDialog.Title>
-              <ErrorDialog.Description className={error.description} />
-            </div>
-            <div className={error.actions}>
-              <ErrorDialog.Close className={cn(button.base, button.primary)}></ErrorDialog.Close>
-            </div>
+        <ErrorDialog.Backdrop className={dialog.backdrop} />
+        <ErrorDialog.Popup className={dialog.popup}>
+          <div className={dialog.content}>
+            <ErrorDialog.Title className={dialog.title}></ErrorDialog.Title>
+            <ErrorDialog.Description className={dialog.description} />
+          </div>
+          <div className={dialog.actions}>
+            <ErrorDialog.Close className={cn(button.base, button.primary)}></ErrorDialog.Close>
           </div>
         </ErrorDialog.Popup>
       </ErrorDialog.Root>
 
-      <Controls.Root
-        data-controls="" // Used as a hook for Tailwind has-[] styles
-        className={controls}
-      >
-        <Tooltip.Provider>
-          <div className={primaryControls}>
-            <div className={buttonGroupStart}>
-              <Tooltip.Root side="top">
-                <Tooltip.Trigger
-                  render={
-                    <PlayButton className={iconState.play.button} render={<Button />}>
-                      <RestartIcon className={cn(icon, iconState.play.restart)} />
-                      <PlayIcon className={cn(icon, iconState.play.play)} />
-                      <PauseIcon className={cn(icon, iconState.play.pause)} />
-                    </PlayButton>
-                  }
-                />
-                <Tooltip.Popup className={cn(popup.tooltip)}>
-                  <Tooltip.Label />
-                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
-                </Tooltip.Popup>
-              </Tooltip.Root>
+      <Controls.Root>
+        <Controls.Backdrop className={controlsBackdrop} />
+        <Controls.Content className={controls}>
+          <Tooltip.Provider>
+            <Controls.Group className={primaryControls}>
+              <div className={buttonGroupStart}>
+                <Tooltip.Root side="top">
+                  <Tooltip.Trigger
+                    render={
+                      <PlayButton className={iconState.play.button} render={<Button />}>
+                        <RestartIcon className={cn(icon, iconState.play.restart)} />
+                        <PlayIcon className={cn(icon, iconState.play.play)} />
+                        <PauseIcon className={cn(icon, iconState.play.pause)} />
+                      </PlayButton>
+                    }
+                  />
+                  <Tooltip.Popup className={cn(popup.tooltip)}>
+                    <Tooltip.Label />
+                    <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                  </Tooltip.Popup>
+                </Tooltip.Root>
 
-              <LiveButton className={cn(button.base, button.subtle, button.live)} />
-            </div>
+                <LiveButton className={cn(button.base, button.subtle, button.live)} />
+              </div>
 
-            <div className={spacer} aria-hidden="true" />
+              <div className={spacer} aria-hidden="true" />
 
-            <div className={buttonGroupEnd}>
-              <VolumePopover />
+              <div className={buttonGroupEnd}>
+                <VolumePopover />
 
-              <CaptionsTrigger />
+                <CaptionsTrigger />
 
-              <Tooltip.Root side="top">
-                <Tooltip.Trigger
-                  render={
-                    <CastButton className={iconState.cast.button} render={<Button />}>
-                      <CastEnterIcon className={cn(icon, iconState.cast.enter)} />
-                      <CastExitIcon className={cn(icon, iconState.cast.exit)} />
-                    </CastButton>
-                  }
-                />
-                <Tooltip.Popup className={cn(popup.tooltip)}>
-                  <Tooltip.Label />
-                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
-                </Tooltip.Popup>
-              </Tooltip.Root>
+                <Tooltip.Root side="top">
+                  <Tooltip.Trigger
+                    render={
+                      <CastButton className={iconState.cast.button} render={<Button />}>
+                        <CastEnterIcon className={cn(icon, iconState.cast.enter)} />
+                        <CastExitIcon className={cn(icon, iconState.cast.exit)} />
+                      </CastButton>
+                    }
+                  />
+                  <Tooltip.Popup className={cn(popup.tooltip)}>
+                    <Tooltip.Label />
+                    <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                  </Tooltip.Popup>
+                </Tooltip.Root>
 
-              <Tooltip.Root side="top">
-                <Tooltip.Trigger
-                  render={
-                    <AirPlayButton className={iconState.airplay.button} render={<Button />}>
-                      <AirPlayEnterIcon className={cn(icon, iconState.airplay.enter)} />
-                      <AirPlayExitIcon className={cn(icon, iconState.airplay.exit)} />
-                    </AirPlayButton>
-                  }
-                />
-                <Tooltip.Popup className={cn(popup.tooltip)}>
-                  <Tooltip.Label />
-                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
-                </Tooltip.Popup>
-              </Tooltip.Root>
+                <Tooltip.Root side="top">
+                  <Tooltip.Trigger
+                    render={
+                      <AirPlayButton className={iconState.airplay.button} render={<Button />}>
+                        <AirPlayEnterIcon className={cn(icon, iconState.airplay.enter)} />
+                        <AirPlayExitIcon className={cn(icon, iconState.airplay.exit)} />
+                      </AirPlayButton>
+                    }
+                  />
+                  <Tooltip.Popup className={cn(popup.tooltip)}>
+                    <Tooltip.Label />
+                    <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                  </Tooltip.Popup>
+                </Tooltip.Root>
 
-              <Tooltip.Root side="top">
-                <Tooltip.Trigger
-                  render={
-                    <PiPButton className={iconState.pip.button} render={<Button />}>
-                      <PipEnterIcon className={cn(icon, iconState.pip.off)} />
-                      <PipExitIcon className={cn(icon, iconState.pip.on)} />
-                    </PiPButton>
-                  }
-                />
-                <Tooltip.Popup className={cn(popup.tooltip)}>
-                  <Tooltip.Label />
-                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
-                </Tooltip.Popup>
-              </Tooltip.Root>
+                <Tooltip.Root side="top">
+                  <Tooltip.Trigger
+                    render={
+                      <PiPButton className={iconState.pip.button} render={<Button />}>
+                        <PipEnterIcon className={cn(icon, iconState.pip.off)} />
+                        <PipExitIcon className={cn(icon, iconState.pip.on)} />
+                      </PiPButton>
+                    }
+                  />
+                  <Tooltip.Popup className={cn(popup.tooltip)}>
+                    <Tooltip.Label />
+                    <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                  </Tooltip.Popup>
+                </Tooltip.Root>
 
-              <Tooltip.Root side="top">
-                <Tooltip.Trigger
-                  render={
-                    <FullscreenButton className={iconState.fullscreen.button} render={<Button />}>
-                      <FullscreenEnterIcon className={cn(icon, iconState.fullscreen.enter)} />
-                      <FullscreenExitIcon className={cn(icon, iconState.fullscreen.exit)} />
-                    </FullscreenButton>
-                  }
-                />
-                <Tooltip.Popup className={cn(popup.tooltip)}>
-                  <Tooltip.Label />
-                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
-                </Tooltip.Popup>
-              </Tooltip.Root>
-            </div>
-          </div>
-        </Tooltip.Provider>
+                <Tooltip.Root side="top">
+                  <Tooltip.Trigger
+                    render={
+                      <FullscreenButton className={iconState.fullscreen.button} render={<Button />}>
+                        <FullscreenEnterIcon className={cn(icon, iconState.fullscreen.enter)} />
+                        <FullscreenExitIcon className={cn(icon, iconState.fullscreen.exit)} />
+                      </FullscreenButton>
+                    }
+                  />
+                  <Tooltip.Popup className={cn(popup.tooltip)}>
+                    <Tooltip.Label />
+                    <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                  </Tooltip.Popup>
+                </Tooltip.Root>
+              </div>
+            </Controls.Group>
+          </Tooltip.Provider>
+        </Controls.Content>
       </Controls.Root>
-
-      <div className={overlay} />
 
       {/* Hotkeys */}
       <Hotkey keys="Space" action="togglePaused" />
@@ -360,7 +351,7 @@ export function LiveVideoSkinTailwind(props: LiveVideoSkinProps): ReactNode {
 
       {/* Input Indicators */}
       <StatusAnnouncer className="sr-only" />
-      <div className={inputIndicatorOverlay}>
+      <div className={inputIndicator}>
         <VolumeIndicator.Root className={volumeIndicator.root}>
           <VolumeIndicator.Fill className={volumeIndicator.content}>
             <VolumeHighIcon className={cn(volumeIndicator.icon.base, volumeIndicator.icon.high)} />

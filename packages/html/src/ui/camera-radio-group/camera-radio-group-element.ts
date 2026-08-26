@@ -2,6 +2,7 @@ import { CameraRadioGroupCore, CameraRadioGroupDataAttrs, type CameraRadioGroupD
 import { applyStateDataAttrs, logMissingFeature, selectCaptureDevices } from '@videojs/core/dom';
 import { type Text, translateText } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
+
 import { i18nContext } from '../../i18n/context';
 import { I18nController } from '../../i18n/controller';
 import { playerContext } from '../../player/context';
@@ -29,12 +30,14 @@ export class CameraRadioGroupElement extends MenuRadioGroupElement {
     setItemAttributes: (item, option) => item.setAttribute('data-device', option.value),
     onValueChange: (value) => {
       const media = this.#mediaState.value;
+
       if (media) this.#core.selectValue(media, value);
     },
   });
 
   override connectedCallback(): void {
     super.connectedCallback();
+
     if (this.destroyed) return;
 
     if (__DEV__ && !this.#mediaState.value && this.#mediaState.displayName) {
@@ -62,7 +65,7 @@ export class CameraRadioGroupElement extends MenuRadioGroupElement {
         this.#i18n.value,
         this.#i18n.locale
       );
-      this.publishMenuMetadata(state.disabled, state.availability);
+      this.publishMenuTriggerState(state.disabled, state.availability);
     }
 
     super.update(changed);

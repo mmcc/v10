@@ -1,14 +1,16 @@
 import { deepEqual } from '@videojs/utils/object';
 import Hls, { type HlsConfig as HlsJsConfig } from 'hls.js';
+
 import { bridgeEvents } from '../../core/bridge-events';
 import { type DrmSystemsConfig, KeySystems } from '../../core/drm';
-
-import { type MediaStreamType, MediaStreamTypes } from '../../core/types';
+import { type MediaResolution, type MediaStreamType, MediaStreamTypes } from '../../core/types';
 import { type NativeHlsConfig, NativeHlsMedia, type NativeHlsSource } from '../native-hls';
 import { HTMLVideoElementHost } from '../video-host';
 import { HlsJsOnlyMedia } from './hls-js-only';
 
 export type PreloadType = '' | 'none' | 'metadata' | 'auto';
+
+export type { MediaResolution };
 
 export { Hls };
 
@@ -38,12 +40,11 @@ export interface HlsMediaProps {
 /**
  * Structured HLS source: which source to play, plus how to play it.
  *
- * Playback options are namespaced by engine. There are two paths here — hls.js
- * and the browser's own HLS support — and only one of them runs, so a source
- * describes both without either engine reading the other's options.
+ * Playback options are namespaced by engine. There are two paths here — hls.js and the browser's own HLS support — and
+ * only one of them runs, so a source describes both without either engine reading the other's options.
  *
- * `preferPlayback` and the engine options are all read when the engine is
- * constructed, so changing any of them recreates it.
+ * `preferPlayback` and the engine options are all read when the engine is constructed, so changing any of them
+ * recreates it.
  */
 export interface HlsSource {
   /** Manifest URL. Mirrors the host's `src` property. */
@@ -51,22 +52,66 @@ export interface HlsSource {
   /** MIME type of the source. Takes precedence over inference from `src`. */
   type?: SourceType | undefined;
   /**
-   * Preferred playback path: `'mse'` for hls.js, `'native'` for the browser's
-   * own HLS support. Ignored when the preferred path cannot play the source.
+   * Preferred playback path: `'mse'` for hls.js, `'native'` for the browser's own HLS support. Ignored when the
+   * preferred path cannot play the source.
    */
   preferPlayback?: PlaybackType | undefined;
   /**
    * License servers for protected content, keyed by EME key system id.
    *
-   * Engine neutral, because which engine plays is decided later: hls.js is
-   * handed every system named here (with EME switched on), and native playback
-   * negotiates the `com.apple.fps` entry itself. Name every system you hold a
-   * license server for — which one is used is the browser's choice.
+   * Engine neutral, because which engine plays is decided later: hls.js is handed every system named here (with EME
+   * switched on), and native playback negotiates the `com.apple.fps` entry itself. Name every system you hold a license
+   * server for — which one is used is the browser's choice.
    */
   drm?: DrmSystemsConfig | undefined;
   /**
-   * Playback options, keyed by the engine that reads them. Only one of the two
-   * engines below ends up playing, and each reads only its own key.
+   * Highest resolution adaptive bitrate selection may choose on its own.
+   *
+   * A ceiling on automatic selection, not a filter on what is available: renditions above it stay in `videoRenditions`
+   * and can still be selected by hand. Matching is by pixel area, so a `'720p'` cap admits any rendition at or below
+   * 1280×720 worth of pixels. When every rendition sits above the cap, the smallest one is used.
+   *
+   * Applied live — changing it never rebuilds the playback engine. Requires the hls.js (MSE) engine; native HLS
+   * playback ignores it.
+   *
+   * For Mux sources this is distinct from `playback.maxResolution`, which asks Mux to leave higher renditions out of
+   * the manifest altogether.
+   */
+  maxAutoResolution?: MediaResolution | undefined;
+  /**
+   * Whether the element's rendered size caps automatic selection. Defaults to `true`.
+   *
+   * A 400px-wide player has no use for a 4K rendition, so selection is held to the smallest rendition that still covers
+   * the element, measured in device pixels — a `2` device pixel ratio asks for twice what a CSS measurement would. The
+   * cap follows the element as it resizes, and `minAutoResolution` bounds how far down it can go. Set it to `false` for
+   * a player whose layout size understates what it needs, such as one that goes fullscreen without a resize.
+   *
+   * Which rendition covers the element is hls.js's own judgement, weighed on the largest dimension rather than pixel
+   * area, so it can land elsewhere than `maxAutoResolution` would for the same ladder.
+   *
+   * Applied live — changing it never rebuilds the playback engine. Requires the hls.js (MSE) engine; native HLS
+   * playback ignores it. Setting hls.js's own `capLevelToPlayerSize` through `source.engine.hlsJs` is a different
+   * thing: it stops the loop _every_ cap here is evaluated on, and takes a rebuild.
+   */
+  capRenditionToPlayerSize?: boolean | undefined;
+  /**
+   * Lowest resolution `capRenditionToPlayerSize` may cap down to. Defaults to `'720p'`.
+   *
+   * Not a quality floor. It bounds the size-derived cap and nothing else: when bandwidth is poor, adaptive selection
+   * still drops below it, because the cap is a ceiling and selection stays free underneath. Nor does it raise an
+   * explicit `maxAutoResolution` — asking for at most `'360p'` alongside a `'720p'` floor yields `'360p'`.
+   *
+   * The default exists because the low rungs of a ladder are there for poor network conditions, and capping a small
+   * player to them looks worse than its size suggests. Name a lower rung to weaken the floor, or `'270p'` to lift it
+   * for any real ladder.
+   *
+   * Applied live — changing it never rebuilds the playback engine. Requires the hls.js (MSE) engine; native HLS
+   * playback ignores it.
+   */
+  minAutoResolution?: MediaResolution | undefined;
+  /**
+   * Playback options, keyed by the engine that reads them. Only one of the two engines below ends up playing, and each
+   * reads only its own key.
    */
   engine?: HlsEngineConfig | undefined;
 }
@@ -74,16 +119,14 @@ export interface HlsSource {
 /** The engines an HLS source can configure. */
 export interface HlsEngineConfig {
   /**
-   * hls.js's own configuration, passed through untouched. A `drmSystems` of its
-   * own replaces `source.drm` for hls.js — an escape hatch for licensing MSE
-   * playback differently, or for the parts of hls.js's DRM configuration
-   * `source.drm` does not cover.
+   * Hls.js's own configuration, passed through untouched. A `drmSystems` of its own replaces `source.drm` for hls.js —
+   * an escape hatch for licensing MSE playback differently, or for the parts of hls.js's DRM configuration `source.drm`
+   * does not cover.
    */
   hlsJs?: Partial<HlsJsConfig> | undefined;
   /**
-   * Options for the browser's own HLS playback, used whenever the native path
-   * is the one taken. Its `drmSystems` replaces `source.drm` for that path in
-   * the same way.
+   * Options for the browser's own HLS playback, used whenever the native path is the one taken. Its `drmSystems`
+   * replaces `source.drm` for that path in the same way.
    */
   nativeHls?: NativeHlsConfig | undefined;
 }
@@ -98,7 +141,8 @@ export const hlsMediaDefaultProps: HlsMediaProps = {
 class HlsMediaEvent extends Event {}
 
 /**
- * @fires sourcechange - Fired when `source` changes, either directly or by resolving a new `src`. Read `source` for the new value.
+ * @fires sourcechange - Fired when `source` changes, either directly or by resolving a new `src`. Read `source` for the
+ *   new value.
  * @fires streamtypechange - Fired when the detected stream type changes. Read `streamType` for the new value.
  * @fires targetlivewindowchange - Fired when the target live window changes. Read `targetLiveWindow` for the new value.
  */
@@ -139,9 +183,8 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   }
 
   /**
-   * Underlying playback engine — the hls.js `Hls` instance when playing via
-   * MSE, otherwise `null`. An advanced escape hatch for direct engine access;
-   * normal playback is driven through this element's own properties and methods.
+   * Underlying playback engine — the hls.js `Hls` instance when playing via MSE, otherwise `null`. An advanced escape
+   * hatch for direct engine access; normal playback is driven through this element's own properties and methods.
    */
   get engine() {
     return this.#delegate?.engine ?? null;
@@ -172,9 +215,8 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   }
 
   /**
-   * Media source URL. Assigning it replaces the identity half of `source` and
-   * leaves `type` and the engine options intact, so changing the URL never
-   * disturbs engine configuration.
+   * Media source URL. Assigning it replaces the identity half of `source` and leaves `type` and the engine options
+   * intact, so changing the URL never disturbs engine configuration.
    */
   get src() {
     return this.#src;
@@ -183,12 +225,18 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   set src(src: string) {
     // `src` says which source to play; every other field says how to play it, so
     // they carry over.
-    const { type, preferPlayback, drm, engine } = this.#source ?? {};
+    const { type, preferPlayback, drm, engine, maxAutoResolution, capRenditionToPlayerSize, minAutoResolution } =
+      this.#source ?? {};
     const next: HlsSource = {
       ...(type && { type }),
       ...(preferPlayback && { preferPlayback }),
       ...(drm && { drm }),
       ...(engine && { engine }),
+      ...(maxAutoResolution && { maxAutoResolution }),
+      // Definedness, not truthiness: `false` is the value worth naming, and the
+      // falsy one, so the neighbors' pattern would drop it.
+      ...(capRenditionToPlayerSize !== undefined && { capRenditionToPlayerSize }),
+      ...(minAutoResolution && { minAutoResolution }),
       ...(src && { src }),
     };
 
@@ -198,12 +246,11 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   }
 
   /**
-   * Structured source: what to play (`src`, an optional `type`) plus how to play
-   * it (`preferPlayback`, `engine`). Assigning it derives `src`.
+   * Structured source: what to play (`src`, an optional `type`) plus how to play it (`preferPlayback`, `engine`).
+   * Assigning it derives `src`.
    *
-   * Sources are compared structurally, so reassigning an equivalent object — an
-   * inline React prop, for instance — is a no-op. Only a change to the engine
-   * options (or to the resolved content type) recreates the playback engine.
+   * Sources are compared structurally, so reassigning an equivalent object — an inline React prop, for instance — is a
+   * no-op. Only a change to the engine options (or to the resolved content type) recreates the playback engine.
    */
   get source(): HlsSource | null {
     return this.#source;
@@ -221,6 +268,10 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
     this.#source = source;
     this.#src = src;
 
+    // Deliberately outside the engine config key below, so it reaches the engine
+    // already running.
+    this.#applyRenditionCaps();
+
     // Assigning is always a source change, so it is always announced.
     this.dispatchEvent(new Event('sourcechange'));
 
@@ -237,6 +288,7 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
 
   set preload(value) {
     this.#preload = value;
+
     if (this.#delegate) {
       this.#delegate.preload = value;
     }
@@ -257,6 +309,7 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
     }
 
     if (this.#streamType === value) return;
+
     this.#streamType = value;
     this.dispatchEvent(new HlsMediaEvent('streamtypechange'));
   }
@@ -264,17 +317,15 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   /**
    * Presentation time marking the start of the Live Edge Window.
    *
-   * Derived from the delegate on every read; `NaN` when no delegate is
-   * attached or the stream is not live.
+   * Derived from the delegate on every read; `NaN` when no delegate is attached or the stream is not live.
    */
   get liveEdgeStart() {
     return this.#delegate?.liveEdgeStart ?? Number.NaN;
   }
 
   /**
-   * Seekable range size for live content. `0` for standard live, `Infinity`
-   * for DVR, `NaN` for on-demand or unknown. Fires `targetlivewindowchange`
-   * when the value changes (bridged from the delegate).
+   * Seekable range size for live content. `0` for standard live, `Infinity` for DVR, `NaN` for on-demand or unknown.
+   * Fires `targetlivewindowchange` when the value changes (bridged from the delegate).
    */
   get targetLiveWindow() {
     return this.#delegate?.targetLiveWindow ?? Number.NaN;
@@ -295,10 +346,25 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
       // Read the stored source, not the `source` getter: subclasses override the
       // getter to return what was assigned to them, while the fields below come
       // from what they resolved and handed down (Mux fills in the DRM options).
-      const { type, preferPlayback, drm, engine } = this.#source ?? {};
+      const { type, preferPlayback, drm, engine, maxAutoResolution, capRenditionToPlayerSize, minAutoResolution } =
+        this.#source ?? {};
       const { hlsJs, nativeHls } = engine ?? {};
       const contentType = type ?? inferContentType(this.src);
       const useMse = Hls.isSupported() && contentType === ContentTypes.M3U8 && preferPlayback !== PlaybackTypes.NATIVE;
+
+      if (__DEV__ && !useMse) {
+        const ignored = Object.entries({ maxAutoResolution, capRenditionToPlayerSize, minAutoResolution })
+          .filter(([, value]) => value !== undefined)
+          .map(([key]) => `\`${key}\``);
+
+        if (ignored.length > 0) {
+          const [verb, pronoun] = ignored.length > 1 ? ['require', 'them'] : ['requires', 'it'];
+
+          console.warn(
+            `[vjs-media] ${ignored.join(', ')} ${verb} the hls.js (MSE) engine; native HLS playback ignores ${pronoun}.`
+          );
+        }
+      }
 
       this.#delegate = useMse
         ? new HlsJsOnlyMedia({ config: withDrmSystems(hlsJs, drm) })
@@ -313,6 +379,7 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
       }
 
       this.#delegate.preload = this.preload;
+      this.#applyRenditionCaps();
 
       if (this.#mediaElement) {
         this.#delegate.attach(this.#mediaElement);
@@ -326,10 +393,9 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   }
 
   /**
-   * A native delegate carrying the native half of the source — the DRM
-   * configuration and the native engine options, which it applies the same
-   * precedence to. Its `src` is assigned separately, once the delegate is wired
-   * up, and carries what is set here forward.
+   * A native delegate carrying the native half of the source — the DRM configuration and the native engine options,
+   * which it applies the same precedence to. Its `src` is assigned separately, once the delegate is wired up, and
+   * carries what is set here forward.
    */
   #createNativeDelegate(
     drm: DrmSystemsConfig | undefined,
@@ -359,7 +425,17 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
     };
 
     if (Object.keys(source).length > 0) media.source = source;
+
     return media;
+  }
+
+  /** Push the source's rendition caps down; only the hls.js engine has a lever. */
+  #applyRenditionCaps() {
+    if (this.#delegate instanceof HlsJsOnlyMedia) {
+      this.#delegate.maxAutoResolution = this.#source?.maxAutoResolution;
+      this.#delegate.capRenditionToPlayerSize = this.#source?.capRenditionToPlayerSize;
+      this.#delegate.minAutoResolution = this.#source?.minAutoResolution;
+    }
   }
 
   #stopTargetLoadStartEvent = (event: Event) => {
@@ -368,6 +444,7 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
 
   async #requestLoad() {
     if (this.#loadRequested) return;
+
     await (this.#loadRequested = Promise.resolve());
     this.#loadRequested = null;
     this.load();
@@ -378,13 +455,13 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
   }
 
   /**
-   * Every value the engine is constructed from. Compared structurally, so
-   * equivalent engine options never trigger a rebuild — including nested ones
-   * like `drmSystems`, which a flat comparison would see as changed whenever
-   * the object identity did.
+   * Every value the engine is constructed from. Compared structurally, so equivalent engine options never trigger a
+   * rebuild — including nested ones like `drmSystems`, which a flat comparison would see as changed whenever the object
+   * identity did.
    */
   #engineConfigKey() {
     const { type, preferPlayback, drm, engine } = this.#source ?? {};
+
     return { drm, engine, preferPlayback, contentType: type ?? inferContentType(this.src) };
   }
 
@@ -393,19 +470,18 @@ export class HlsJsMedia extends HTMLVideoElementHost implements HlsMediaProps {
     this.#delegate = null;
     this.#prevEngineConfigKey = null;
     this.#loadRequested = null;
+
     // Delegate teardown already emits `streamtypechange` (bridged); only sync cache.
     if (!this.#isUserStreamType) this.#streamType = StreamTypes.UNKNOWN;
   }
 }
 
 /**
- * hls.js configuration with the source's DRM licensing folded in. hls.js takes
- * `drmSystems` in the same shape as `source.drm`, so the standardized config is
- * what it plays from unless `engine.hlsJs` names servers of its own.
+ * Hls.js configuration with the source's DRM licensing folded in. hls.js takes `drmSystems` in the same shape as
+ * `source.drm`, so the standardized config is what it plays from unless `engine.hlsJs` names servers of its own.
  *
- * hls.js runs key exchange only while `emeEnabled` is set, so configured DRM
- * switches it on — short of an explicit `emeEnabled: false`, which stays a way
- * to describe a source's licensing without acting on it.
+ * Hls.js runs key exchange only while `emeEnabled` is set, so configured DRM switches it on — short of an explicit
+ * `emeEnabled: false`, which stays a way to describe a source's licensing without acting on it.
  */
 function withDrmSystems(
   hlsJs: Partial<HlsJsConfig> | undefined,
@@ -422,5 +498,6 @@ function withDrmSystems(
 function inferContentType(src: string): SourceType {
   const path = src.split(/[?#]/)[0] ?? '';
   if (path.endsWith('.mp4')) return ContentTypes.MP4;
+
   return ContentTypes.M3U8;
 }

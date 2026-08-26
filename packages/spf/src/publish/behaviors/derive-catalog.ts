@@ -1,84 +1,54 @@
 /**
- * **Publish the MSF catalog for the tracks being published.** While a
- * catalog track publisher exists and `state.activeEncodings` +
- * `state.endpoint` describe what is being published, builds the catalog
- * JSON through `config.buildCatalog` (default `buildMsfCatalog`) and sends
- * it as object 0 of a new group on the catalog publisher — re-deriving
- * whenever the inputs change identity, so subscribers always have a
- * current, independently parseable catalog at every group boundary.
- * Config-declared application data tracks (`config.dataTracks`, resolved
- * through the same name filter the serve registry applies) ride every
- * catalog as name + role entries — static, so they add no reactivity.
+ * **Publish the MSF catalog for the tracks being published.** While a catalog track publisher exists and
+ * `state.activeEncodings` + `state.endpoint` describe what is being published, builds the catalog JSON through
+ * `config.buildCatalog` (default `buildMsfCatalog`) and sends it as object 0 of a new group on the catalog publisher —
+ * re-deriving whenever the inputs change identity, so subscribers always have a current, independently parseable
+ * catalog at every group boundary. Config-declared application data tracks (`config.dataTracks`, resolved through the
+ * same name filter the serve registry applies) ride every catalog as name + role entries — static, so they add no
+ * reactivity.
  *
- * **The advertisement is latched across a source switch, mirroring
- * `setupTrackPublishers`.** A device switch re-acquires through a
- * cleanup-first release, so the kind's probe verdict — and with it
- * `activeEncodings[kind]` — vanishes for the length of the re-probe,
- * while the kind's MOQT track publisher deliberately survives
- * (`setupTrackPublishers` latches it: ending the track mid-session would
- * PUBLISH_DONE it for every subscriber). A catalog derived from the
- * encodings alone re-published without the track and then re-added it,
- * and subscribers obey catalogs: every mic switch tore down the viewer's
- * audio subscription and re-joined it at the live edge, where the audio
- * master clock re-anchored at ~zero latency and dragged the whole
- * presentation with it. So a kind whose encoding is absent stays
- * advertised with its last-known config while its capture status says
- * the source is live or coming back (`'active'` / `'acquiring'`) *and*
- * the kind has no completed probe verdict (`encoderSupport[kind]` — the
- * probe clears it alongside the encoding on a re-probe, and re-commits it
- * even when the ladder proves empty or the selection strategy vetoes the
- * kind, either of which is an answer rather than a transient). It leaves
- * the catalog when the source truly leaves (`'idle'`, `'denied'`,
- * `'ended'`, or no status at all), when a completed probe selected
- * nothing, or when the catalog publisher itself is replaced — a rebuilt
- * session re-latches its per-kind PUBLISHes from the current encodings,
- * so a held kind would name a track the new session never published. A
- * switch that resolves to a different config (a mono mic replacing a
- * stereo one) still republishes, because a present encoding always beats
- * the held copy.
- * The follow-up that trade creates — a viewer keeping its subscription
- * across a config change on the same track name — is recorded in the
- * multi-source design record.
+ * **The advertisement is latched across a source switch, mirroring `setupTrackPublishers`.** A device switch
+ * re-acquires through a cleanup-first release, so the kind's probe verdict — and with it `activeEncodings[kind]` —
+ * vanishes for the length of the re-probe, while the kind's MOQT track publisher deliberately survives
+ * (`setupTrackPublishers` latches it: ending the track mid-session would PUBLISH_DONE it for every subscriber). A
+ * catalog derived from the encodings alone re-published without the track and then re-added it, and subscribers obey
+ * catalogs: every mic switch tore down the viewer's audio subscription and re-joined it at the live edge, where the
+ * audio master clock re-anchored at ~zero latency and dragged the whole presentation with it. So a kind whose encoding
+ * is absent stays advertised with its last-known config while its capture status says the source is live or coming back
+ * (`'active'` / `'acquiring'`) _and_ the kind has no completed probe verdict (`encoderSupport[kind]` — the probe clears
+ * it alongside the encoding on a re-probe, and re-commits it even when the ladder proves empty or the selection
+ * strategy vetoes the kind, either of which is an answer rather than a transient). It leaves the catalog when the
+ * source truly leaves (`'idle'`, `'denied'`, `'ended'`, or no status at all), when a completed probe selected nothing,
+ * or when the catalog publisher itself is replaced — a rebuilt session re-latches its per-kind PUBLISHes from the
+ * current encodings, so a held kind would name a track the new session never published. A switch that resolves to a
+ * different config (a mono mic replacing a stereo one) still republishes, because a present encoding always beats the
+ * held copy. The follow-up that trade creates — a viewer keeping its subscription across a config change on the same
+ * track name — is recorded in the multi-source design record.
  *
- * Sends are deduplicated by content, per publisher: the latch makes
- * several input changes re-derive byte-identical catalogs (each
- * capture-status hop, a re-probe resolving to the same config), and each
- * send opens a new group every subscriber must parse. Keyed on the
- * publisher so a rebuilt session's fresh catalog track always receives
- * the current catalog, however recently the previous track carried the
- * same bytes.
+ * Sends are deduplicated by content, per publisher: the latch makes several input changes re-derive byte-identical
+ * catalogs (each capture-status hop, a re-probe resolving to the same config), and each send opens a new group every
+ * subscriber must parse. Keyed on the publisher so a rebuilt session's fresh catalog track always receives the current
+ * catalog, however recently the previous track carried the same bytes.
  *
- * DOM-free pure dispatcher per the setup-actor convention: it reads the
- * publisher slot `setupTrackPublishers` owns and sends frames — it never
- * creates actors. The WebCodecs encoder configs feed the catalog directly:
- * their `codec` fields are already WebCodecs registry strings, which is
- * exactly what MSF §5.2.18 mandates for LOC tracks — except H.264, whose
- * declared string is re-derived to describe the published bitstream
- * (`catalogVideoCodec`), and Opus's samplerate, which declares the 48 kHz
- * decode rate rather than the encoder's input rate
- * (`catalogAudioSamplerate`).
+ * DOM-free pure dispatcher per the setup-actor convention: it reads the publisher slot `setupTrackPublishers` owns and
+ * sends frames — it never creates actors. The WebCodecs encoder configs feed the catalog directly: their `codec` fields
+ * are already WebCodecs registry strings, which is exactly what MSF §5.2.18 mandates for LOC tracks — except H.264,
+ * whose declared string is re-derived to describe the published bitstream (`catalogVideoCodec`), and Opus's samplerate,
+ * which declares the 48 kHz decode rate rather than the encoder's input rate (`catalogAudioSamplerate`).
  *
- * **Decoder init data rides the catalog, not only LOC.** Each kind's
- * `state.encoderInitData` (the `decoderConfig.description` its live
- * encoder reported — `setupEncoderActors`) is emitted as the catalog's
- * `initDataList` + per-track `initRef`. The catalog is the one channel
- * every consumer can read: the per-keyframe LOC Config property is an
- * odd-id MOQ object property that relays and property-blind consumers
- * drop, and an MoQ→HLS origin needs the extradata *before* any media
- * object to build an init segment. The description arrives on the kind's
- * first encoded output — after its encoder actor (whose teardown clears
- * the fact) rebuilds — so it is latched beside the encoding: held through
- * an actor rebuild while the kind's config is unchanged (a device switch
- * must not flap `initRef` off and back on), dropped the moment the config
- * changes (old extradata describes the old config) or the kind leaves the
- * catalog. A config whose bitstream is undecodable without that init
- * data (see `requiresInitData`) is only ever advertised as a complete
- * pair: before the kind's first description report it stays out of the
- * catalog — an `avc1` track without `initRef` is an undecodable
- * declaration a consumer may configure from once and never re-evaluate —
- * and across a config change the previous complete pair holds for the
- * one-frame window until the new description lands, because dropping the
- * track instead would end every subscriber's subscription.
+ * **Decoder init data rides the catalog, not only LOC.** Each kind's `state.encoderInitData` (the
+ * `decoderConfig.description` its live encoder reported — `setupEncoderActors`) is emitted as the catalog's
+ * `initDataList` + per-track `initRef`. The catalog is the one channel every consumer can read: the per-keyframe LOC
+ * Config property is an odd-id MOQ object property that relays and property-blind consumers drop, and an MoQ→HLS origin
+ * needs the extradata _before_ any media object to build an init segment. The description arrives on the kind's first
+ * encoded output — after its encoder actor (whose teardown clears the fact) rebuilds — so it is latched beside the
+ * encoding: held through an actor rebuild while the kind's config is unchanged (a device switch must not flap `initRef`
+ * off and back on), dropped the moment the config changes (old extradata describes the old config) or the kind leaves
+ * the catalog. A config whose bitstream is undecodable without that init data (see `requiresInitData`) is only ever
+ * advertised as a complete pair: before the kind's first description report it stays out of the catalog — an `avc1`
+ * track without `initRef` is an undecodable declaration a consumer may configure from once and never re-evaluate — and
+ * across a config change the previous complete pair holds for the one-frame window until the new description lands,
+ * because dropping the track instead would end every subscriber's subscription.
  *
  * Writes no state; state/context reader only.
  */
@@ -95,16 +65,14 @@ import type { ActiveEncodingsFacts, PublishDataTrackConfig } from './setup-track
 import { AUDIO_TRACK_NAME, resolveDataTracks, SCREEN_TRACK_NAME, VIDEO_TRACK_NAME } from './setup-track-publishers';
 
 /**
- * Structural mirror of `behaviors/dom/acquire-capture-source.ts`'s
- * `CaptureStatus` (DOM-bound behavior, so not importable here) — keep
- * identical.
+ * Structural mirror of `behaviors/dom/acquire-capture-source.ts`'s `CaptureStatus` (DOM-bound behavior, so not
+ * importable here) — keep identical.
  */
 export type CaptureSourceStatus = 'idle' | 'acquiring' | 'active' | 'denied' | 'ended';
 
 /**
- * Structural mirror of `behaviors/dom/probe-encoder-support.ts`'s
- * `EncoderSupportFacts` (same non-importable DOM boundary as
- * `ActiveEncodingsFacts` above) — keep identical.
+ * Structural mirror of `behaviors/dom/probe-encoder-support.ts`'s `EncoderSupportFacts` (same non-importable DOM
+ * boundary as `ActiveEncodingsFacts` above) — keep identical.
  */
 export interface EncoderSupportByKind {
   camera?: VideoEncoderConfig[];
@@ -113,9 +81,8 @@ export interface EncoderSupportByKind {
 }
 
 /**
- * Structural mirror of `behaviors/dom/setup-encoder-actors.ts`'s
- * `EncoderInitDataFacts` (same non-importable DOM boundary as the mirrors
- * above) — keep identical.
+ * Structural mirror of `behaviors/dom/setup-encoder-actors.ts`'s `EncoderInitDataFacts` (same non-importable DOM
+ * boundary as the mirrors above) — keep identical.
  */
 export interface EncoderInitDataByKind {
   camera?: Uint8Array;
@@ -141,9 +108,8 @@ export interface DeriveCatalogConfig {
   /** Catalog-JSON builder seam; default `buildMsfCatalog`. */
   buildCatalog?: BuildMsfCatalog;
   /**
-   * Application data tracks published on the broadcast beside the media
-   * (`setupTrackPublishers` registers and serves them); advertised on
-   * every catalog so subscribers can discover them.
+   * Application data tracks published on the broadcast beside the media (`setupTrackPublishers` registers and serves
+   * them); advertised on every catalog so subscribers can discover them.
    */
   dataTracks?: PublishDataTrackConfig[];
 }
@@ -153,58 +119,52 @@ type DeriveCatalogFsmState = 'idle' | 'publishing-catalog';
 const textEncoder = new TextEncoder();
 
 /**
- * Whether the kind's source is live or mid-switch — the states in which a
- * missing encoding is a re-probe transient rather than a removal.
+ * Whether the kind's source is live or mid-switch — the states in which a missing encoding is a re-probe transient
+ * rather than a removal.
  */
 function sourceHolds(status: CaptureSourceStatus | undefined): boolean {
   return status === 'active' || status === 'acquiring';
 }
 
 /**
- * Whether the config's bitstream can only be decoded with out-of-band
- * init data. H.264 in its default `avc` (AVCC) bitstream format needs
- * the avcC `description` whatever the requested fourcc — WebCodecs puts
- * the parameter sets in the description, never in-band, unless `annexb`
- * is requested — and AAC (`mp4a.*`) needs its AudioSpecificConfig.
- * VP8/VP9/AV1 and Opus are self-describing. Covers the codecs the config
- * seam can produce today — extend alongside the probe ladder.
+ * Whether the config's bitstream can only be decoded with out-of-band init data. H.264 in its default `avc` (AVCC)
+ * bitstream format needs the avcC `description` whatever the requested fourcc — WebCodecs puts the parameter sets in
+ * the description, never in-band, unless `annexb` is requested — and AAC (`mp4a.*`) needs its AudioSpecificConfig.
+ * VP8/VP9/AV1 and Opus are self-describing. Covers the codecs the config seam can produce today — extend alongside the
+ * probe ladder.
  */
 function requiresInitData(config: VideoEncoderConfig | AudioEncoderConfig): boolean {
   if (config.codec.startsWith('avc1') || config.codec.startsWith('avc3')) {
     return (config as VideoEncoderConfig).avc?.format !== 'annexb';
   }
+
   return config.codec.startsWith('mp4a');
 }
 
 /**
- * The codec string the catalog should declare for a video encoding — the
- * one place a consumer learns the bitstream contract, so it must describe
- * the stream as published, not as requested (issue #23):
+ * The codec string the catalog should declare for a video encoding — the one place a consumer learns the bitstream
+ * contract, so it must describe the stream as published, not as requested (issue #23):
  *
- * - An `annexb` H.264 config publishes start codes with in-band parameter
- *   sets — that is `avc3`, whatever fourcc was requested. An `avc1` label
- *   sends length-prefix readers parsing the SPS start code as a NAL
- *   length. (No avcC exists in this format, so the requested
- *   profile/level suffix is the best available and passes through.)
- * - An AVCC config's avcC carries the profile/constraints/level the
- *   encoder actually emitted, which the requested suffix may not match —
- *   an encoder may honor the profile but pick its own constraint flags
- *   and level — so the suffix is re-derived from the avcC riding the same
- *   catalog.
+ * - An `annexb` H.264 config publishes start codes with in-band parameter sets — that is `avc3`, whatever fourcc was
+ *   requested. An `avc1` label sends length-prefix readers parsing the SPS start code as a NAL length. (No avcC exists
+ *   in this format, so the requested profile/level suffix is the best available and passes through.)
+ * - An AVCC config's avcC carries the profile/constraints/level the encoder actually emitted, which the requested suffix
+ *   may not match — an encoder may honor the profile but pick its own constraint flags and level — so the suffix is
+ *   re-derived from the avcC riding the same catalog.
  */
 function catalogVideoCodec(config: VideoEncoderConfig, initData: Uint8Array | undefined): string {
   if (!config.codec.startsWith('avc1') && !config.codec.startsWith('avc3')) return config.codec;
+
   if (config.avc?.format === 'annexb') return `avc3${config.codec.slice(4)}`;
+
   return (initData && avcCodecFromAvcC(initData)) ?? config.codec;
 }
 
 /**
- * The sample rate the catalog should declare for an audio encoding. An
- * Opus stream decodes at 48 kHz whatever input rate the encoder was fed
- * (RFC 7845 §5.1 — the encapsulated rate is informational only), so the
- * configured capture rate would make a trusting reader derive the wrong
- * frame period (issue #25). Other codecs decode at the configured rate,
- * which passes through.
+ * The sample rate the catalog should declare for an audio encoding. An Opus stream decodes at 48 kHz whatever input
+ * rate the encoder was fed (RFC 7845 §5.1 — the encapsulated rate is informational only), so the configured capture
+ * rate would make a trusting reader derive the wrong frame period (issue #25). Other codecs decode at the configured
+ * rate, which passes through.
  */
 function catalogAudioSamplerate(config: AudioEncoderConfig): number {
   return config.codec === 'opus' ? 48_000 : config.sampleRate;
@@ -218,9 +178,11 @@ export function catalogInputFor(
   dataTracks: readonly PublishDataTrackConfig[] = []
 ): MsfCatalogInput {
   const input: MsfCatalogInput = { namespace: endpoint.namespace };
+
   if (dataTracks.length > 0) {
     input.data = dataTracks.map(({ name, role }) => (role === undefined ? { name } : { name, role }));
   }
+
   if (encodings.camera) {
     input.video = {
       name: VIDEO_TRACK_NAME,
@@ -232,6 +194,7 @@ export function catalogInputFor(
       initData: initData.camera,
     };
   }
+
   if (encodings.screen) {
     input.screen = {
       name: SCREEN_TRACK_NAME,
@@ -243,6 +206,7 @@ export function catalogInputFor(
       initData: initData.screen,
     };
   }
+
   if (encodings.audio) {
     input.audio = {
       name: AUDIO_TRACK_NAME,
@@ -253,6 +217,7 @@ export function catalogInputFor(
       initData: initData.audio,
     };
   }
+
   return input;
 }
 
@@ -294,11 +259,9 @@ function deriveCatalogSetup({
   const advertisedInitData: EncoderInitDataByKind = {};
 
   /**
-   * The publisher the latch memory describes. A new catalog publisher
-   * means a rebuilt session whose publisher cluster re-latches its
-   * per-kind PUBLISHes from the *current* encodings — a kind held from
-   * the old session would name a track the new session has never
-   * published. The memory resets with it.
+   * The publisher the latch memory describes. A new catalog publisher means a rebuilt session whose publisher cluster
+   * re-latches its per-kind PUBLISHes from the _current_ encodings — a kind held from the old session would name a
+   * track the new session has never published. The memory resets with it.
    */
   let lastPublisher: TrackPublisherActor | undefined;
 
@@ -348,6 +311,7 @@ function deriveCatalogSetup({
 
           const resolve = <Kind extends keyof ActiveEncodingsFacts>(kind: Kind): ActiveEncodingsFacts[Kind] => {
             const current = encodings[kind];
+
             if (current !== undefined) {
               // The kind's description arrives on its first encoded output
               // — after the actor whose teardown cleared the fact rebuilt —
@@ -365,11 +329,14 @@ function deriveCatalogSetup({
               // pair until its description exists — the previous complete
               // advertisement (or none, before the first report) stands.
               if (held === undefined && requiresInitData(current)) return advertised[kind];
+
               if (held === undefined) delete advertisedInitData[kind];
               else advertisedInitData[kind] = held;
+
               advertised[kind] = current;
               return current;
             }
+
             // Hold only while the kind has no completed probe verdict: the
             // probe clears its kind's support alongside the encoding when a
             // switch re-probes, so their joint absence is the transient. A
@@ -380,6 +347,7 @@ function deriveCatalogSetup({
             // The held kind's `advertisedInitData` entry stays untouched on
             // this path — the hold covers the pair.
             if (sourceHolds(statuses[kind]) && support?.[kind] === undefined) return advertised[kind];
+
             delete advertised[kind];
             delete advertisedInitData[kind];
             return undefined;
@@ -388,14 +356,18 @@ function deriveCatalogSetup({
           const camera = resolve('camera');
           const screen = resolve('screen');
           const audio = resolve('audio');
+
           if (camera) resolved.camera = camera;
+
           if (screen) resolved.screen = screen;
+
           if (audio) resolved.audio = audio;
 
           const text = (config.buildCatalog ?? buildMsfCatalog)(
             catalogInputFor(endpoint, resolved, advertisedInitData, dataTracks)
           );
           if (lastSent && lastSent.publisher === publisher && lastSent.text === text) return;
+
           lastSent = { publisher, text };
           // The catalog publisher runs groupPerFrame: each send is object 0
           // of a fresh group — every update is a random-access point.

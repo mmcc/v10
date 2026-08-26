@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import type { MaybeResolvedPresentation } from '../../../media/types';
 import { encodeSetup } from '../../../network/moqt/control-messages';
@@ -15,6 +16,7 @@ function makeDeps(initial: { presentation?: MaybeResolvedPresentation; preload?:
     loadActivated: signal<boolean | undefined>(undefined),
   };
   const context = { moqSessionActor: signal<MoqSessionActor | undefined>(undefined) };
+
   return { state, context };
 }
 
@@ -26,6 +28,7 @@ function fakeTransportFactory() {
       incomingUnidirectionalStreams: new ReadableStream({
         start(controller) {
           const pipe = new TransformStream<Uint8Array, Uint8Array>();
+
           void pipe.writable.getWriter().write(encodeSetup([]));
           controller.enqueue(pipe.readable);
         },
@@ -39,8 +42,10 @@ function fakeTransportFactory() {
       close: () => {},
       closed: new Promise(() => {}),
     };
+
     return { transport, ready: Promise.resolve() };
   };
+
   return { createMoqTransport, connects };
 }
 
@@ -99,6 +104,7 @@ describe('setupMoqSession', () => {
     state.presentation.set({ url: 'moqt://relay2.example.com/live#msf:live--catalog' });
     await vi.waitFor(() => {
       const actor = context.moqSessionActor.get();
+
       expect(actor).toBeDefined();
       expect(actor).not.toBe(firstActor);
     });

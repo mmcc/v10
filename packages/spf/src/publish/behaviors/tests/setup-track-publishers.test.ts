@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import { parseLocProperties } from '../../../media/moq/loc';
 import { REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
@@ -24,11 +25,13 @@ const disposals: (() => void)[] = [];
 function makeSessionActor() {
   const pair = createTransportPair();
   const peer = createMoqtSession(pair.server, {});
+
   disposals.push(() => peer.destroy());
   const actor: PublishSessionActor = createPublishSessionActor({
     endpoint: ENDPOINT,
     connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
   });
+
   disposals.push(() => actor.destroy());
   return { actor, peer, server: pair.server };
 }
@@ -47,6 +50,7 @@ function setupBehavior(config: SetupTrackPublishersConfig = {}) {
     dataTrackProducers: signal<SetupTrackPublishersContext['dataTrackProducers']>(undefined),
   };
   const reactor = setupTrackPublishers.setup({ state, context, config });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -73,9 +77,11 @@ describe('setupTrackPublishers', () => {
     // Registration is local under announce-and-serve — the observable
     // proof is that the peer's SUBSCRIBEs are answered.
     const aliases: number[] = [];
+
     for (const trackName of ['catalog', 'video', 'audio'] as const) {
       peer.subscribe({ trackNamespace: ENDPOINT.namespace, trackName }, { onOk: (ok) => aliases.push(ok.trackAlias) });
     }
+
     await vi.waitFor(() => {
       expect(aliases).toHaveLength(3);
       expect(actor.snapshot.get().context.subscriberCount).toBe(3);
@@ -99,6 +105,7 @@ describe('setupTrackPublishers', () => {
     // The unregistered track is refused, the registered one served.
     const errors: number[] = [];
     const audioAliases: number[] = [];
+
     peer.subscribe(
       { trackNamespace: ENDPOINT.namespace, trackName: 'video' },
       { onError: (error) => errors.push(error.errorCode) }
@@ -128,6 +135,7 @@ describe('setupTrackPublishers', () => {
 
     // Screen share starts mid-session — additive, camera's publisher untouched.
     const cameraPublisher = context.videoTrackPublisher.get()!;
+
     state.activeEncodings.set({ camera: VIDEO_CONFIG, screen: SCREEN_CONFIG });
 
     await vi.waitFor(() => {
@@ -136,6 +144,7 @@ describe('setupTrackPublishers', () => {
     expect(context.videoTrackPublisher.get()).toBe(cameraPublisher);
 
     const screenAliases: number[] = [];
+
     peer.subscribe(
       { trackNamespace: ENDPOINT.namespace, trackName: 'screen' },
       { onOk: (ok) => screenAliases.push(ok.trackAlias) }
@@ -165,6 +174,7 @@ describe('setupTrackPublishers', () => {
     expect(publisher.snapshot.get().context.openedGroups).toBe(0);
 
     const payloads: Uint8Array[] = [];
+
     peer.subscribe(
       { trackNamespace: ENDPOINT.namespace, trackName: 'video' },
       { onObject: (object) => payloads.push(object.payload) }
@@ -232,12 +242,14 @@ describe('setupTrackPublishers', () => {
       expect(actor.snapshot.get().context.status).toBe('live');
     });
     const producer = context.dataTrackProducers.get()!.overlay!;
+
     expect(producer.trackName).toBe('overlay');
 
     // Unbound (pull-through): a publish before any subscription is dropped.
     producer.publish(new TextEncoder().encode('early'), { timestampUs: 1 });
 
     const objects: MoqtObject[] = [];
+
     peer.subscribe(
       { trackNamespace: ENDPOINT.namespace, trackName: 'overlay' },
       { onObject: (object) => objects.push(object) }
@@ -262,6 +274,7 @@ describe('setupTrackPublishers', () => {
 
   it('drops data tracks whose name collides with a reserved or earlier track, or cannot key a record', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
     disposals.push(() => warn.mockRestore());
     const { actor, peer } = makeSessionActor();
     const { state, context } = setupBehavior({
@@ -275,6 +288,7 @@ describe('setupTrackPublishers', () => {
         { name: 'constructor' },
       ],
     });
+
     // One warning per dropped config: reserved `video`, duplicate
     // `overlay`, and the two prototype-member names.
     expect(warn).toHaveBeenCalledTimes(4);
@@ -293,6 +307,7 @@ describe('setupTrackPublishers', () => {
 
     const errors: number[] = [];
     const overlayAliases: number[] = [];
+
     peer.subscribe(
       { trackNamespace: ENDPOINT.namespace, trackName: 'video' },
       { onError: (error) => errors.push(error.errorCode) }
@@ -328,6 +343,7 @@ describe('setupTrackPublishers', () => {
     });
 
     const payloads: Uint8Array[] = [];
+
     peer.subscribe(
       { trackNamespace: ENDPOINT.namespace, trackName: 'overlay' },
       { onObject: (object) => payloads.push(object.payload) }

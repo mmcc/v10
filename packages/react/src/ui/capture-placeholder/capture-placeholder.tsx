@@ -14,20 +14,17 @@ import { renderElement } from '../../utils/use-render';
 const DISPLAY_NAME = 'CapturePlaceholder';
 
 export interface CapturePlaceholderProps
-  extends UIComponentProps<'div', CapturePlaceholderCore.State>,
-    CapturePlaceholderCore.Props {}
+  extends UIComponentProps<'div', CapturePlaceholderCore.State>, CapturePlaceholderCore.Props {}
 
 /**
- * A placeholder shown over the preview area before capture is active.
- * Authored children pass through as-is; without them it renders the core's
- * translated guidance text (an enable-devices CTA, a progress hint, or
- * permission guidance). Visibility is a styling concern: skins show/hide it
- * via the `data-capture-state` attribute.
+ * A placeholder shown over the preview area before capture is active. Authored children pass through as-is; without
+ * them it renders the core's translated guidance text (an enable-devices CTA, a progress hint, or permission guidance).
+ * Visibility is a styling concern: skins show/hide it via the `data-capture-state` attribute.
  *
  * @example
- * ```tsx
- * <CapturePlaceholder />
- * ```
+ *   ```tsx
+ *   <CapturePlaceholder />;
+ *   ```;
  */
 export const CapturePlaceholder = forwardRef(function CapturePlaceholder(
   componentProps: CapturePlaceholderProps,
@@ -38,10 +35,12 @@ export const CapturePlaceholder = forwardRef(function CapturePlaceholder(
   const captureSource = usePlayer(selectCaptureSource);
   const translator = useTranslator();
   const [core] = useState(() => new CapturePlaceholderCore());
+
   core.setProps({ label });
 
   if (!captureSource) {
     if (__DEV__) logMissingFeature(DISPLAY_NAME, selectCaptureSource.displayName ?? 'captureSource');
+
     return null;
   }
 

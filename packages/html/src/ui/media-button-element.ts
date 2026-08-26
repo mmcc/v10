@@ -16,12 +16,13 @@ import {
 import { isText, resolveText, type Text, translateText } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
 import type { State } from '@videojs/store';
+import { isBoolean, isObject } from '@videojs/utils/predicate';
 
 import { i18nContext } from '../i18n/context';
 import { I18nController } from '../i18n/controller';
 import type { PlayerController } from '../player/player-controller';
 import { AriaKeyShortcutsController } from './hotkey/aria-key-shortcuts-controller';
-import { MediaElement } from './media-element';
+import { UIElement } from './ui-element';
 
 type LabelParams = Record<string, string | number>;
 type LabelParamsCore<Core extends MediaButtonComponent> = Core & {
@@ -36,7 +37,7 @@ function getLabelParams<Core extends MediaButtonComponent>(
 }
 
 /** Abstract base for HTML custom elements that render a media-control button. */
-export abstract class MediaButtonElement<Core extends MediaButtonComponent> extends MediaElement {
+export abstract class MediaButtonElement<Core extends MediaButtonComponent> extends UIElement {
   static override properties: PropertyDeclarationMap = {
     label: { type: String },
     disabled: { type: Boolean },
@@ -83,6 +84,7 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
 
   override connectedCallback(): void {
     super.connectedCallback();
+
     if (this.destroyed) return;
 
     if (this.hotkeyAction && !this.#hotkeyRegistry) {
@@ -124,8 +126,10 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
   getResolvedLabel(): string | undefined {
     const media = this.mediaState.value;
     if (!media) return undefined;
+
     this.core.setMedia(media);
     const state = this.core.getState() as InferComponentState<Core>;
+
     return translateText(this.core.getLabel(state), this.#i18n.value, getLabelParams(this.core, state));
   }
 
@@ -146,22 +150,33 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
     this.core.setMedia(media);
     const state = this.core.getState() as InferComponentState<Core>;
     const attrs = (this.core.getAttrs?.(state) ?? {}) as Record<string, unknown>;
+
     if (isText(attrs['aria-label'])) {
       attrs['aria-label'] = translateText(attrs['aria-label'], this.#i18n.value, getLabelParams(this.core, state));
     }
+
     applyElementProps(this, {
       ...attrs,
       'aria-keyshortcuts': this.#hotkeyRegistry?.aria,
+      // A button whose core reports itself hidden takes the real attribute, not
+      // just the data one: `data-hidden` is a styling hook a skin may or may not
+      // act on, where `hidden` removes the control the way the React components
+      // do by rendering nothing.
+      ...(isHideable(state) && { hidden: state.hidden ? '' : undefined }),
     });
     applyStateDataAttrs(this, state, this.stateAttrMap);
   }
 
   #syncHotkeyShortcut(): void {
     const shortcut = this.getShortcut();
-
     if (shortcut === this.#lastHotkeyShortcut) return;
 
     this.#lastHotkeyShortcut = shortcut;
     this.dispatchEvent(new CustomEvent(HOTKEY_SHORTCUT_CHANGE_EVENT));
   }
+}
+
+/** Whether a button's core reports whether it should be shown at all. */
+function isHideable(state: unknown): state is { hidden: boolean } {
+  return isObject(state) && isBoolean((state as { hidden?: unknown }).hidden);
 }

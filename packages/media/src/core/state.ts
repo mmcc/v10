@@ -24,9 +24,7 @@ export interface MediaPlaybackState {
    * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/ended
    */
   ended: boolean;
-  /**
-   * Whether playback has started (played or seeked).
-   */
+  /** Whether playback has started (played or seeked). */
   started: boolean;
   /**
    * Whether playback is stalled waiting for data.
@@ -69,6 +67,14 @@ export interface MediaVolumeState {
    * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/volume
    */
   volumeAvailability: MediaFeatureAvailability;
+  /**
+   * Whether the media can be muted. Separate from `volumeAvailability` because the two come apart: an embed can take a
+   * mute command while offering no way to set a level, and iOS Safari refuses a volume write on media that mutes
+   * perfectly well.
+   *
+   * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/muted
+   */
+  mutedAvailability: MediaFeatureAvailability;
   /**
    * Set volume (clamped 0-1). Returns the clamped value.
    *
@@ -137,8 +143,8 @@ export interface MediaStreamTypeState {
   /**
    * Current stream delivery type.
    *
-   * Components use this to toggle live-specific UI (e.g. a live indicator,
-   * a "jump to live edge" affordance, or hiding the time display).
+   * Components use this to show live-specific UI (for example, a live indicator or a "jump to live edge" button) or
+   * hide the time display.
    *
    * @see {@link MediaStreamTypes} for the canonical string values.
    * @see https://github.com/video-dev/media-ui-extensions/blob/main/proposals/0010-stream-type.md
@@ -148,29 +154,29 @@ export interface MediaStreamTypeState {
 
 /** Resolved content metadata exposed by the player store. */
 export interface MediaMetadataState {
-  /** The resolved content title. */
-  contentTitle: string;
-  /** Set or clear the user title override. */
-  setContentTitle(value: string | null): void;
-  /** Set or clear the fallback used when neither the user nor media supplies a title. */
-  setDefaultContentTitle(value: string | null): void;
+  /** The resolved content title. Set it through the player, not through the store. */
+  title: string;
+  /**
+   * The resolved poster URL, independent of the media element's own `poster`. Set it through the player, not through
+   * the store.
+   */
+  poster: string;
 }
 
 export interface MediaLiveState {
   /**
-   * Presentation time marking the start of the Live Edge Window.
+   * Playback time where the live edge begins.
    *
-   * Playing at the live edge when `currentTime >= liveEdgeStart`. `NaN`
-   * when the stream isn't live or the value is unknown.
+   * Playback is live when `currentTime >= liveEdgeStart`. `NaN` when the stream is not live or the value is unknown.
    *
    * @see https://github.com/video-dev/media-ui-extensions/blob/main/proposals/0007-live-edge.md
    */
   liveEdgeStart: number;
   /**
-   * Offset representing the seekable range size for live content.
+   * Describes the kind of live window available. This value is not a duration.
    *
-   * `0` for standard latency live, `Infinity` for DVR, `NaN` for on-demand
-   * or unknown.
+   * `0` for a sliding live window, `Infinity` for a live event with playback history, and `NaN` for on-demand or
+   * unknown.
    */
   targetLiveWindow: number;
 }
@@ -227,8 +233,8 @@ export interface MediaControlsState {
   /**
    * Keep controls visible during a sustained interaction.
    *
-   * The returned function releases the lock. Multiple concurrent locks are
-   * supported and each release function is idempotent.
+   * The returned function releases the lock. Multiple concurrent locks are supported and each release function is
+   * idempotent.
    */
   requestControlsLock(): () => void;
   /** Toggle controls visibility. Returns the new `controlsVisible` value. */
@@ -328,14 +334,19 @@ export interface MediaTextTrackState {
   thumbnailCues: MediaTextCue[];
   /** The `<track>` element's `src` for resolving relative cue text URLs. */
   thumbnailTrackSrc: string | null;
+  /**
+   * The media element's CORS mode, mapped through the CORS-settings-attribute rules, or `null` when it is not in CORS
+   * mode. Thumbnail UI fetches the sprite sheets the cues point at with this mode, since a cross-origin `<track>` only
+   * loads at all when the media element is CORS-enabled.
+   */
+  thumbnailTrackCrossOrigin: 'anonymous' | 'use-credentials' | null;
   /** All text tracks available on the media element. */
   textTrackList: MediaTextTrack[];
   /** Whether captions/subtitles are currently enabled. */
   subtitlesShowing: boolean;
   /**
-   * Toggle captions/subtitles visibility. Showing restores the track that was
-   * last showing, or the first caption/subtitle track when there is none.
-   * Returns the new enabled value.
+   * Toggle captions/subtitles visibility. Showing restores the track that was last showing, or the first
+   * caption/subtitle track when there is none. Returns the new enabled value.
    */
   toggleSubtitles(forceShow?: boolean): boolean;
   /** Select a captions/subtitles track by menu value, or disable with `"off"`. */
@@ -379,10 +390,7 @@ export interface MediaPublishState {
   publishStartedAt: number;
   /** The failure that moved `publishState` to `error`, or `null` if none. */
   publishError: ErrorLike | null;
-  /**
-   * Start publishing. Resolves when the session is `live`; rejects when it
-   * fails. Requires an active capture source.
-   */
+  /** Start publishing. Resolves when the session is `live`; rejects when it fails. Requires an active capture source. */
   publish(): Promise<void>;
   /** Stop publishing and tear the session down. */
   unpublish(): void;
@@ -396,10 +404,9 @@ export interface MediaCaptureSourceState {
   /** Whether the mic is an explicit capture source (audio-only; video intent still implies the mic). */
   micActive: boolean;
   /**
-   * Whether the lifecycle in `micState` — including a terminal
-   * `denied`/`ended` parked after the pipeline consumed `micActive` —
-   * belongs to an explicitly requested mic. Stays `false` for a mic
-   * acquired only as a side effect of video intent.
+   * Whether the lifecycle in `micState` — including a terminal `denied`/`ended` parked after the pipeline consumed
+   * `micActive` — belongs to an explicitly requested mic. Stays `false` for a mic acquired only as a side effect of
+   * video intent.
    */
   micExplicit: boolean;
   /** Camera pipeline lifecycle. */

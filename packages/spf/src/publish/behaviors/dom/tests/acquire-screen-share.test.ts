@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
 import {
@@ -28,6 +29,7 @@ function setupAcquire() {
   const state = makeState();
   const context = makeContext();
   const reactor = acquireScreenShare.setup({ state, context });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -74,6 +76,7 @@ const asStream = (stream: FakeMediaStream) => stream as unknown as MediaStream;
 describe('acquireScreenShare', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -96,6 +99,7 @@ describe('acquireScreenShare', () => {
     expect(getUserMedia).not.toHaveBeenCalled();
     expect(context.screenStream.get()).toBe(asStream(displayStream));
     expect(state.screenTracks.get()?.width).toBe(1920);
+
     // Screen content favors legibility — the hint steers browser encoding
     // heuristics (design record, "Encoder budget & degradation").
     for (const track of displayStream.getVideoTracks()) {
@@ -105,6 +109,7 @@ describe('acquireScreenShare', () => {
 
   it('releases the screen stream when deactivated', async () => {
     const displayStream = new FakeMediaStream([new FakeMediaStreamTrack('video')]);
+
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(displayStream));
     const { state, context } = setupAcquire();
 
@@ -114,12 +119,14 @@ describe('acquireScreenShare', () => {
     });
 
     const acquired = displayStream.getTracks();
+
     state.screenShareActive.set(false);
 
     await vi.waitFor(() => {
       expect(state.screenShareState.get()).toBe('idle');
       expect(context.screenStream.get()).toBeUndefined();
     });
+
     for (const track of acquired) expect(track.stop).toHaveBeenCalled();
   });
 
@@ -148,6 +155,7 @@ describe('acquireScreenShare', () => {
   it('releases and lands in ended when the browser-UI "Stop sharing" ends the track', async () => {
     const videoTrack = new FakeMediaStreamTrack('video');
     const displayStream = new FakeMediaStream([videoTrack]);
+
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(displayStream));
     const { state, context } = setupAcquire();
 
@@ -174,6 +182,7 @@ describe('acquireScreenShare', () => {
 
   it('maps a terminal acquisition failure to a capture error and consumes the intent', async () => {
     const failure = Object.assign(new Error('display busy'), { name: 'NotReadableError' });
+
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockRejectedValue(failure);
     const { state, context } = setupAcquire();
 
@@ -195,6 +204,7 @@ describe('acquireScreenShare', () => {
   it('stops the owned stream on destroy', async () => {
     const videoTrack = new FakeMediaStreamTrack('video');
     const displayStream = new FakeMediaStream([videoTrack]);
+
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(displayStream));
     const { state, context, reactor } = setupAcquire();
 

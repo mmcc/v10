@@ -11,13 +11,13 @@ import '@app/styles.css';
 //   ?relay=<url>       relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>    publish namespace for ?real (default: random name)
 //   ?styling=tailwind  use the Tailwind skin twin
-
 import { SandboxI18nProvider } from '@app/shared/react/sandbox-i18n';
 import type { Styling } from '@app/types';
 import { createPlayer, useComposedRefs, useMediaInstance } from '@videojs/react';
 import { MoqPublishVideo, PublisherSkin, PublisherSkinTailwind, publisherFeatures } from '@videojs/react/publisher';
 import { type ComponentProps, forwardRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
+
 import { FakePublishMedia } from '../moq-publisher/fake-media';
 
 const params = new URLSearchParams(location.search);
@@ -33,8 +33,8 @@ if (styling === 'css') await import('@videojs/react/publisher/skin.css');
 const { Provider } = createPlayer({ features: publisherFeatures });
 
 /**
- * Fake twin of `MoqPublishVideo` — the same preview `<video>` wired to
- * `FakePublishMedia` (real capture, simulated publish session and stats).
+ * Fake twin of `MoqPublishVideo` — the same preview `<video>` wired to `FakePublishMedia` (real capture, simulated
+ * publish session and stats).
  */
 const FakePublishVideo = forwardRef<HTMLVideoElement, ComponentProps<'video'>>(function FakePublishVideo(props, ref) {
   const media = useMediaInstance(FakePublishMedia);
@@ -56,7 +56,7 @@ function App() {
   return (
     <SandboxI18nProvider>
       <Provider>
-        <Skin className="aspect-video w-full max-w-4xl mx-auto">
+        <Skin className="mx-auto aspect-video w-full max-w-4xl">
           {real ? <MoqPublishVideo publishEndpoint={relay} publishNamespace={namespace} /> : <FakePublishVideo />}
         </Skin>
       </Provider>

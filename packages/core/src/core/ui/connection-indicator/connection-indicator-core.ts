@@ -2,6 +2,7 @@ import type { MediaConnectionQuality, MediaPublishStatsState } from '@videojs/me
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import {
   connectionFairText,
@@ -48,8 +49,11 @@ export class ConnectionIndicatorCore {
     if (label) return label;
 
     if (state.quality === 'good') return connectionGoodText;
+
     if (state.quality === 'fair') return connectionFairText;
+
     if (state.quality === 'poor') return connectionPoorText;
+
     return connectionUnknownText;
   }
 
@@ -68,6 +72,7 @@ export class ConnectionIndicatorCore {
 
   getState(): ConnectionIndicatorState {
     const media = this.#media!;
+
     this.state.patch({ quality: media.connectionQuality });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });
 

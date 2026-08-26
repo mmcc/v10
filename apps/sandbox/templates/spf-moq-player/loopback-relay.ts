@@ -1,22 +1,20 @@
 /**
  * Loopback MoQ relay — a synthetic MSF publisher for the sandbox.
  *
- * There is no public relay that serves draft-ietf-moq-msf-01 catalogs yet
- * (Phase 0 interop is still owed), so this stands in for one: it speaks real
- * draft-19 bytes over an in-memory `MoqtTransport` and publishes real
- * WebCodecs-encoded media, which is enough to drive the whole engine —
- * catalog → selection → subscribe → decode → canvas + AudioContext.
+ * There is no public relay that serves draft-ietf-moq-msf-01 catalogs yet (Phase 0 interop is still owed), so this
+ * stands in for one: it speaks real draft-19 bytes over an in-memory `MoqtTransport` and publishes real
+ * WebCodecs-encoded media, which is enough to drive the whole engine — catalog → selection → subscribe → decode →
+ * canvas + AudioContext.
  *
- * The wire encoding here is written from the specs rather than reusing
- * `network/moqt`'s encoders (they aren't public API, and a second
- * independent implementation is worth more as a check on the decoder than a
- * round-trip against ourselves would be).
+ * The wire encoding here is written from the specs rather than reusing `network/moqt`'s encoders (they aren't public
+ * API, and a second independent implementation is worth more as a check on the decoder than a round-trip against
+ * ourselves would be).
  *
  * Published tracks (subscribe lazily starts a producer per subscription):
  *
  * - `video-hi` — VP8 640×360, ~1.2 Mbps
  * - `video-lo` — VP8 320×180, ~300 Kbps
- * - `audio`    — Opus 48 kHz stereo, 64 Kbps
+ * - `audio` — Opus 48 kHz stereo, 64 Kbps
  */
 import type { CreateMoqTransport } from '@videojs/spf/moq';
 
@@ -37,9 +35,8 @@ const MESSAGE_TYPE = {
 const ERROR_INVALID_RANGE = 0x11;
 
 /**
- * SUBGROUP_HEADER stream type: subgroup-id mode `zero`, default publisher
- * priority, objects carry a Properties field, not end-of-group.
- * `0b0011_0001` — see §11.4.2 for the flag layout.
+ * SUBGROUP_HEADER stream type: subgroup-id mode `zero`, default publisher priority, objects carry a Properties field,
+ * not end-of-group. `0b0011_0001` — see §11.4.2 for the flag layout.
  */
 const SUBGROUP_HEADER_TYPE = 0x31;
 
@@ -47,14 +44,14 @@ const SUBGROUP_HEADER_TYPE = 0x31;
 const LOC_TIMESTAMP = 0x06;
 
 /**
- * The vi64 varint of draft-15+ (§1.4.1) — leading ones on the first byte
- * give the encoded length minus one, so an L-byte encoding carries 7L value
- * bits. NOT the QUIC RFC 9000 varint.
+ * The vi64 varint of draft-15+ (§1.4.1) — leading ones on the first byte give the encoded length minus one, so an
+ * L-byte encoding carries 7L value bits. NOT the QUIC RFC 9000 varint.
  */
 function varintByteLength(value: number): number {
   for (let length = 1; length < 8; length++) {
     if (value < 2 ** (7 * length)) return length;
   }
+
   return 8;
 }
 
@@ -74,18 +71,24 @@ class Writer {
     const length = varintByteLength(value);
     const tail: number[] = [];
     let remaining = value;
+
     for (let i = length - 1; i >= 1; i--) {
       tail[i - 1] = remaining % 256;
       remaining = Math.floor(remaining / 256);
     }
+
     const prefix = length === 1 ? 0 : (0xff << (9 - length)) & 0xff;
+
     this.u8(prefix | remaining);
+
     for (const byte of tail) this.u8(byte);
+
     return this;
   }
 
   bytes(source: Uint8Array): this {
     for (const byte of source) this.#bytes.push(byte);
+
     return this;
   }
 
@@ -111,20 +114,26 @@ class Reader {
   varint(): number {
     const first = this.bytes[this.#offset];
     if (first === undefined) throw new Error('varint: out of bounds');
+
     let length = 1;
     let mask = 0x80;
+
     while (length <= 8 && (first & mask) !== 0) {
       length++;
       mask >>= 1;
     }
+
     let value = length <= 8 ? first & (0xff >> length) : 0;
+
     for (let i = 1; i < length; i++) value = value * 256 + this.bytes[this.#offset + i]!;
+
     this.#offset += length;
     return value;
   }
 
   slice(length: number): Uint8Array {
     const slice = this.bytes.subarray(this.#offset, this.#offset + length);
+
     this.#offset += length;
     return slice;
   }
@@ -155,12 +164,13 @@ function encodeSubscribeOk(trackAlias: number): Uint8Array {
 
 function encodeRequestError(errorCode: number, reason: string): Uint8Array {
   const body = new Writer().varint(errorCode).varint(0).lengthPrefixed(new TextEncoder().encode(reason));
+
   return frame(MESSAGE_TYPE.REQUEST_ERROR, body.toBytes());
 }
 
 /**
- * One LOC-packaged object on its own subgroup stream. MSF publishes one
- * object per stream (§4.1), which also makes each object's ID absolute.
+ * One LOC-packaged object on its own subgroup stream. MSF publishes one object per stream (§4.1), which also makes each
+ * object's ID absolute.
  */
 function encodeObjectStream(
   trackAlias: number,
@@ -170,6 +180,7 @@ function encodeObjectStream(
   payload: Uint8Array
 ): Uint8Array {
   const properties = new Writer().varint(LOC_TIMESTAMP).varint(timestampUs).toBytes();
+
   return new Writer()
     .varint(SUBGROUP_HEADER_TYPE)
     .varint(trackAlias)
@@ -235,10 +246,9 @@ function audioEncoderConfig(): AudioEncoderConfig {
 /**
  * Which of the publisher's codec configurations this browser can't handle.
  *
- * The constructors existing is not enough — `configure()` rejects a codec the
- * platform lacks, and the failure would otherwise surface as a subscription
- * that quietly never delivers. Both directions are probed: the publisher
- * encodes and the engine decodes the same streams.
+ * The constructors existing is not enough — `configure()` rejects a codec the platform lacks, and the failure would
+ * otherwise surface as a subscription that quietly never delivers. Both directions are probed: the publisher encodes
+ * and the engine decodes the same streams.
  */
 export async function unsupportedLoopbackCodecs(): Promise<string[]> {
   const unsupported: string[] = [];
@@ -246,6 +256,7 @@ export async function unsupportedLoopbackCodecs(): Promise<string[]> {
   const check = async (label: string, probe: () => Promise<{ supported?: boolean }>) => {
     try {
       const { supported } = await probe();
+
       if (!supported) unsupported.push(label);
     } catch {
       // A config this platform rejects outright throws instead of reporting.
@@ -255,6 +266,7 @@ export async function unsupportedLoopbackCodecs(): Promise<string[]> {
 
   for (const track of VIDEO_TRACKS) {
     const label = `VP8 ${track.width}×${track.height}`;
+
     await check(`${label} encoding`, () => VideoEncoder.isConfigSupported(videoEncoderConfig(track)));
     await check(`${label} decoding`, () =>
       VideoDecoder.isConfigSupported({ codec: 'vp8', codedWidth: track.width, codedHeight: track.height })
@@ -262,6 +274,7 @@ export async function unsupportedLoopbackCodecs(): Promise<string[]> {
   }
 
   const audio = audioEncoderConfig();
+
   await check('Opus encoding', () => AudioEncoder.isConfigSupported(audio));
   await check('Opus decoding', () =>
     AudioDecoder.isConfigSupported({
@@ -315,8 +328,8 @@ interface ProducerHost {
 }
 
 /**
- * Animated test pattern: a sweeping bar plus the rendition label and clock,
- * so a rendition switch and a frozen picture are both visible at a glance.
+ * Animated test pattern: a sweeping bar plus the rendition label and clock, so a rendition switch and a frozen picture
+ * are both visible at a glance.
  */
 function drawFrame(
   ctx: OffscreenCanvasRenderingContext2D,
@@ -355,7 +368,9 @@ function startVideoProducer(spec: VideoTrackSpec, trackAlias: number, host: Prod
   const encoder = new VideoEncoder({
     output: (chunk) => {
       const payload = new Uint8Array(chunk.byteLength);
+
       chunk.copyTo(payload);
+
       // VP8 has no frame reordering, so output order is encode order: a key
       // chunk opens the next group, deltas extend it.
       if (chunk.type === 'key') {
@@ -364,6 +379,7 @@ function startVideoProducer(spec: VideoTrackSpec, trackAlias: number, host: Prod
       } else {
         objectId++;
       }
+
       host.publish(encodeObjectStream(trackAlias, groupId, objectId, chunk.timestamp, payload));
     },
     error: (error) => host.log(`${spec.name} encoder error: ${error.message}`),
@@ -373,9 +389,12 @@ function startVideoProducer(spec: VideoTrackSpec, trackAlias: number, host: Prod
 
   const interval = setInterval(() => {
     if (encoder.state !== 'configured') return;
+
     const timestampUs = host.nowUs();
+
     drawFrame(ctx, spec, frameIndex, timestampUs);
     const frame = new VideoFrame(canvas, { timestamp: timestampUs, duration: Math.round(1_000_000 / FPS) });
+
     encoder.encode(frame, { keyFrame: frameIndex % GOP_SIZE === 0 });
     frame.close();
     frameIndex++;
@@ -383,6 +402,7 @@ function startVideoProducer(spec: VideoTrackSpec, trackAlias: number, host: Prod
 
   return () => {
     clearInterval(interval);
+
     if (encoder.state !== 'closed') encoder.close();
   };
 }
@@ -396,7 +416,9 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
   const encoder = new AudioEncoder({
     output: (chunk) => {
       const payload = new Uint8Array(chunk.byteLength);
+
       chunk.copyTo(payload);
+
       // Every Opus packet is independently decodable; the group boundary is
       // only there to give the jitter buffer a random-access point.
       if (objectId >= AUDIO_GROUP_OBJECTS) {
@@ -405,6 +427,7 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
       } else {
         objectId++;
       }
+
       host.publish(encodeObjectStream(trackAlias, groupId, objectId, chunk.timestamp, payload));
     },
     error: (error) => host.log(`audio encoder error: ${error.message}`),
@@ -420,11 +443,13 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
 
   const emit = () => {
     const planar = new Float32Array(frameSamples * channels);
+
     for (let i = 0; i < frameSamples; i++) {
       const t = (sampleCursor + i) / sampleRate;
       const note = NOTES[Math.floor(t * 2) % NOTES.length]!;
       const envelope = 0.12 * (1 - ((t * 2) % 1));
       const value = Math.sin(2 * Math.PI * note * t) * envelope;
+
       planar[i] = value;
       planar[frameSamples + i] = value;
     }
@@ -437,6 +462,7 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
       timestamp: nextTimestampUs,
       data: planar,
     });
+
     encoder.encode(data);
     data.close();
 
@@ -448,8 +474,10 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
   // timer drifts, so timestamps stay gapless on the shared timeline.
   const interval = setInterval(() => {
     if (encoder.state !== 'configured') return;
+
     const deadline = host.nowUs();
     let emitted = 0;
+
     while (nextTimestampUs + frameDurationUs <= deadline && emitted < AUDIO_GROUP_OBJECTS) {
       emit();
       emitted++;
@@ -458,6 +486,7 @@ function startAudioProducer(trackAlias: number, host: ProducerHost): () => void 
 
   return () => {
     clearInterval(interval);
+
     if (encoder.state !== 'closed') encoder.close();
   };
 }
@@ -524,14 +553,15 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     });
 
     /**
-     * Publish one object on its own unidirectional stream. The FIN matters:
-     * a subgroup stream is read until end-of-stream, so an unclosed stream
-     * would leave the last object unterminated.
+     * Publish one object on its own unidirectional stream. The FIN matters: a subgroup stream is read until
+     * end-of-stream, so an unclosed stream would leave the last object unterminated.
      */
     const publishObject = (bytes: Uint8Array): void => {
       if (!sessionOpen || destroyed || !uniController) return;
+
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
       const writer = pipe.writable.getWriter();
+
       void writer.write(bytes).then(
         () => writer.close(),
         () => {}
@@ -544,13 +574,14 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     const host: ProducerHost = { nowUs, publish: publishObject, log };
 
     /**
-     * The server's control stream. It stays open for the session's lifetime —
-     * closing it ends the session (§3.3) — so the writer is held until this
-     * transport closes.
+     * The server's control stream. It stays open for the session's lifetime — closing it ends the session (§3.3) — so
+     * the writer is held until this transport closes.
      */
     const sendServerSetup = (): void => {
       if (!sessionOpen || destroyed || !uniController) return;
+
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
+
       controlWriter = pipe.writable.getWriter();
       void controlWriter.write(encodeSetup());
       uniController.enqueue(pipe.readable);
@@ -569,31 +600,40 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
       const abort = () => {
         void reader.cancel().catch(() => {});
       };
+
       abortRequestStreams.add(abort);
 
       /** Accumulate until a whole framed control message is available. */
       const takeMessage = (): { type: number; body: Uint8Array } | null => {
         if (buffer.length < 3) return null;
+
         const header = new Reader(buffer);
         const type = header.varint();
         const bodyStart = header.offset + 2;
         if (buffer.length < bodyStart) return null;
+
         const length = buffer[header.offset]! * 256 + buffer[header.offset + 1]!;
         const total = bodyStart + length;
         if (buffer.length < total) return null;
+
         const body = buffer.subarray(bodyStart, total);
+
         buffer = buffer.slice(total);
         return { type, body };
       };
 
       const onSubscribe = (body: Uint8Array): void => {
         const fields = new Reader(body);
+
         fields.varint(); // request id — correlation is per-stream here
         const namespaceFields = fields.varint();
+
         for (let i = 0; i < namespaceFields; i++) fields.string();
+
         const trackName = fields.string();
 
         const trackAlias = nextTrackAlias++;
+
         void writer.write(encodeSubscribeOk(trackAlias));
         subscribedTrack = trackName;
         stats.subscriptions.push(trackName);
@@ -605,6 +645,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
         }
 
         const video = VIDEO_TRACKS.find((track) => track.name === trackName);
+
         if (!video && trackName !== AUDIO_TRACK.name) {
           log(`subscribe for unknown track ${trackName}`);
           return;
@@ -619,12 +660,14 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
           log(`cannot publish ${trackName}: ${error instanceof Error ? error.message : String(error)}`);
           return;
         }
+
         stopProducers.add(stopProducer);
       };
 
       try {
         while (true) {
           const message = takeMessage();
+
           if (message) {
             if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
               onSubscribe(message.body);
@@ -635,6 +678,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
               await writer.close();
               return;
             }
+
             continue;
           }
 
@@ -642,7 +686,9 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
           // Cancellation *is* the stream lifecycle (§3.3.3): the subscriber
           // aborting its sending direction ends the subscription.
           if (done) break;
+
           const merged = new Uint8Array(buffer.length + value.length);
+
           merged.set(buffer);
           merged.set(value, buffer.length);
           buffer = merged;
@@ -651,31 +697,42 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
         // Aborted request stream — same teardown as a graceful end.
       } finally {
         abortRequestStreams.delete(abort);
+
         if (stopProducer) {
           stopProducer();
           stopProducers.delete(stopProducer);
         }
+
         if (subscribedTrack) {
           const index = stats.subscriptions.indexOf(subscribedTrack);
+
           if (index >= 0) stats.subscriptions.splice(index, 1);
+
           log(`unsubscribe ${subscribedTrack}`);
         }
+
         writer.close().catch(() => {});
       }
     }
 
     const close = () => {
       if (!sessionOpen) return;
+
       sessionOpen = false;
       closeTransports.delete(close);
+
       for (const stop of [...stopProducers]) stop();
+
       stopProducers.clear();
+
       // Cancelling each request stream ends its read loop, which in turn
       // reports the unsubscribe and stops any straggling producer.
       for (const abortStream of [...abortRequestStreams]) abortStream();
+
       abortRequestStreams.clear();
       controlWriter?.close().catch(() => {});
       controlWriter = undefined;
+
       // Ending both accept streams lets the session's read loops finish rather
       // than staying pending on a transport nobody will use again. `closed`
       // resolving does not unblock them on its own.
@@ -686,10 +743,12 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
           // Already closed or errored — nothing to release.
         }
       }
+
       uniController = undefined;
       bidiController = undefined;
       resolveClosed();
     };
+
     closeTransports.add(close);
 
     const transport = {
@@ -712,6 +771,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
       createBidirectionalStream: async () => {
         const clientToServer = new TransformStream<Uint8Array, Uint8Array>();
         const serverToClient = new TransformStream<Uint8Array, Uint8Array>();
+
         void handleRequestStream({ readable: clientToServer.readable, writable: serverToClient.writable });
         return { readable: serverToClient.readable, writable: clientToServer.writable };
       },
@@ -735,6 +795,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     stats,
     destroy() {
       destroyed = true;
+
       for (const close of [...closeTransports]) close();
     },
   };

@@ -1,41 +1,30 @@
 /**
- * Shared core for the WebCodecs encoder actors (`video-encoder.ts` /
- * `audio-encoder.ts`): a machine actor owning one `VideoEncoder` /
- * `AudioEncoder`, serializing `flush` work through a `SerialRunner`, and
- * turning encoder output into LOC-packaged frames pushed to a sink.
+ * Shared core for the WebCodecs encoder actors (`video-encoder.ts` / `audio-encoder.ts`): a machine actor owning one
+ * `VideoEncoder` / `AudioEncoder`, serializing `flush` work through a `SerialRunner`, and turning encoder output into
+ * LOC-packaged frames pushed to a sink.
  *
- * Mechanism actor per the mechanism/policy split: it knows how to drive
- * the codec (configure / encode / flush / close, input backpressure,
- * always-close frame ownership) and counts what came out. *What* to
- * encode — frame pumping, keyframe cadence, encoder selection — lives in
- * the publish behaviors.
+ * Mechanism actor per the mechanism/policy split: it knows how to drive the codec (configure / encode / flush / close,
+ * input backpressure, always-close frame ownership) and counts what came out. _What_ to encode — frame pumping,
+ * keyframe cadence, encoder selection — lives in the publish behaviors.
  *
- * Input backpressure: when the codec's `encodeQueueSize` exceeds the
- * configured depth, delta frames are dropped (and counted) rather than
- * queued; forced keyframes are never dropped so every MOQT group still
- * starts decodable. Every incoming frame is closed on every path —
- * encoded, dropped, mis-state, or error — the actor takes ownership at
+ * Input backpressure: when the codec's `encodeQueueSize` exceeds the configured depth, delta frames are dropped (and
+ * counted) rather than queued; forced keyframes are never dropped so every MOQT group still starts decodable. Every
+ * incoming frame is closed on every path — encoded, dropped, mis-state, or error — the actor takes ownership at
  * `send()`.
  *
- * Timestamp rebasing: capture pipelines stamp frames on per-source
- * clocks (Chrome's camera, microphone, and canvas/WebAudio captures all
- * ride different bases), but MSF receivers sync tracks against ONE media
- * timeline — the playback engine's audio renderer owns the master clock
- * and its video renderer presents strictly by timestamp against it, so
- * an unrebased cross-track skew either holds every video frame "in the
- * future" forever or destroys A/V sync. Each actor therefore anchors its
- * first encoded frame to the shared wallclock (Unix-epoch microseconds,
- * LOC's absent-timescale timebase) and shifts every output by that
- * constant — intra-track pacing is capture-exact, and cross-track error
- * is bounded by the tracks' first-frame delivery jitter. One actor is one
- * *epoch* of its track's published timeline: `setupEncoderActors` passes
- * each kind's actors a shared `TrackTimeline` so a rebuilt actor
- * continues the previous epoch's clock domain instead of opening a fresh
- * wallclock anchor (see the `TrackTimeline` doc below).
+ * Timestamp rebasing: capture pipelines stamp frames on per-source clocks (Chrome's camera, microphone, and
+ * canvas/WebAudio captures all ride different bases), but MSF receivers sync tracks against ONE media timeline — the
+ * playback engine's audio renderer owns the master clock and its video renderer presents strictly by timestamp against
+ * it, so an unrebased cross-track skew either holds every video frame "in the future" forever or destroys A/V sync.
+ * Each actor therefore anchors its first encoded frame to the shared wallclock (Unix-epoch microseconds, LOC's
+ * absent-timescale timebase) and shifts every output by that constant — intra-track pacing is capture-exact, and
+ * cross-track error is bounded by the tracks' first-frame delivery jitter. One actor is one _epoch_ of its track's
+ * published timeline: `setupEncoderActors` passes each kind's actors a shared `TrackTimeline` so a rebuilt actor
+ * continues the previous epoch's clock domain instead of opening a fresh wallclock anchor (see the `TrackTimeline` doc
+ * below).
  *
- * The reactive snapshot context is the counters `trackPublishStats`
- * samples. Its shape is mirrored structurally by that DOM-free behavior
- * (`publish/behaviors/track-publish-stats.ts`) — keep the two identical.
+ * The reactive snapshot context is the counters `trackPublishStats` samples. Its shape is mirrored structurally by that
+ * DOM-free behavior (`publish/behaviors/track-publish-stats.ts`) — keep the two identical.
  */
 import type { HandlerContext, MessageActor } from '../../../core/actors/create-machine-actor';
 import { createMachineActor } from '../../../core/actors/create-machine-actor';
@@ -54,8 +43,8 @@ export type EncoderActorState = EncoderActorUserState | 'destroyed';
 /**
  * Cumulative encode counters exposed on the actor snapshot.
  *
- * Structurally mirrored by `track-publish-stats.ts` (DOM-free, so it
- * cannot import this module) — the two declarations must stay identical.
+ * Structurally mirrored by `track-publish-stats.ts` (DOM-free, so it cannot import this module) — the two declarations
+ * must stay identical.
  */
 export interface EncoderActorCounters {
   /** Chunks the codec emitted (audio codecs re-frame, so ≠ inputs). */
@@ -94,10 +83,9 @@ export interface EncodedChunkSinkMeta {
 }
 
 /**
- * Receives every LOC-packaged encoded chunk. The moq publish engine's
- * default sink routes each chunk to the matching MOQT track publisher;
- * override it to observe or replace transport (the encode counters live
- * on the actor snapshot either way).
+ * Receives every LOC-packaged encoded chunk. The moq publish engine's default sink routes each chunk to the matching
+ * MOQT track publisher; override it to observe or replace transport (the encode counters live on the actor snapshot
+ * either way).
  */
 export type EncodedChunkSink = (packaged: PackagedLocFrame, meta: EncodedChunkSinkMeta) => void;
 
@@ -117,41 +105,32 @@ export interface EncoderInstance<Config, Frame> {
 }
 
 export interface EncoderActorOptions {
-  /**
-   * Codec queue depth above which delta frames are dropped. Default 60 —
-   * two seconds' worth at 30 fps.
-   */
+  /** Codec queue depth above which delta frames are dropped. Default 60 — two seconds' worth at 30 fps. */
   maxQueueDepth?: number;
   /** Encoder failures (sync throws and codec error callbacks) land here. */
   onError?: (error: unknown) => void;
   /**
-   * Shared wallclock the first frame's timestamp is rebased onto, in
-   * microseconds since the Unix epoch (see the module doc). Injectable
-   * for deterministic tests; defaults to `Date.now() * 1000`. Feeds the
-   * default `timeline`; ignored when a `timeline` is given.
+   * Shared wallclock the first frame's timestamp is rebased onto, in microseconds since the Unix epoch (see the module
+   * doc). Injectable for deterministic tests; defaults to `Date.now() * 1000`. Feeds the default `timeline`; ignored
+   * when a `timeline` is given.
    */
   nowUs?: () => number;
   /**
-   * The track's published timeline this actor stamps an epoch of.
-   * `setupEncoderActors` passes one per kind so the clock domain survives
-   * actor rebuilds; defaults to a private single-epoch timeline (a fresh
-   * wallclock anchor).
+   * The track's published timeline this actor stamps an epoch of. `setupEncoderActors` passes one per kind so the clock
+   * domain survives actor rebuilds; defaults to a private single-epoch timeline (a fresh wallclock anchor).
    */
   timeline?: TrackTimeline;
   /**
-   * Sink-routing label for this actor's chunks — independent of the codec
-   * kind, since camera and screen are both `'video'` on the wire but must
-   * route to different MOQT track publishers. Defaults to the video
-   * specialization's `'camera'` / the audio specialization's `'audio'`.
+   * Sink-routing label for this actor's chunks — independent of the codec kind, since camera and screen are both
+   * `'video'` on the wire but must route to different MOQT track publishers. Defaults to the video specialization's
+   * `'camera'` / the audio specialization's `'audio'`.
    */
   sinkTrack?: EncodedChunkSinkMeta['track'];
   /**
-   * Called whenever the codec reports a `decoderConfig.description`
-   * (e.g. avcC for `avc`-format H.264) — the same extradata the actor
-   * carries as the LOC Config property. `setupEncoderActors` publishes it
-   * as the kind's `encoderInitData` fact so the MSF catalog can carry it
-   * out-of-band. The callback receives the actor's owned copy; do not
-   * mutate it.
+   * Called whenever the codec reports a `decoderConfig.description` (e.g. avcC for `avc`-format H.264) — the same
+   * extradata the actor carries as the LOC Config property. `setupEncoderActors` publishes it as the kind's
+   * `encoderInitData` fact so the MSF catalog can carry it out-of-band. The callback receives the actor's owned copy;
+   * do not mutate it.
    */
   onDecoderConfig?: (description: Uint8Array) => void;
 }
@@ -171,35 +150,26 @@ export interface TrackTimelineClocks {
 }
 
 /**
- * One track's published clock domain, outliving the encoder actors that
- * stamp into it.
+ * One track's published clock domain, outliving the encoder actors that stamp into it.
  *
- * An actor pins one rebase offset for its whole life (one *epoch* of the
- * track's timeline), so an actor rebuild — a capture-source switch, an
- * encoding change — would otherwise open a fresh wallclock anchor,
- * silently discarding the skew the old anchor had accumulated
- * (first-frame delivery staleness, capture-vs-wallclock drift, NTP
- * steps). The discarded skew lands on the wire as a raw timestamp step on
- * one track of an otherwise healthy broadcast — *backward* whenever it
- * exceeds the real acquisition gap — and once two tracks' timelines
- * diverge, exact A/V correspondence is unrecoverable downstream.
+ * An actor pins one rebase offset for its whole life (one _epoch_ of the track's timeline), so an actor rebuild — a
+ * capture-source switch, an encoding change — would otherwise open a fresh wallclock anchor, silently discarding the
+ * skew the old anchor had accumulated (first-frame delivery staleness, capture-vs-wallclock drift, NTP steps). The
+ * discarded skew lands on the wire as a raw timestamp step on one track of an otherwise healthy broadcast — _backward_
+ * whenever it exceeds the real acquisition gap — and once two tracks' timelines diverge, exact A/V correspondence is
+ * unrecoverable downstream.
  *
- * Sharing one timeline across a kind's successive actors keeps the
- * domain: a new epoch anchors at the previous epoch's last recorded
- * timestamp plus the *monotonic* time since it — the real acquisition
- * gap, preserved as a gap (butt-joining it would desync the switched
- * track against the surviving ones by the gap length) and immune to
- * wallclock steps landing between epochs. The trade-off: the carried
- * skew keeps absolute wallclock error in the published timestamps, which
- * only `now − timestamp` glass-to-glass estimates see — playback latency
- * control is buffer-depth-based and unaffected.
+ * Sharing one timeline across a kind's successive actors keeps the domain: a new epoch anchors at the previous epoch's
+ * last recorded timestamp plus the _monotonic_ time since it — the real acquisition gap, preserved as a gap
+ * (butt-joining it would desync the switched track against the surviving ones by the gap length) and immune to
+ * wallclock steps landing between epochs. The trade-off: the carried skew keeps absolute wallclock error in the
+ * published timestamps, which only `now − timestamp` glass-to-glass estimates see — playback latency control is
+ * buffer-depth-based and unaffected.
  */
 export interface TrackTimeline {
   /**
-   * The rebase offset for a new epoch whose first input frame carries
-   * `captureTimestampUs`: the first epoch anchors that frame to the
-   * shared wallclock; every later epoch continues the previous one (see
-   * the interface doc).
+   * The rebase offset for a new epoch whose first input frame carries `captureTimestampUs`: the first epoch anchors
+   * that frame to the shared wallclock; every later epoch continues the previous one (see the interface doc).
    */
   anchorOffsetUs(captureTimestampUs: number): number;
   /** Record an input frame's published-domain timestamp for the epoch. */
@@ -211,6 +181,7 @@ export function createTrackTimeline(clocks: TrackTimelineClocks = {}): TrackTime
   const monotonicNowUs = clocks.monotonicNowUs ?? (() => performance.now() * 1000);
   let lastFrameUs: number | undefined;
   let lastFrameMonotonicUs: number | undefined;
+
   return {
     // Both branches round: monotonic clocks are fractional-microsecond
     // (and injected clocks may be), a fractional offset would make every
@@ -221,6 +192,7 @@ export function createTrackTimeline(clocks: TrackTimelineClocks = {}): TrackTime
       if (lastFrameUs === undefined || lastFrameMonotonicUs === undefined) {
         return Math.round(nowUs() - captureTimestampUs);
       }
+
       return Math.round(lastFrameUs + (monotonicNowUs() - lastFrameMonotonicUs) - captureTimestampUs);
     },
     recordFrame(publishedTimestampUs) {
@@ -244,6 +216,7 @@ function copyDescription(description: AllowSharedBufferSource): Uint8Array {
   const view = ArrayBuffer.isView(description)
     ? new Uint8Array(description.buffer, description.byteOffset, description.byteLength)
     : new Uint8Array(description);
+
   return Uint8Array.from(view);
 }
 
@@ -299,10 +272,12 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   const instance = options.create({
     output: (chunk, metadata) => {
       const description = metadata?.decoderConfig?.description;
+
       if (description !== undefined) {
         latestConfig = copyDescription(description);
         onDecoderConfig?.(latestConfig);
       }
+
       const keyframe = chunk.type === 'key';
       // Codecs carry input timestamps through to their chunks, so the
       // input-anchored offset applies exactly.
@@ -323,6 +298,7 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
             ? { videoConfig: latestConfig }
             : { audioConfig: latestConfig }
       );
+
       sink(packaged, { keyframe, timestampUs, byteLength: chunk.byteLength, track: sinkTrack });
       inner?.send({ type: 'chunk-output', byteLength: chunk.byteLength, keyframe, timestampUs });
     },
@@ -380,17 +356,21 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
           configure,
           encode: (msg, { context, setContext }) => {
             const keyFrame = msg.keyFrame === true;
+
             if (!keyFrame && instance.encodeQueueSize > maxQueueDepth) {
               // A backpressure-dropped frame still advances the capture
               // clock the next epoch resumes from — but only an anchored
               // epoch has a domain to record it in.
               if (timestampOffsetUs !== undefined) timeline.recordFrame(msg.frame.timestamp + timestampOffsetUs);
+
               msg.frame.close();
               setContext({ ...context, droppedFrames: context.droppedFrames + 1 });
               return;
             }
+
             try {
               instance.encode(msg.frame, keyFrame);
+
               // Anchored (and recorded) only once the codec ACCEPTS the
               // frame: a synchronous encode failure must not commit an
               // anchor — or feed the shared timeline — for a frame that
@@ -398,6 +378,7 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
               // instead. Codec outputs are queued asynchronously, so the
               // offset is always in place before this frame's chunk emerges.
               if (timestampOffsetUs === undefined) timestampOffsetUs = timeline.anchorOffsetUs(msg.frame.timestamp);
+
               timeline.recordFrame(msg.frame.timestamp + timestampOffsetUs);
             } catch (error) {
               onError?.(error);
@@ -437,6 +418,7 @@ export function createEncoderActor<Config, Frame extends { close(): void; timest
   });
 
   const actor = inner;
+
   return {
     get snapshot() {
       return actor.snapshot;

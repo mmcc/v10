@@ -42,9 +42,9 @@ The shape answers one question: does this option describe the source, or how to 
 |---|---|---|
 | Which source to play | `source.src`, or an element's own identity fields | `src`, `MuxVideo`'s `playbackId` |
 | How to interpret it | `source.type` | `'video/mp4'` |
-| How Video.js plays it | `source`, at the top level | `preferPlayback` |
+| How Video.js plays it | `source`, at the top level | `preferPlayback`, `maxAutoResolution`, `capRenditionToPlayerSize` |
 | How a specific engine behaves | `source.engine`, under that engine's name | hls.js's `maxBufferLength`, in `source.engine.hlsJs` |
-| A side-car component's own settings | that component's props | <DocsLink slug="concepts/mux-data">Mux Data</DocsLink>, <DocsLink slug="concepts/cast">Google Cast</DocsLink> |
+| A side-car component's own settings | that component's props | <DocsLink slug="concepts/mux-data">Mux Data</DocsLink>, <DocsLink slug="reference/google-cast">GoogleCast</DocsLink> |
 
 `type` is worth reaching for when the URL lies about its contents. Video.js infers the content type from the file extension, so a manifest served from an extensionless or signed URL may need to say so explicitly:
 
@@ -140,8 +140,12 @@ Engine options live under `source.engine`, **namespaced by engine**. Each key th
 | `engine.hlsJs` | <DocsLink slug="reference/hlsjs-video">HlsJsVideo</DocsLink>, <DocsLink slug="reference/mux-video">MuxVideo</DocsLink>, <DocsLink slug="reference/mux-audio">MuxAudio</DocsLink> | an [hls.js config](https://github.com/video-dev/hls.js/blob/master/docs/API.md#fine-tuning) |
 | `engine.nativeHls` | <DocsLink slug="reference/native-hls-video">NativeHlsVideo</DocsLink>, and the three above whenever the browser plays the manifest | options for the browser's own HLS support (today, [DRM](#licensing-one-engine-differently)) |
 | `engine.dashJs` | <DocsLink slug="reference/dash-video">DashVideo</DocsLink> | [dash.js settings](https://cdn.dashjs.org/latest/jsdoc/module-Settings.html) |
-| `engine.vimeo` | `VimeoVideo` | [Vimeo embed parameters](https://developer.vimeo.com/player/sdk/embed) |
-| `engine.youtube` | `YouTubeVideo` | [YouTube player parameters](https://developer.chrome.com/docs/youtube/iframe_api_reference#Parameters) |
+| `engine.vimeo` | <DocsLink slug="reference/vimeo-video">VimeoVideo</DocsLink> | [Vimeo embed parameters](https://developer.vimeo.com/player/sdk/embed) |
+| `engine.youtube` | <DocsLink slug="reference/youtube-video">YouTubeVideo</DocsLink> | [YouTube player parameters](https://developer.chrome.com/docs/youtube/iframe_api_reference#Parameters) |
+| `engine.cloudflare` | <DocsLink slug="reference/cloudflare-video">CloudflareVideo</DocsLink> | [Stream player parameters](https://developers.cloudflare.com/stream/viewing-videos/using-the-stream-player/) |
+| `engine.spotify` | <DocsLink slug="reference/spotify-audio">SpotifyAudio</DocsLink> | [Spotify embed options](https://developer.spotify.com/documentation/embeds) |
+| `engine.tiktok` | <DocsLink slug="reference/tiktok-video">TikTokVideo</DocsLink> | [TikTok player parameters](https://developers.tiktok.com/doc/embed-player) |
+| `engine.twitch` | <DocsLink slug="reference/twitch-video">TwitchVideo</DocsLink> | [Twitch embed parameters](https://dev.twitch.tv/docs/embed/video-and-clips/) |
 
 Naming the engine rather than using one generic key matters where an element has more than one to choose from. `HlsJsVideo` plays through hls.js or through the browser depending on the platform and `preferPlayback`, and only one of them runs — so a single source can describe both paths without either engine reading the other's options.
 
@@ -212,6 +216,75 @@ video.source = { src: 'https://example.com/stream.m3u8', preferPlayback: 'native
 </FrameworkCase>
 
 It's a preference, not a demand — Video.js falls back to whichever path can actually play the source. `HlsJsVideo`, `MuxVideo`, and `MuxAudio` accept it; DASH and Vimeo have no second playback path.
+
+`maxAutoResolution` caps the highest rendition adaptive bitrate selection reaches for on its own:
+
+<FrameworkCase frameworks={["react"]}>
+```tsx
+<HlsJsVideo source={{ src: 'https://example.com/stream.m3u8', maxAutoResolution: '720p' }} />
+```
+</FrameworkCase>
+
+<FrameworkCase frameworks={["html"]}>
+```ts
+video.source = { src: 'https://example.com/stream.m3u8', maxAutoResolution: '720p' };
+```
+</FrameworkCase>
+
+The cap limits automatic selection without hiding anything. Renditions above it stay in `videoRenditions`, so a viewer can still choose 1080p by hand. Reach for it to hold down bandwidth on a stream that would otherwise climb to 4K, or to keep a background or thumbnail player cheap.
+
+Renditions are matched on pixel area rather than height, which keeps unusual aspect ratios honest: an ultrawide 2560×1080 rendition carries more pixels than 16:9 1080p, so a `'1080p'` cap leaves it out. When every rendition sits above the cap, the smallest one plays.
+
+Changing the cap applies to the running engine, so playback continues uninterrupted. It needs the hls.js engine — native HLS playback ignores it, and audio-only streams have no video renditions to cap.
+
+### Capping to the player's size
+
+A 400px-wide player has no use for a 4K rendition, so `capRenditionToPlayerSize` holds automatic selection to the smallest rendition that still covers the element. It defaults to `true`, and the cap follows the element as it's resized:
+
+<FrameworkCase frameworks={["react"]}>
+```tsx
+<HlsJsVideo source={{ src: 'https://example.com/stream.m3u8', capRenditionToPlayerSize: false }} />
+```
+</FrameworkCase>
+
+<FrameworkCase frameworks={["html"]}>
+```ts
+video.source = { src: 'https://example.com/stream.m3u8', capRenditionToPlayerSize: false };
+```
+</FrameworkCase>
+
+The element is measured in device pixels, so a `2` device pixel ratio asks for twice the rendition a CSS measurement would — a 640px-wide player on a retina screen still gets 720p. Switch the cap off for a player whose layout size understates what it needs, such as one that goes fullscreen without a resize.
+
+`minAutoResolution` bounds how far down that cap can reach, and defaults to `'720p'`:
+
+<FrameworkCase frameworks={["react"]}>
+```tsx
+<HlsJsVideo source={{ src: 'https://example.com/stream.m3u8', minAutoResolution: '480p' }} />
+```
+</FrameworkCase>
+
+<FrameworkCase frameworks={["html"]}>
+```ts
+video.source = { src: 'https://example.com/stream.m3u8', minAutoResolution: '480p' };
+```
+</FrameworkCase>
+
+**It is not a quality floor.** It bounds the size-derived cap and nothing else. When bandwidth is poor, adaptive selection still drops below it — the cap is a ceiling, and selection stays free underneath. It also never raises an explicit `maxAutoResolution`: ask for at most `'360p'` alongside a `'720p'` floor and you get `'360p'`.
+
+The default is there because the low rungs of a ladder exist for poor network conditions, and capping a small player down to them looks worse than its size suggests. Name a lower rung to weaken the floor, or `'270p'` to lift it for any real ladder.
+
+### Four things that sound alike
+
+Four separate mechanisms bound which rendition plays, and they're easy to mistake for each other:
+
+| Option | Side | What it does |
+|---|---|---|
+| `source.playback.maxResolution` | Server | A Mux query param. Trims the manifest, so higher renditions never arrive — not even by hand. |
+| `source.maxAutoResolution` | Client | A ceiling on automatic selection. Everything still arrives and stays selectable by hand. |
+| `source.capRenditionToPlayerSize` | Client | The same kind of ceiling, derived from the element's rendered size and moving with it. |
+| `source.minAutoResolution` | Client | A bound on the one above. Not a quality minimum, and not related to `playback.minResolution`. |
+
+`playback.maxResolution` and `playback.minResolution` are the server-side pair: they decide what the manifest carries. The other three only bound what adaptive selection picks from whatever does arrive.
 
 ## DRM protected sources
 
@@ -313,6 +386,10 @@ video.source = {
 };
 ```
 </FrameworkCase>
+
+`playback` params ride along in the URL, so `playback.maxResolution` decides which renditions the manifest carries in the first place. `maxAutoResolution` is the other half of that pair: it caps what adaptive selection picks from the renditions that do arrive. Use `playback.maxResolution` when a viewer should never get 4K, and `maxAutoResolution` when they should be able to ask for it.
+
+The same split applies at the bottom of the ladder, and the names are close enough to be worth restating: `playback.minResolution` asks Mux to leave the lowest renditions out of the manifest, while `minAutoResolution` is a client-side bound on the player-size cap. They are unrelated.
 
 Setting a Mux stream URL as `src` works too — the element parses the playback ID and query params back out into `source`. To play something Mux doesn't host, name it with `src` inside `source`; engine options still apply.
 
@@ -440,7 +517,7 @@ Media elements used to take a `config` object: one untyped bag holding engine op
 | `config.hlsJs` | `source.engine.hlsJs` |
 | `config.dashJs` | `source.engine.dashJs` |
 | `config.muxData` | the <DocsLink slug="concepts/mux-data">Mux Data</DocsLink> component's own props |
-| `config.googleCast` | the <DocsLink slug="concepts/cast">Google Cast</DocsLink> component's own props |
+| `config.googleCast` | the <DocsLink slug="reference/google-cast">GoogleCast</DocsLink> component's own props |
 | `config` on VimeoVideo | `source.engine.vimeo` |
 
 The engine keys keep their names, so their contents move across unchanged — what moves is the object they sit in.

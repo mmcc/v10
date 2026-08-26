@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import type { MediaConnectionQuality } from '@videojs/media';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import { createPlayerWrapper } from '../../../testing/mocks';
 import { ConnectionIndicator } from '../connection-indicator';
@@ -23,6 +23,7 @@ describe('ConnectionIndicator', () => {
     render(<ConnectionIndicator data-testid="indicator" />, { wrapper: Wrapper });
 
     const indicator = screen.getByTestId('indicator');
+
     expect(indicator.getAttribute('role')).toBe('img');
     expect(indicator.getAttribute('aria-label')).toBe('Connection quality: poor');
     expect(indicator.getAttribute('data-quality')).toBe('poor');
@@ -34,6 +35,7 @@ describe('ConnectionIndicator', () => {
     render(<ConnectionIndicator data-testid="indicator" />, { wrapper: Wrapper });
 
     const indicator = screen.getByTestId('indicator');
+
     expect(indicator.getAttribute('aria-label')).toBe('Connection quality: unknown');
     expect(indicator.getAttribute('data-quality')).toBe('unknown');
   });

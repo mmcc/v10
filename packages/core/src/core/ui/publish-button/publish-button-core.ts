@@ -2,6 +2,7 @@ import type { MediaCaptureSourceState, MediaPublishSessionState, MediaPublishSta
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { connectingText, goLiveText, stoppingText, stopStreamText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
@@ -16,9 +17,8 @@ export interface PublishButtonProps {
 }
 
 /**
- * Media state slice consumed by `PublishButtonCore` — composed by the HTML
- * and React `PublishButton` adapters from the `publish` and `capture-source`
- * store slices.
+ * Media state slice consumed by `PublishButtonCore` — composed by the HTML and React `PublishButton` adapters from the
+ * `publish` and `capture-source` store slices.
  */
 export type PublishButtonMediaState = MediaPublishState &
   Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState' | 'micState' | 'micExplicit'>;
@@ -31,9 +31,8 @@ export interface PublishButtonState extends ButtonState {
 }
 
 /**
- * Core state machine for a "Go live" button. Starts a publish session from
- * `idle`/`error`, stops it from `live`/`connecting`, and disables itself
- * while capture is inactive or the session is transitioning.
+ * Core state machine for a "Go live" button. Starts a publish session from `idle`/`error`, stops it from
+ * `live`/`connecting`, and disables itself while capture is inactive or the session is transitioning.
  */
 export class PublishButtonCore {
   static readonly defaultProps: NonNullableObject<PublishButtonProps> = {
@@ -63,8 +62,11 @@ export class PublishButtonCore {
     if (label) return label;
 
     if (state.session === 'live') return stopStreamText;
+
     if (state.session === 'connecting') return connectingText;
+
     if (state.session === 'stopping') return stoppingText;
+
     return goLiveText;
   }
 
@@ -104,6 +106,7 @@ export class PublishButtonCore {
     }
 
     if (session === 'stopping') return;
+
     if (aggregateCaptureState(media) !== 'active') return;
 
     try {

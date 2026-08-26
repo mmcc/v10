@@ -1,5 +1,3 @@
-'use client';
-
 import { type TooltipProps as CoreTooltipProps, TooltipCore, TooltipDataAttrs } from '@videojs/core';
 import {
   createTooltip,
@@ -11,6 +9,7 @@ import { useSnapshot } from '@videojs/store/react';
 import { isUndefined } from '@videojs/utils/predicate';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+
 import { useOptionalContainer } from '../../player/context';
 import { useOptionalPopupGroup } from '../../player/popup-group-context';
 import { useDestroy } from '../../utils/use-destroy';
@@ -40,6 +39,7 @@ export function TooltipRoot({
   closeDelay = TooltipCore.defaultProps.closeDelay,
   disableHoverablePopup = TooltipCore.defaultProps.disableHoverablePopup,
   disabled = TooltipCore.defaultProps.disabled,
+  sticky = TooltipCore.defaultProps.sticky,
   boundary = 'container',
   children,
   ...coreProps
@@ -48,6 +48,7 @@ export function TooltipRoot({
   const popupGroup = useOptionalPopupGroup();
   const controls = useOptionalControlsContext();
   const [core] = useState(() => new TooltipCore(coreProps));
+
   core.setProps(coreProps);
 
   const isControlled = !isUndefined(controlledOpen);
@@ -62,6 +63,7 @@ export function TooltipRoot({
   const closeDelayRef = useLatestRef(closeDelay);
   const disableHoverablePopupRef = useLatestRef(disableHoverablePopup);
   const disabledRef = useLatestRef(disabled);
+  const stickyRef = useLatestRef(sticky);
   const groupRef = useLatestRef(groupFromContext);
   const popupGroupRef = useLatestRef(popupGroup);
 
@@ -78,6 +80,7 @@ export function TooltipRoot({
       closeDelay: () => closeDelayRef.current,
       disableHoverablePopup: () => disableHoverablePopupRef.current,
       disabled: () => disabledRef.current,
+      sticky: () => stickyRef.current,
       group: () => groupRef.current,
       popupGroup: () => popupGroupRef.current,
     });
@@ -111,6 +114,7 @@ export function TooltipRoot({
 
   useEffect(() => {
     if (isUndefined(controls?.state.visible)) return;
+
     if (controls.state.visible) return;
 
     tooltip.close('imperative-action');
@@ -119,6 +123,7 @@ export function TooltipRoot({
   useDestroy(tooltip);
 
   const input = useSnapshot(tooltip.input);
+
   core.setInput(input);
   const { state, preferredSide, setPositionedSide } = usePositionedState(core.getState());
 

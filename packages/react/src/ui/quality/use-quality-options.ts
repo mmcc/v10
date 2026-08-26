@@ -1,5 +1,3 @@
-'use client';
-
 import { QualityRadioGroupCore, type QualityRadioGroupOption } from '@videojs/core';
 import { selectQuality } from '@videojs/core/dom';
 
@@ -28,9 +26,8 @@ const useQualityRadioOptions = createRadioOptionsHook({
 });
 
 /**
- * Create quality menu options (including an `Auto` option) from the player
- * video rendition state. Returns `null` when the quality feature is not
- * configured.
+ * Create quality menu options (including an `Auto` option) from the player video rendition state. Returns `null` when
+ * the quality feature is not configured.
  *
  * @param props - Optional `label`, `formatRendition`, and `disabled` overrides.
  */

@@ -1,6 +1,7 @@
-import { defineComponent } from '@videojs/jsx';
-import type { PlayButtonProps } from './play-button-core';
-import { PlayButtonDataAttrs } from './play-button-data-attrs';
+import { defineComponent } from 'vjsc/components';
+
+import type { PlayButtonProps } from './core';
+import { PlayButtonDataAttrs } from './data';
 
 export default defineComponent<PlayButtonProps>({
   name: 'PlayButton',

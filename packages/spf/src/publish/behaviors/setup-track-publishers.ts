@@ -1,49 +1,32 @@
 /**
- * **Own the per-track publisher actors for the publish session.** While
- * the publish session is `ready`/`live`, registers the tracks the peer
- * may subscribe to (catalog first, then the config-declared application
- * data tracks, then camera/screen/audio as `state.activeEncodings` names
- * them) on the session driver's serve registry, and creates one
- * `TrackPublisherActor` per track bound to the session's `openUniStream`,
- * publishing the `catalogTrackPublisher` / `videoTrackPublisher` /
- * `screenTrackPublisher` / `audioTrackPublisher` context slots plus the
- * `dataTrackProducers` record (page-facing `DataTrackProducer` handles
- * wrapping the data tracks' actors — see `PublishDataTrackConfig`). The
- * catalog, audio, and data publishers run in `groupPerFrame` mode (every
- * object is a random-access point per LOC/MSF); video groups
- * follow keyframes. Ingest is announce-and-serve (pull-through): a
- * publisher writes no data until the session binds it to an inbound
- * subscription, so the binding-sync effect mirrors the session actor's
- * `trackBindings` into `bind`/`unbind` messages per kind — and the
- * catalog publisher replays its latest frame on every bind, because
- * catalog frames flow on change and a fresh subscription must not wait
- * for the next one.
+ * **Own the per-track publisher actors for the publish session.** While the publish session is `ready`/`live`,
+ * registers the tracks the peer may subscribe to (catalog first, then the config-declared application data tracks, then
+ * camera/screen/audio as `state.activeEncodings` names them) on the session driver's serve registry, and creates one
+ * `TrackPublisherActor` per track bound to the session's `openUniStream`, publishing the `catalogTrackPublisher` /
+ * `videoTrackPublisher` / `screenTrackPublisher` / `audioTrackPublisher` context slots plus the `dataTrackProducers`
+ * record (page-facing `DataTrackProducer` handles wrapping the data tracks' actors — see `PublishDataTrackConfig`). The
+ * catalog, audio, and data publishers run in `groupPerFrame` mode (every object is a random-access point per LOC/MSF);
+ * video groups follow keyframes. Ingest is announce-and-serve (pull-through): a publisher writes no data until the
+ * session binds it to an inbound subscription, so the binding-sync effect mirrors the session actor's `trackBindings`
+ * into `bind`/`unbind` messages per kind — and the catalog publisher replays its latest frame on every bind, because
+ * catalog frames flow on change and a fresh subscription must not wait for the next one.
  *
- * Registered tracks are keyed on **session identity + track names, not
- * encoder identity**: they come up with the first active encoding and
- * then live as long as the session does. A source switch re-probes the
- * encoders — `activeEncodings` clears transiently and returns with a
- * fresh identity — and the served tracks must ride that out: ending a
- * track mid-session FINs every live subscription, which a relay treats
- * as the END of the track, freezing every downstream subscriber. Encoder
- * churn therefore never touches the publishers; a kind that appears
- * later (e.g. audio joining a video-only session) is added additively,
- * and a kind that disappears simply stops receiving frames.
+ * Registered tracks are keyed on **session identity + track names, not encoder identity**: they come up with the first
+ * active encoding and then live as long as the session does. A source switch re-probes the encoders — `activeEncodings`
+ * clears transiently and returns with a fresh identity — and the served tracks must ride that out: ending a track
+ * mid-session FINs every live subscription, which a relay treats as the END of the track, freezing every downstream
+ * subscriber. Encoder churn therefore never touches the publishers; a kind that appears later (e.g. audio joining a
+ * video-only session) is added additively, and a kind that disappears simply stops receiving frames.
  *
- * Cluster-owner reactor per the per-type setup-actor convention: the
- * encoder chunk router (the engine's default `chunkSink`) and
- * `deriveCatalog` only read the slots — they never create the actors. On
- * session loss, endpoint change, or teardown the actors are destroyed in
- * reverse creation order, each track's live subscriptions get their
+ * Cluster-owner reactor per the per-type setup-actor convention: the encoder chunk router (the engine's default
+ * `chunkSink`) and `deriveCatalog` only read the slots — they never create the actors. On session loss, endpoint
+ * change, or teardown the actors are destroyed in reverse creation order, each track's live subscriptions get their
  * clean FIN (`handle.end()`), and the slots are cleared.
  *
- * Sole writer of the track-publisher context slots (the four media slots
- * plus `dataTrackProducers`). Per-stream
- * failures are deliberately not surfaced as `publishError` anymore:
- * under pull-through ingest the peer resets in-flight subgroup streams
- * on every unsubscribe, so a stream failure is ordinary lifecycle — the
- * publishers count it (`droppedGroups`) and genuine transport death
- * surfaces through the session's own `closed`/`failed` path.
+ * Sole writer of the track-publisher context slots (the four media slots plus `dataTrackProducers`). Per-stream
+ * failures are deliberately not surfaced as `publishError` anymore: under pull-through ingest the peer resets in-flight
+ * subgroup streams on every unsubscribe, so a stream failure is ordinary lifecycle — the publishers count it
+ * (`droppedGroups`) and genuine transport death surfaces through the session's own `closed`/`failed` path.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -61,10 +44,8 @@ import type {
 } from '../session/publish-session';
 
 /**
- * Structural mirror of `behaviors/dom/probe-encoder-support.ts`'s
- * `ActiveEncodingsFacts` (DOM-bound behavior, so not importable here;
- * the WebCodecs config types themselves live in the WebWorker lib) —
- * keep identical.
+ * Structural mirror of `behaviors/dom/probe-encoder-support.ts`'s `ActiveEncodingsFacts` (DOM-bound behavior, so not
+ * importable here; the WebCodecs config types themselves live in the WebWorker lib) — keep identical.
  */
 export interface ActiveEncodingsFacts {
   camera?: VideoEncoderConfig;
@@ -72,9 +53,10 @@ export interface ActiveEncodingsFacts {
   audio?: AudioEncoderConfig;
 }
 
-/** MSF-conventional track names. `screen` is a name convention, not a
- * formal MSF role field — see the multi-source design record's
- * "Subscriber labeling" decision. */
+/**
+ * MSF-conventional track names. `screen` is a name convention, not a formal MSF role field — see the multi-source
+ * design record's "Subscriber labeling" decision.
+ */
 export const CATALOG_TRACK_NAME = 'catalog';
 export const VIDEO_TRACK_NAME = 'video';
 export const SCREEN_TRACK_NAME = 'screen';
@@ -89,68 +71,54 @@ const RESERVED_TRACK_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * One application data track published on the broadcast beside the media
- * — timed metadata, overlays, or any other page-produced payload stream
- * that must live on the *same* broadcast as the media tracks (a second
- * publisher announcing the same namespace would be two origins competing
- * for one broadcast name).
+ * One application data track published on the broadcast beside the media — timed metadata, overlays, or any other
+ * page-produced payload stream that must live on the _same_ broadcast as the media tracks (a second publisher
+ * announcing the same namespace would be two origins competing for one broadcast name).
  */
 export interface PublishDataTrackConfig {
   /**
-   * Track name on the broadcast. The engine-owned names (`catalog`,
-   * `video`, `screen`, `audio`) are reserved; a config naming one (or
-   * duplicating another data track) is dropped with a dev warning.
+   * Track name on the broadcast. The engine-owned names (`catalog`, `video`, `screen`, `audio`) are reserved; a config
+   * naming one (or duplicating another data track) is dropped with a dev warning.
    */
   name: string;
   /**
-   * MSF role label emitted on the track's catalog entry (e.g. `'data'`).
-   * Any non-media value keeps the track out of a subscriber's renderable
-   * set; omitted, the entry carries no role and is classified the same
-   * way from its absent media fields. A media role (`'video'`, `'audio'`,
-   * `'caption'`, …) is refused — it would advertise the track as
-   * renderable media with no codec — and stripped with a dev warning; the
-   * track still publishes.
+   * MSF role label emitted on the track's catalog entry (e.g. `'data'`). Any non-media value keeps the track out of a
+   * subscriber's renderable set; omitted, the entry carries no role and is classified the same way from its absent
+   * media fields. A media role (`'video'`, `'audio'`, `'caption'`, …) is refused — it would advertise the track as
+   * renderable media with no codec — and stripped with a dev warning; the track still publishes.
    */
   role?: string;
   /**
-   * Re-send the latest payload as a fresh group whenever a subscription
-   * binds — for state-shaped tracks (an overlay showing current text)
-   * where a late subscriber must not wait for the next change. Leave off
-   * (the default) for event-shaped metadata, where replaying a stale
-   * event would be a duplicate delivery.
+   * Re-send the latest payload as a fresh group whenever a subscription binds — for state-shaped tracks (an overlay
+   * showing current text) where a late subscriber must not wait for the next change. Leave off (the default) for
+   * event-shaped metadata, where replaying a stale event would be a duplicate delivery.
    */
   replayLastOnSubscribe?: boolean;
 }
 
 /**
- * The page-facing write handle for one application data track. Payloads
- * are LOC-packaged (Timestamp + Timescale object properties) and each
- * becomes its own single-object MOQT group, so every payload is a
- * random-access point. Under pull-through ingest a payload published
- * while no subscription is bound is dropped (or retained for replay when
- * the track was configured with `replayLastOnSubscribe`).
+ * The page-facing write handle for one application data track. Payloads are LOC-packaged (Timestamp + Timescale object
+ * properties) and each becomes its own single-object MOQT group, so every payload is a random-access point. Under
+ * pull-through ingest a payload published while no subscription is bound is dropped (or retained for replay when the
+ * track was configured with `replayLastOnSubscribe`).
  */
 export interface DataTrackProducer {
   readonly trackName: string;
   /**
-   * Publish one payload. `timestampUs` defaults to the wall clock in
-   * microseconds (`Date.now() * 1000`); pages aligning payloads with the
-   * media capture timeline should pass their own.
+   * Publish one payload. `timestampUs` defaults to the wall clock in microseconds (`Date.now() * 1000`); pages aligning
+   * payloads with the media capture timeline should pass their own.
    */
   publish(payload: Uint8Array, options?: { timestampUs?: number }): void;
 }
 
 /**
- * Resolve data-track configs into the set the engine actually publishes:
- * names colliding with an engine-owned track or an earlier data track are
- * dropped, names unusable as record keys (empty, or an `Object.prototype`
- * member such as `__proto__`/`constructor` — the producers record and the
- * session's `trackBindings` are name-keyed plain objects) are dropped, and
- * a media catalog role is stripped from an otherwise valid track (see
- * `PublishDataTrackConfig.role`). Shared by this behavior (the serve
- * registry) and `deriveCatalog` (the advertisement) so the catalog never
- * names a track the session refused to register; only the registry owner
- * passes `warn`, so each dropped config reports once per engine.
+ * Resolve data-track configs into the set the engine actually publishes: names colliding with an engine-owned track or
+ * an earlier data track are dropped, names unusable as record keys (empty, or an `Object.prototype` member such as
+ * `__proto__`/`constructor` — the producers record and the session's `trackBindings` are name-keyed plain objects) are
+ * dropped, and a media catalog role is stripped from an otherwise valid track (see `PublishDataTrackConfig.role`).
+ * Shared by this behavior (the serve registry) and `deriveCatalog` (the advertisement) so the catalog never names a
+ * track the session refused to register; only the registry owner passes `warn`, so each dropped config reports once per
+ * engine.
  */
 export function resolveDataTracks(
   configs: readonly PublishDataTrackConfig[] | undefined,
@@ -161,11 +129,13 @@ export function resolveDataTracks(
   const report = (message: string) => {
     if (warn && __DEV__) console.warn(`[moq-publish] ${message}`);
   };
+
   for (const track of configs ?? []) {
     if (taken.has(track.name)) {
       report(`data track "${track.name}" collides with a reserved or duplicate track name and was dropped`);
       continue;
     }
+
     // `name in {}` catches every Object.prototype member, including the
     // `__proto__` accessor: assigning such a name on a plain record would
     // mutate its prototype or shadow an inherited member, and reading it
@@ -175,18 +145,23 @@ export function resolveDataTracks(
       report(`data track name "${track.name}" is not usable as a track key and was dropped`);
       continue;
     }
+
     taken.add(track.name);
+
     if (track.role !== undefined && isMediaCatalogRole(track.role)) {
       // A media role would land the entry in a subscriber's renderable
       // set as an undecodable track — the track publishes, its media
       // label does not.
       report(`data track "${track.name}" declares media role "${track.role}"; the role was dropped`);
       const { role: _role, ...withoutRole } = track;
+
       resolved.push(withoutRole);
       continue;
     }
+
     resolved.push(track);
   }
+
   return resolved;
 }
 
@@ -202,9 +177,8 @@ export interface SetupTrackPublishersContext {
   screenTrackPublisher?: TrackPublisherActor | undefined;
   audioTrackPublisher?: TrackPublisherActor | undefined;
   /**
-   * Producer handles for the configured data tracks, keyed by track
-   * name. Present while the publisher cluster is up; replaced wholesale
-   * when a session rebuild recreates the cluster.
+   * Producer handles for the configured data tracks, keyed by track name. Present while the publisher cluster is up;
+   * replaced wholesale when a session rebuild recreates the cluster.
    */
   dataTrackProducers?: Readonly<Record<string, DataTrackProducer>> | undefined;
 }
@@ -213,10 +187,9 @@ export interface SetupTrackPublishersConfig {
   /** Groups the transport may fall behind before dropping to the keyframe. */
   maxQueuedGroups?: number;
   /**
-   * Application data tracks published on the broadcast beside the media.
-   * Beside, not instead: the publisher cluster comes up with the first
-   * active media encoding, so a broadcast with data tracks and no media
-   * source publishes nothing — a data-only broadcast is out of scope.
+   * Application data tracks published on the broadcast beside the media. Beside, not instead: the publisher cluster
+   * comes up with the first active media encoding, so a broadcast with data tracks and no media source publishes
+   * nothing — a data-only broadcast is out of scope.
    */
   dataTracks?: PublishDataTrackConfig[];
 }
@@ -228,10 +201,9 @@ function hasEncoding(encodings: ActiveEncodingsFacts | undefined): boolean {
 }
 
 /**
- * One session's publisher cluster — the shared plumbing between the owner
- * effect (creates and tears it down with the session), the encoding-sync
- * effect (adds media publishers as kinds appear), and the binding-sync
- * effect (mirrors subscription bindings into the actors).
+ * One session's publisher cluster — the shared plumbing between the owner effect (creates and tears it down with the
+ * session), the encoding-sync effect (adds media publishers as kinds appear), and the binding-sync effect (mirrors
+ * subscription bindings into the actors).
  */
 interface PublisherCluster {
   session: MoqtPublishSession;
@@ -261,20 +233,21 @@ function addTrackPublisher(
     replayLastGroupOnBind: options.replayLastGroupOnBind === true,
     maxQueuedGroups: cluster.maxQueuedGroups,
   });
+
   cluster.created.push({ handle, publisher, boundAlias: undefined });
   return publisher;
 }
 
 /**
- * Wrap a data track's publisher actor as the page-facing producer: LOC
- * packaging (Timestamp + Timescale in the publisher's microsecond
- * timescale) applied here so pages hand over raw payload bytes only.
+ * Wrap a data track's publisher actor as the page-facing producer: LOC packaging (Timestamp + Timescale in the
+ * publisher's microsecond timescale) applied here so pages hand over raw payload bytes only.
  */
 function toDataTrackProducer(trackName: string, publisher: TrackPublisherActor): DataTrackProducer {
   return {
     trackName,
     publish(payload, options = {}) {
       const timestampUs = options.timestampUs ?? Date.now() * 1000;
+
       publisher.send({
         type: 'frame',
         payload,
@@ -324,6 +297,7 @@ function setupTrackPublishersSetup({
       const actor = context.publishSessionActor.get();
       const status = actor?.snapshot.get().context.status;
       if (!((status === 'ready' || status === 'live') && state.endpoint.get())) return 'preconditions-unmet';
+
       // First encoding brings the cluster up; after that it is latched on
       // the session — a source switch clears `activeEncodings` transiently
       // (re-probe) and the served tracks must survive it. `peek`: our
@@ -351,6 +325,7 @@ function setupTrackPublishersSetup({
               maxQueuedGroups: config.maxQueuedGroups,
               created: [],
             };
+
             // Catalog first — the subscription anchor every player joins on.
             context.catalogTrackPublisher.set(
               addTrackPublisher(next, CATALOG_TRACK_NAME, {
@@ -362,13 +337,16 @@ function setupTrackPublishersSetup({
             // config-declared rather than encoder-gated, so they come up
             // with the session and live exactly as long as it does.
             const producers: Record<string, DataTrackProducer> = {};
+
             for (const track of dataTracks) {
               const publisher = addTrackPublisher(next, track.name, {
                 groupPerFrame: true,
                 replayLastGroupOnBind: track.replayLastOnSubscribe,
               });
+
               producers[track.name] = toDataTrackProducer(track.name, publisher);
             }
+
             context.dataTrackProducers.set(dataTracks.length > 0 ? producers : undefined);
             cluster.set(next);
 
@@ -385,6 +363,7 @@ function setupTrackPublishersSetup({
               context.screenTrackPublisher.set(undefined);
               context.videoTrackPublisher.set(undefined);
               context.catalogTrackPublisher.set(undefined);
+
               for (const { handle, publisher } of [...next.created].reverse()) {
                 // Quiesce: 'end' FINs the open group, then the track's
                 // live subscriptions get their clean stream FIN (the
@@ -409,12 +388,15 @@ function setupTrackPublishersSetup({
             const current = cluster.get();
             const encodings = state.activeEncodings.get();
             if (!current || !encodings) return;
+
             if (encodings.camera && peek(context.videoTrackPublisher) === undefined) {
               context.videoTrackPublisher.set(addTrackPublisher(current, VIDEO_TRACK_NAME, { groupPerFrame: false }));
             }
+
             if (encodings.screen && peek(context.screenTrackPublisher) === undefined) {
               context.screenTrackPublisher.set(addTrackPublisher(current, SCREEN_TRACK_NAME, { groupPerFrame: false }));
             }
+
             if (encodings.audio && peek(context.audioTrackPublisher) === undefined) {
               context.audioTrackPublisher.set(addTrackPublisher(current, AUDIO_TRACK_NAME, { groupPerFrame: true }));
             }
@@ -430,10 +412,13 @@ function setupTrackPublishersSetup({
             const current = cluster.get();
             const actor = context.publishSessionActor.get();
             if (!current || !actor) return;
+
             const bindings = actor.snapshot.get().context.trackBindings;
+
             for (const entry of current.created) {
               const alias = bindings[entry.handle.trackName];
               if (alias === entry.boundAlias) continue;
+
               entry.boundAlias = alias;
               entry.publisher.send(alias === undefined ? { type: 'unbind' } : { type: 'bind', trackAlias: alias });
             }

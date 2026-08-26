@@ -1,7 +1,7 @@
 import type { MediaTextCue } from '@videojs/media';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 
-import { SliderSegmentsCore } from '../../../slider/slider-segments-core';
+import { SliderSegmentsCore } from '../../../slider/segments-core';
 import { normalizeChapterCues, TimeSliderChaptersCore } from '../core';
 
 function cue(startTime: number, endTime: number, text: string, id = ''): MediaTextCue {
@@ -41,19 +41,26 @@ describe('TimeSliderChaptersCore', () => {
     const chapter = cue(0, 40, 'First');
     const result = new TimeSliderChaptersCore().getRanges([chapter], 0, 100);
 
-    expect(result).toMatchObject({ max: 100, hasChapters: true });
+    expect(result).toMatchObject({ max: 100 });
     expect(result.ranges).toMatchObject([
       { start: 0, end: 40, highlight: true },
       { start: 40, end: 100, highlight: false },
     ]);
   });
 
-  it('creates a full fallback range when chapters are unavailable', () => {
+  it('normalizes unavailable chapters to one full-domain range', () => {
     expect(new TimeSliderChaptersCore().getRanges([], 0, 0)).toMatchObject({
-      chapters: [],
-      ranges: [{ key: 'fallback', start: 0, end: 1, highlight: false }],
+      chapters: [{ key: 'gap-start-end', start: 0, end: 1, cue: null }],
+      ranges: [{ key: 'gap-start-end', start: 0, end: 1, highlight: false }],
       max: 1,
-      hasChapters: false,
+    });
+  });
+
+  it('ignores chapter cues until the slider domain is available', () => {
+    expect(new TimeSliderChaptersCore().getRanges([cue(0, 40, 'First')], 0, 0)).toMatchObject({
+      chapters: [{ key: 'gap-start-end', start: 0, end: 1, cue: null }],
+      ranges: [{ key: 'gap-start-end', start: 0, end: 1, highlight: false }],
+      max: 1,
     });
   });
 

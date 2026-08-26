@@ -1,5 +1,5 @@
+import { safeDefine } from '../../registration/safe-define';
 import { EnableDevicesButtonElement } from '../../ui/enable-devices-button/enable-devices-button-element';
-import { safeDefine } from '../safe-define';
 
 safeDefine(EnableDevicesButtonElement);
 

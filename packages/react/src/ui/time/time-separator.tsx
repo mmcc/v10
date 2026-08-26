@@ -1,5 +1,3 @@
-'use client';
-
 import type { ForwardedRef, ReactNode } from 'react';
 import { forwardRef } from 'react';
 
@@ -18,10 +16,10 @@ export interface SeparatorProps extends UIComponentProps<'span', SeparatorState>
  * Divider between time values. Hidden from screen readers.
  *
  * @example
- * ```tsx
- * <Time.Separator />
- * <Time.Separator> of </Time.Separator>
- * ```
+ *   ```tsx
+ *   <Time.Separator />
+ *   <Time.Separator> of </Time.Separator>
+ *   ```;
  */
 export const Separator = forwardRef(function Separator(
   componentProps: SeparatorProps,

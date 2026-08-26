@@ -74,9 +74,8 @@ export type {
 };
 
 /**
- * State shape for the MoQ publish engine — consumer intent slots (written
- * through {@link MoqPublishEngineConfig.onSignalsReady} refs by the
- * adapter) plus pipeline facts (written by behaviors).
+ * State shape for the MoQ publish engine — consumer intent slots (written through
+ * {@link MoqPublishEngineConfig.onSignalsReady} refs by the adapter) plus pipeline facts (written by behaviors).
  */
 export interface MoqPublishEngineState {
   // -- intent (adapter writes) --
@@ -89,10 +88,8 @@ export interface MoqPublishEngineState {
   /** Screen-share acquisition; additive with `cameraActive`, not exclusive. */
   screenShareActive?: boolean;
   /**
-   * Microphone acquisition without a video source — the audio-only
-   * publish seam. Either video intent still implies the mic; this slot
-   * makes mic capture (and a session gated on it alone) possible when
-   * neither is set.
+   * Microphone acquisition without a video source — the audio-only publish seam. Either video intent still implies the
+   * mic; this slot makes mic capture (and a session gated on it alone) possible when neither is set.
    */
   micActive?: boolean;
   /** Selected camera; empty string defers to the platform default. */
@@ -122,10 +119,7 @@ export interface MoqPublishEngineState {
   publishError?: PublishErrorFacts | undefined;
 }
 
-/**
- * Context shape for the MoQ publish engine — platform objects and owned
- * resources.
- */
+/** Context shape for the MoQ publish engine — platform objects and owned resources. */
 export interface MoqPublishEngineContext {
   /** Preview surface the capture stream is mirrored into (adapter writes). */
   previewElement?: HTMLVideoElement | undefined;
@@ -145,10 +139,9 @@ export interface MoqPublishEngineContext {
   screenTrackPublisher?: TrackPublisherActor | undefined;
   audioTrackPublisher?: TrackPublisherActor | undefined;
   /**
-   * Producer handles for the config-declared application data tracks,
-   * keyed by track name (owned by `setupTrackPublishers`). Present while
-   * the publish session's track publishers are up; a page holding one
-   * across a session rebuild must re-read the slot.
+   * Producer handles for the config-declared application data tracks, keyed by track name (owned by
+   * `setupTrackPublishers`). Present while the publish session's track publishers are up; a page holding one across a
+   * session rebuild must re-read the slot.
    */
   dataTrackProducers?: Readonly<Record<string, DataTrackProducer>> | undefined;
 }
@@ -181,8 +174,8 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   /** Resolve probed encoder support into the active encodings. */
   selectEncoderConfig?: SelectEncoderConfig;
   /**
-   * Packaged-chunk destination. Default: route each chunk to the matching
-   * MOQT track publisher — override only to observe or replace transport.
+   * Packaged-chunk destination. Default: route each chunk to the matching MOQT track publisher — override only to
+   * observe or replace transport.
    */
   chunkSink?: EncodedChunkSink;
   /** Encoder queue depth above which delta frames are dropped. */
@@ -192,14 +185,11 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   /** Groups the transport may fall behind before dropping to the keyframe. */
   maxQueuedGroups?: number;
   /**
-   * Application data tracks published on the broadcast beside the media —
-   * timed metadata, overlays, and other page-produced payload streams.
-   * Each is registered and served by the engine like the media tracks
-   * (same announce, same catalog) and exposed as a page-facing producer
-   * handle on `context.dataTrackProducers`. Beside the media, not instead
-   * of it: the track publishers come up with the first active media
-   * encoding, so a data-only broadcast (no camera/screen/mic) publishes
-   * nothing and is out of scope.
+   * Application data tracks published on the broadcast beside the media — timed metadata, overlays, and other
+   * page-produced payload streams. Each is registered and served by the engine like the media tracks (same announce,
+   * same catalog) and exposed as a page-facing producer handle on `context.dataTrackProducers`. Beside the media, not
+   * instead of it: the track publishers come up with the first active media encoding, so a data-only broadcast (no
+   * camera/screen/mic) publishes nothing and is out of scope.
    */
   dataTracks?: PublishDataTrackConfig[];
   /** Transport seam; default constructs a real `WebTransport`. */
@@ -209,8 +199,8 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
 }
 
 /**
- * Materialize the consumer-input slots no composed behavior produces and
- * hand the composition signal refs to `onSignalsReady`.
+ * Materialize the consumer-input slots no composed behavior produces and hand the composition signal refs to
+ * `onSignalsReady`.
  */
 const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineContext>(
   [
@@ -231,20 +221,16 @@ const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineCon
 /**
  * Create a MoQ publish engine.
  *
- * The composition: capture (`getUserMedia`/`getDisplayMedia`) → WebCodecs
- * encode → MOQT publish over an in-repo publish session speaking the same
- * draft-19 dialect as the playback stack, publishing LOC-packaged tracks
- * plus an MSF catalog track.
+ * The composition: capture (`getUserMedia`/`getDisplayMedia`) → WebCodecs encode → MOQT publish over an in-repo publish
+ * session speaking the same draft-19 dialect as the playback stack, publishing LOC-packaged tracks plus an MSF catalog
+ * track.
  *
- * M1 composed the capture stage — device enumeration, capture-source
- * acquisition, preview mirroring, and mute toggles. M2 added the encode
- * stage: encoder-support probing, the encoder actor pair, the
- * frame-pumping loops, and `publishStats` sampling. M3 completes the
- * pipeline with the transport stage: the publish session
- * (`openPublishSession` owns `sessionStatus`), the per-track MOQT
- * publishers, and the catalog derivation — the default `chunkSink` now
- * routes packaged chunks into the track publishers, read lazily from
- * context so encoder wiring and transport lifetime stay decoupled.
+ * M1 composed the capture stage — device enumeration, capture-source acquisition, preview mirroring, and mute toggles.
+ * M2 added the encode stage: encoder-support probing, the encoder actor pair, the frame-pumping loops, and
+ * `publishStats` sampling. M3 completes the pipeline with the transport stage: the publish session
+ * (`openPublishSession` owns `sessionStatus`), the per-track MOQT publishers, and the catalog derivation — the default
+ * `chunkSink` now routes packaged chunks into the track publishers, read lazily from context so encoder wiring and
+ * transport lifetime stay decoupled.
  */
 export function createMoqPublishEngine(
   config: MoqPublishEngineConfig = {}
@@ -261,6 +247,7 @@ export function createMoqPublishEngine(
   const routeToTrackPublishers: EncodedChunkSink = (packaged, meta) => {
     const slot = trackPublisherSlot[meta.track]();
     const publisher = slot === undefined ? undefined : peek(slot);
+
     publisher?.send({
       type: 'frame',
       payload: packaged.payload,
@@ -321,6 +308,7 @@ export function createMoqPublishEngine(
       },
     }
   );
+
   contextRef = composition.context;
   return composition;
 }

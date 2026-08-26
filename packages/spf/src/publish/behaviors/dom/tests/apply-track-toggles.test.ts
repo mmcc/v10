@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
 import { signal } from '../../../../core/signals/primitives';
 import { type ApplyTrackTogglesContext, type ApplyTrackTogglesState, applyTrackToggles } from '../apply-track-toggles';
@@ -40,6 +41,7 @@ function setupToggles(initialState: ApplyTrackTogglesState = {}, initialContext:
     micStream: signal(initialContext.micStream),
   };
   const cleanup = applyTrackToggles.setup({ state, context });
+
   return { state, context, cleanup };
 }
 
@@ -47,6 +49,7 @@ describe('applyTrackToggles', () => {
   it('flips the camera stream video track on cameraMuted', async () => {
     const video = new FakeMediaStreamTrack('video');
     const { state, context, cleanup } = setupToggles();
+
     context.cameraStream.set(asStream(new FakeMediaStream([video])));
 
     state.cameraMuted.set(true);
@@ -66,6 +69,7 @@ describe('applyTrackToggles', () => {
     const video = new FakeMediaStreamTrack('video');
     const audio = new FakeMediaStreamTrack('audio');
     const { state, context, cleanup } = setupToggles();
+
     context.cameraStream.set(asStream(new FakeMediaStream([video])));
     context.micStream.set(asStream(new FakeMediaStream([audio])));
 

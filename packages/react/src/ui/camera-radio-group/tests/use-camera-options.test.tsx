@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { MediaCaptureDeviceInfo } from '@videojs/media';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createPlayerWrapper } from '../../../testing/mocks';
 import { Menu } from '../../menu';
@@ -30,9 +30,11 @@ function renderCameraOptions({
 
   render(
     <Menu.Root defaultOpen align="center">
-      <Menu.Content data-testid="content">
-        <CameraRadioGroup />
-      </Menu.Content>
+      <Menu.Popup>
+        <Menu.Content data-testid="content">
+          <CameraRadioGroup />
+        </Menu.Content>
+      </Menu.Popup>
     </Menu.Root>,
     { wrapper: Wrapper }
   );
@@ -67,6 +69,7 @@ describe('useCameraOptions', () => {
 
   it('selects a camera device', () => {
     const selectCamera = vi.fn();
+
     renderCameraOptions({ selectCamera });
 
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'iPhone Camera' }));

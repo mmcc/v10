@@ -1,5 +1,5 @@
+import { safeDefine } from '../../registration/safe-define';
 import { MicRadioGroupElement } from '../../ui/mic-radio-group/mic-radio-group-element';
-import { safeDefine } from '../safe-define';
 
 safeDefine(MicRadioGroupElement);
 

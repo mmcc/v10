@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vite-plus/test';
+
 import { LOC_PROPERTY, toLocFrame } from '../../../../media/moq/loc';
 import type { PackagedLocFrame } from '../../../../media/moq/loc-packaging';
 import type { EncodedChunkSinkMeta } from '../encoder-actor';
@@ -23,8 +24,8 @@ const AVC_CONFIG: VideoEncoderConfig = {
 
 const FRAME_DURATION_US = 33_333;
 /**
- * Deterministic wallclock for the actor's capture→wallclock timestamp
- * rebase: outputs land at `WALLCLOCK_US + <capture delta>`.
+ * Deterministic wallclock for the actor's capture→wallclock timestamp rebase: outputs land at `WALLCLOCK_US + <capture
+ * delta>`.
  */
 const WALLCLOCK_US = 1_000_000_000_000;
 
@@ -36,6 +37,7 @@ function setupActor(options?: Parameters<typeof createVideoEncoderActor>[1]) {
     nowUs: () => WALLCLOCK_US,
     ...options,
   });
+
   disposals.push(() => actor.destroy());
   return { actor, sunk };
 }
@@ -43,9 +45,11 @@ function setupActor(options?: Parameters<typeof createVideoEncoderActor>[1]) {
 /** Real frames off a painted canvas so Chromium's encoders do real work. */
 function makeVideoFrame(timestampUs: number): VideoFrame {
   const canvas = document.createElement('canvas');
+
   canvas.width = 320;
   canvas.height = 240;
   const context = canvas.getContext('2d')!;
+
   context.fillStyle = `hsl(${(timestampUs / 1000) % 360}, 80%, 50%)`;
   context.fillRect(0, 0, canvas.width, canvas.height);
   return new VideoFrame(canvas, { timestamp: timestampUs });
@@ -54,6 +58,7 @@ function makeVideoFrame(timestampUs: number): VideoFrame {
 describe('createVideoEncoderActor', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -64,12 +69,15 @@ describe('createVideoEncoderActor', () => {
     expect(actor.snapshot.get().value).toBe('encoding');
 
     const closeSpies: MockInstance[] = [];
+
     for (let i = 0; i < 10; i++) {
       const frame = makeVideoFrame(i * FRAME_DURATION_US);
+
       closeSpies.push(vi.spyOn(frame, 'close'));
       // Force a key on the "group cadence" (frames 0 and 5).
       actor.send({ type: 'encode', frame, keyFrame: i % 5 === 0 });
     }
+
     // The actor takes frame ownership at send(): every frame is closed
     // synchronously in the handler regardless of encode outcome.
     for (const close of closeSpies) expect(close).toHaveBeenCalled();
@@ -80,6 +88,7 @@ describe('createVideoEncoderActor', () => {
     });
 
     const counters = actor.snapshot.get().context;
+
     expect(counters.encodedBytes).toBeGreaterThan(0);
     expect(counters.droppedFrames).toBe(0);
     expect(counters.keyframes).toBeGreaterThanOrEqual(2);
@@ -87,8 +96,10 @@ describe('createVideoEncoderActor', () => {
 
     expect(sunk).toHaveLength(10);
     const keyTimestamps = sunk.filter(({ meta }) => meta.keyframe).map(({ meta }) => meta.timestampUs);
+
     expect(keyTimestamps).toContain(WALLCLOCK_US);
     expect(keyTimestamps).toContain(WALLCLOCK_US + 5 * FRAME_DURATION_US);
+
     for (const { packaged, meta } of sunk) {
       // 'camera' is createVideoEncoderActor's default sink-routing label
       // when the caller doesn't override it — see encoder-actor.ts.
@@ -104,16 +115,19 @@ describe('createVideoEncoderActor', () => {
       properties: first.packaged.properties,
       payload: first.packaged.payload,
     });
+
     expect(extracted).toMatchObject({ timestampUs: WALLCLOCK_US, isKey: true });
   });
 
   it('drops delta frames under backpressure, never keyframes, and closes every frame', async () => {
     const { actor } = setupActor({ maxQueueDepth: 0 });
+
     actor.send({ type: 'configure', config: VP8_CONFIG });
 
     const closeSpies: MockInstance[] = [];
     const send = (index: number, keyFrame: boolean) => {
       const frame = makeVideoFrame(index * FRAME_DURATION_US);
+
       closeSpies.push(vi.spyOn(frame, 'close'));
       actor.send({ type: 'encode', frame, keyFrame });
     };
@@ -122,10 +136,13 @@ describe('createVideoEncoderActor', () => {
     // above the zero threshold, so the following deltas must drop while
     // the forced keyframe must not.
     send(0, true);
+
     for (let i = 1; i <= 8; i++) send(i, false);
+
     send(9, true);
 
     expect(actor.snapshot.get().context.droppedFrames).toBe(8);
+
     for (const close of closeSpies) expect(close).toHaveBeenCalled();
 
     actor.send({ type: 'flush' });
@@ -141,6 +158,7 @@ describe('createVideoEncoderActor', () => {
     if (!supported) return;
 
     const { actor, sunk } = setupActor();
+
     actor.send({ type: 'configure', config: AVC_CONFIG });
     actor.send({ type: 'encode', frame: makeVideoFrame(0), keyFrame: true });
     actor.send({ type: 'encode', frame: makeVideoFrame(FRAME_DURATION_US) });
@@ -150,8 +168,10 @@ describe('createVideoEncoderActor', () => {
       expect(sunk.length).toBe(2);
     });
     const key = sunk.find(({ meta }) => meta.keyframe)!;
+
     expect(key.packaged.properties.some(({ type }) => type === LOC_PROPERTY.VIDEO_CONFIG)).toBe(true);
     const extracted = toLocFrame({ objectId: 0, properties: key.packaged.properties, payload: key.packaged.payload });
+
     expect(extracted?.videoConfig?.byteLength).toBeGreaterThan(0);
   });
 
@@ -160,6 +180,7 @@ describe('createVideoEncoderActor', () => {
 
     const early = makeVideoFrame(0);
     const earlyClose = vi.spyOn(early, 'close');
+
     actor.send({ type: 'encode', frame: early });
     expect(earlyClose).toHaveBeenCalled();
     expect(actor.snapshot.get().value).toBe('unconfigured');
@@ -170,6 +191,7 @@ describe('createVideoEncoderActor', () => {
 
     const late = makeVideoFrame(FRAME_DURATION_US);
     const lateClose = vi.spyOn(late, 'close');
+
     actor.send({ type: 'encode', frame: late });
     expect(lateClose).toHaveBeenCalled();
     expect(sunk).toHaveLength(0);

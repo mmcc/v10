@@ -28,6 +28,14 @@ export function TypedEventTarget<Events extends { [K in keyof Events]: EventLike
 
 export type MediaFeatureAvailability = 'available' | 'unavailable' | 'unsupported';
 
+/**
+ * Rendition height, as the `{height}p` shorthand streaming providers use.
+ *
+ * Options that accept one match renditions by pixel area rather than by literal height, so anamorphic variants land in
+ * the bucket their source material belongs to.
+ */
+export type MediaResolution = '270p' | '360p' | '480p' | '540p' | '720p' | '1080p' | '1440p' | '2160p';
+
 // ----------------------------------------
 // Controls
 // ----------------------------------------
@@ -416,12 +424,10 @@ export interface MediaPictureInPictureCapability {
 /**
  * Canonical values for {@link MediaStreamType}.
  *
- * - `ON_DEMAND` — a finite-duration asset (VOD). Scrubbing is generally
- *   supported across the full timeline.
- * - `LIVE` — a live or DVR stream. The seekable window may slide as new
- *   segments are published, and `duration` is typically `Infinity`.
- * - `UNKNOWN` — the stream type has not been determined yet (no source,
- *   or metadata has not loaded).
+ * - `ON_DEMAND` — a finite-duration asset (VOD). Scrubbing is generally supported across the full timeline.
+ * - `LIVE` — a live or DVR stream. The seekable window may slide as new segments are published, and `duration` is
+ *   typically `Infinity`.
+ * - `UNKNOWN` — the stream type has not been determined yet (no source, or metadata has not loaded).
  */
 export const MediaStreamTypes = {
   ON_DEMAND: 'on-demand',
@@ -445,20 +451,19 @@ export interface MediaLiveEvents {
 
 export interface MediaLiveCapability {
   /**
-   * Presentation time marking the start of the Live Edge Window. Playing at
-   * the live edge when `currentTime >= liveEdgeStart`. `NaN` when the stream
-   * isn't live or the value is unknown.
+   * Playback time where the live edge begins. Playback is live when `currentTime >= liveEdgeStart`. `NaN` when the
+   * stream is not live or the value is unknown.
    *
-   * Derived — no dedicated change event; re-read when `seekable`,
-   * `targetLiveWindow`, or `streamType` change.
+   * No change event fires for this value alone. Read it again when `seekable`, `targetLiveWindow`, or `streamType`
+   * changes.
    *
    * @see https://github.com/video-dev/media-ui-extensions/blob/main/proposals/0007-live-edge.md
    */
   readonly liveEdgeStart: number;
   /**
-   * Offset representing the seekable range size for live content. `0` for
-   * standard latency live, `Infinity` for DVR, `NaN` for on-demand or
-   * unknown. Fires `targetlivewindowchange` when the value changes.
+   * Describes the kind of live window available. `0` for a sliding live window, `Infinity` for a live event with
+   * playback history, and `NaN` for on-demand or unknown. This value is not a duration. Fires `targetlivewindowchange`
+   * when it changes.
    */
   readonly targetLiveWindow: number;
 }
@@ -508,15 +513,38 @@ export interface MediaPosterCapability {
 /** A media-owned content value. `undefined` means the key is absent; `null` means it has no current value. */
 export type MediaContentValue = string | null | undefined;
 
-/** Standardized content metadata reported by a media implementation. */
-export type MediaContentData = Readonly<Record<string, MediaContentValue>>;
+/**
+ * Standardized content metadata reported by a media implementation. The named keys are the shared vocabulary player
+ * features read; a media may report keys of its own alongside them.
+ *
+ * Report a key only for a value the media can vouch for. Omit it otherwise — an empty string is a deliberate blank that
+ * stops a feature's fallback chain, so reporting `''` for "not loaded yet" suppresses the author's fallback.
+ */
+export interface MediaContentData {
+  /** Title of the content. */
+  readonly title?: MediaContentValue;
+  /** URL of a still image representing the content. */
+  readonly poster?: MediaContentValue;
+  /** URL of a WebVTT storyboard describing thumbnail sprites for the content. */
+  readonly storyboard?: MediaContentValue;
+  readonly [key: string]: MediaContentValue;
+}
 
 /** Events emitted when a media implementation's content data changes. */
 export interface MediaContentDataEvents {
   contentdatachange: EventLike;
 }
 
-/** Optional media-owned content metadata. */
+/**
+ * Optional media-owned content metadata.
+ *
+ * `undefined` means the media does not support content data at all. A defined bag — including an empty one — means it
+ * does, and its keys may come and go as a source loads or is replaced.
+ *
+ * Implementations dispatch `contentdatachange` when the bag changes, and only then; an assignment that leaves every key
+ * and value alone stays quiet. They are also expected to clear content data when the source is replaced. Nothing
+ * enforces that second half, so a media that skips it reports stale metadata across a source change.
+ */
 export interface MediaContentDataCapability {
   readonly contentData: MediaContentData | undefined;
 }
@@ -552,10 +580,8 @@ export interface MediaConfigCapability {
  * - `idle` — no session; `publish()` starts one.
  * - `connecting` — transport/session setup is in flight.
  * - `live` — the session is established and media is being published.
- * - `stopping` — an orderly shutdown (unpublish or server GOAWAY) is
- *   draining; a new `publish()` must wait for `idle`.
- * - `error` — the session failed; `publishError` holds the cause and
- *   `publish()` may retry.
+ * - `stopping` — an orderly shutdown (unpublish or server GOAWAY) is draining; a new `publish()` must wait for `idle`.
+ * - `error` — the session failed; `publishError` holds the cause and `publish()` may retry.
  */
 export type MediaPublishSessionState = 'idle' | 'connecting' | 'live' | 'stopping' | 'error';
 
@@ -568,31 +594,24 @@ export interface MediaPublishCapability {
   publishEndpoint: string;
   /** Namespace/path the media is published under at the endpoint. */
   publishNamespace: string;
-  /**
-   * Bearer token presented to the endpoint when the session is
-   * established; empty string presents none.
-   */
+  /** Bearer token presented to the endpoint when the session is established; empty string presents none. */
   publishAuthToken: string;
   /** Current publish session lifecycle. Fires `publishstatechange`. */
   readonly publishState: MediaPublishSessionState;
   /**
-   * Epoch milliseconds when the session last entered `live`. Held through
-   * `stopping` (so timers keep showing the elapsed session time while the
-   * shutdown drains) and `NaN` once the session settles on `idle` or
-   * `error`. Re-read on `publishstatechange`.
+   * Epoch milliseconds when the session last entered `live`. Held through `stopping` (so timers keep showing the
+   * elapsed session time while the shutdown drains) and `NaN` once the session settles on `idle` or `error`. Re-read on
+   * `publishstatechange`.
    */
   readonly publishStartedAt: number;
   /** The failure that moved `publishState` to `error`, if any. */
   readonly publishError: ErrorLike | null;
   /**
-   * Start publishing. Resolves when the session is `live`; rejects when
-   * the attempt fails or is abandoned by `unpublish()` (`play()`-like).
-   * Rejects immediately when its preconditions are unmet: a publish
-   * endpoint must be configured and an active capture source must exist
-   * (`captureState` is `active`) — it never waits for either to appear.
-   * Calling it again while `publishState` is `error` tears the failed
-   * session down, starts a fresh attempt, and settles on that attempt's
-   * outcome.
+   * Start publishing. Resolves when the session is `live`; rejects when the attempt fails or is abandoned by
+   * `unpublish()` (`play()`-like). Rejects immediately when its preconditions are unmet: a publish endpoint must be
+   * configured and an active capture source must exist (`captureState` is `active`) — it never waits for either to
+   * appear. Calling it again while `publishState` is `error` tears the failed session down, starts a fresh attempt, and
+   * settles on that attempt's outcome.
    */
   publish(): Promise<void>;
   /** Stop publishing and tear the session down. */
@@ -613,8 +632,7 @@ export type MediaCaptureSourceKind = 'camera' | 'screen';
  * - `acquiring` — being acquired (usually a permission prompt).
  * - `active` — tracks are live and previewable.
  * - `denied` — the user (or platform policy) refused access.
- * - `ended` — the source ended outside our control (device unplugged,
- *   screen share stopped from browser UI).
+ * - `ended` — the source ended outside our control (device unplugged, screen share stopped from browser UI).
  */
 export type MediaCaptureState = 'idle' | 'acquiring' | 'active' | 'denied' | 'ended';
 
@@ -625,19 +643,14 @@ export interface MediaCaptureSourceEvents {
 }
 
 /**
- * Camera, screen-share, and microphone acquisition — additive, not
- * exclusive: activating any source never releases another, and each can be
- * toggled independently. The microphone is also implied by video intent:
- * it is acquired while either video source is active (keyed for
- * re-acquisition on
- * {@link MediaCaptureDevicesCapability.audioInputDeviceId}), so
- * {@link micActive} only needs to be written for an audio-only capture.
+ * Camera, screen-share, and microphone acquisition — additive, not exclusive: activating any source never releases
+ * another, and each can be toggled independently. The microphone is also implied by video intent: it is acquired while
+ * either video source is active (keyed for re-acquisition on {@link MediaCaptureDevicesCapability.audioInputDeviceId}),
+ * so {@link micActive} only needs to be written for an audio-only capture.
  *
- * The intent slots are consumed by the pipeline on terminal outcomes:
- * after a permission denial or an out-of-band end (device unplugged,
- * browser-native "Stop sharing") the slot reads `false` again while the
- * matching state holds `denied`/`ended` — so writing `true` always means
- * "attempt acquisition now", including retries.
+ * The intent slots are consumed by the pipeline on terminal outcomes: after a permission denial or an out-of-band end
+ * (device unplugged, browser-native "Stop sharing") the slot reads `false` again while the matching state holds
+ * `denied`/`ended` — so writing `true` always means "attempt acquisition now", including retries.
  */
 export interface MediaCaptureSourceCapability {
   /** Camera acquisition; `true` acquires (prompting as needed), `false` releases. Fires `capturesourcechange`. */
@@ -645,14 +658,12 @@ export interface MediaCaptureSourceCapability {
   /** Screen-share acquisition; `true` opens the OS picker, `false` stops sharing. Fires `capturesourcechange`. */
   screenShareActive: boolean;
   /**
-   * Microphone acquisition without a video source — the audio-only capture
-   * seam. Either video source active still implies the mic; this is
-   * acquisition intent, not a mute. Fires `capturesourcechange`.
+   * Microphone acquisition without a video source — the audio-only capture seam. Either video source active still
+   * implies the mic; this is acquisition intent, not a mute. Fires `capturesourcechange`.
    *
-   * Optional because {@link isMediaCaptureSourceCapable} deliberately
-   * admits hosts from before this generation, which lack the slot — check
-   * presence before writing; an assignment to a host without it is an
-   * inert expando, not an acquisition.
+   * Optional because {@link isMediaCaptureSourceCapable} deliberately admits hosts from before this generation, which
+   * lack the slot — check presence before writing; an assignment to a host without it is an inert expando, not an
+   * acquisition.
    */
   micActive?: boolean;
   /** Camera pipeline lifecycle. Fires `capturestatechange`. */
@@ -660,17 +671,15 @@ export interface MediaCaptureSourceCapability {
   /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */
   readonly screenShareState: MediaCaptureState;
   /**
-   * Microphone pipeline lifecycle. Fires `capturestatechange`. `idle`
-   * while video is active means capture is running without audio (no
-   * usable microphone); `denied`/`ended` surface a blocked or unplugged
-   * mic so UIs can say why a live broadcast has no sound.
+   * Microphone pipeline lifecycle. Fires `capturestatechange`. `idle` while video is active means capture is running
+   * without audio (no usable microphone); `denied`/`ended` surface a blocked or unplugged mic so UIs can say why a live
+   * broadcast has no sound.
    */
   readonly micState: MediaCaptureState;
   /**
-   * Live camera stream while `cameraState` is `active`, else `null`.
-   * Fires `capturestreamchange`. Exposed for consumers that must read
-   * tracks directly (e.g. an audio level meter) — high-frequency data
-   * should never round-trip through state.
+   * Live camera stream while `cameraState` is `active`, else `null`. Fires `capturestreamchange`. Exposed for consumers
+   * that must read tracks directly (e.g. an audio level meter) — high-frequency data should never round-trip through
+   * state.
    */
   readonly cameraStream: MediaStreamLike | null;
   /** Live screen-share stream while `screenShareState` is `active`, else `null`. Fires `capturestreamchange`. */
@@ -678,9 +687,8 @@ export interface MediaCaptureSourceCapability {
 }
 
 /**
- * Structural stand-in for the DOM `MediaStream` — keeps this contract
- * DOM-free. (Not to be confused with {@link MediaStreamType}, which
- * classifies live vs on-demand playback.)
+ * Structural stand-in for the DOM `MediaStream` — keeps this contract DOM-free. (Not to be confused with
+ * {@link MediaStreamType}, which classifies live vs on-demand playback.)
  */
 export interface MediaStreamLike {
   readonly id: string;
@@ -704,9 +712,8 @@ export interface MediaCaptureDevicesCapability {
   /** Known capture input devices. Fires `capturedeviceschange`. */
   readonly captureDevices: readonly MediaCaptureDeviceInfo[];
   /**
-   * Selected camera; empty string defers to the platform default. Hosts
-   * must fire `capturedeviceschange` when a selection changes — consumers
-   * re-read selections from that event.
+   * Selected camera; empty string defers to the platform default. Hosts must fire `capturedeviceschange` when a
+   * selection changes — consumers re-read selections from that event.
    */
   videoInputDeviceId: string;
   /** Selected microphone; empty string defers to the platform default. */
@@ -718,10 +725,7 @@ export interface MediaCaptureToggleEvents {
 }
 
 export interface MediaCaptureToggleCapability {
-  /**
-   * Whether outgoing video is muted. Muting disables the track (black
-   * frames) without stopping capture or encoding.
-   */
+  /** Whether outgoing video is muted. Muting disables the track (black frames) without stopping capture or encoding. */
   cameraMuted: boolean;
   /** Whether outgoing audio is muted (silence without stopping capture). */
   micMuted: boolean;
@@ -751,8 +755,8 @@ export interface MediaPublishStatsEvents {
 
 export interface MediaPublishStatsCapability {
   /**
-   * Latest sampled stats, `null` before the first sample. Updated at a low
-   * frequency (~1 Hz); fires `publishstatsupdate`.
+   * Latest sampled stats, `null` before the first sample. Updated at a low frequency (~1 Hz); fires
+   * `publishstatsupdate`.
    */
   readonly publishStats: MediaPublishStats | null;
 }
@@ -764,15 +768,15 @@ export interface MediaPublishStatsCapability {
 export interface MediaEvents extends MediaPlaybackEvents {}
 
 export interface Media<Events extends { [K in keyof Events]: EventLike } = MediaEvents>
-  extends MediaPlaybackCapability,
-    EventTargetLike<Events> {}
+  extends MediaPlaybackCapability, EventTargetLike<Events> {}
 
 // ----------------------------------------
 // Composed shapes
 // ----------------------------------------
 
 export interface MediaFullEvents
-  extends MediaEvents,
+  extends
+    MediaEvents,
     MediaPauseEvents,
     MediaSeekEvents,
     MediaSourceEvents,
@@ -786,7 +790,8 @@ export interface MediaFullEvents
     MediaContentDataEvents {}
 
 export interface MediaFull<Events extends { [K in keyof Events]: EventLike } = MediaFullEvents>
-  extends Media<Events>,
+  extends
+    Media<Events>,
     MediaPauseCapability,
     MediaSeekCapability,
     MediaSourceCapability,
@@ -806,7 +811,8 @@ export interface MediaFull<Events extends { [K in keyof Events]: EventLike } = M
 export interface VideoEvents extends MediaFullEvents, MediaPictureInPictureEvents, MediaVideoDimensionsEvents {}
 
 export interface Video
-  extends MediaFull<VideoEvents>,
+  extends
+    MediaFull<VideoEvents>,
     MediaPlaysInlineCapability,
     MediaPosterCapability,
     MediaFullscreenCapability,
@@ -822,7 +828,8 @@ export interface Audio extends MediaFull<AudioEvents> {}
 // ----------------------------------------
 
 export interface MediaTargetLike
-  extends MediaPlaybackCapability,
+  extends
+    MediaPlaybackCapability,
     MediaPauseCapability,
     MediaSeekCapability,
     MediaSourceCapability,
@@ -842,10 +849,7 @@ export interface MediaTargetLike
 }
 
 export interface VideoTargetLike
-  extends MediaTargetLike,
-    MediaPosterCapability,
-    MediaPlaysInlineCapability,
-    MediaVideoDimensionsCapability {
+  extends MediaTargetLike, MediaPosterCapability, MediaPlaysInlineCapability, MediaVideoDimensionsCapability {
   disablePictureInPicture: boolean;
   requestPictureInPicture(): Promise<unknown>;
   requestFullscreen(): Promise<unknown>;

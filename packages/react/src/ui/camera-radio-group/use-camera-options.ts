@@ -26,8 +26,8 @@ export interface CameraOptionsResult {
 }
 
 /**
- * Create camera picker menu options from the player capture devices state.
- * Returns `null` when the capture devices feature is not configured.
+ * Create camera picker menu options from the player capture devices state. Returns `null` when the capture devices
+ * feature is not configured.
  *
  * @param props - Optional `label`, `formatDevice`, and `disabled` overrides.
  */
@@ -44,6 +44,7 @@ export function useCameraOptions(props?: CameraOptionsProps): CameraOptionsResul
 
   if (!media) {
     if (__DEV__) logMissingFeature('useCameraOptions', selectCaptureDevices.displayName ?? 'captureDevices');
+
     return null;
   }
 

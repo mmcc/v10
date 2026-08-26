@@ -2,6 +2,7 @@ import type { MediaPublishSessionState, MediaPublishState } from '@videojs/media
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { badgeText } from '../../i18n/text/live';
 import { connectingText, offlineText } from '../../i18n/text/publish';
@@ -19,9 +20,8 @@ export interface PublishBadgeState extends ButtonState {
 }
 
 /**
- * Core state machine for a publish status badge. Its label reflects the
- * session lifecycle: "Live" while publishing, "Connecting…" during session
- * setup, and "Offline" otherwise (idle, stopping, or error).
+ * Core state machine for a publish status badge. Its label reflects the session lifecycle: "Live" while publishing,
+ * "Connecting…" during session setup, and "Offline" otherwise (idle, stopping, or error).
  */
 export class PublishBadgeCore {
   static readonly defaultProps: NonNullableObject<PublishBadgeProps> = {
@@ -49,7 +49,9 @@ export class PublishBadgeCore {
     if (label) return label;
 
     if (state.session === 'live') return badgeText;
+
     if (state.session === 'connecting') return connectingText;
+
     return offlineText;
   }
 
@@ -65,6 +67,7 @@ export class PublishBadgeCore {
 
   getState(): PublishBadgeState {
     const media = this.#media!;
+
     this.state.patch({ session: media.publishState });
     this.state.patch({ label: resolveText(this.getLabel(this.state.current)) });
 

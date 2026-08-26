@@ -15,7 +15,7 @@
    ("Go live"), solid red while live ("Stop"). */
 .media-default-skin .media-button--publish {
   /* Reserve room so the label swap (Go live ↔ Stop) doesn't resize the bar. */
-  min-width: calc(var(--spacing) * 20);
+  min-width: calc(var(--media-spacing) * 20);
   font-weight: 500;
   color: oklch(0 0 0);
   text-shadow: none;
@@ -24,7 +24,7 @@
 
   &[data-publish-state="live"] {
     color: oklch(1 0 0);
-    background: var(--publish-live-color);
+    background: var(--media-publish-live-color);
   }
 
   /* Transitional states: subdued and non-interactive cursor. */
@@ -40,8 +40,8 @@
 
   /* Error: translucent red so it reads as attention without mimicking live. */
   &[data-publish-state="error"] {
-    color: var(--publish-live-color);
-    background: oklch(from var(--publish-live-color) l c h / 0.15);
+    color: var(--media-publish-live-color);
+    background: oklch(from var(--media-publish-live-color) l c h / 0.15);
   }
 }
 
@@ -54,29 +54,29 @@
    tokens but takes a dark fill instead of the glass one — glass tracks the
    frame behind it, which is what fails over bright video. */
 .media-default-skin--publisher .media-publish-status {
-  --inset-factor: 2;
-  --inset: calc(var(--spacing) * var(--inset-factor));
+  --media-inset-factor: 2;
+  --media-inset: calc(var(--media-spacing) * var(--media-inset-factor));
 
   position: absolute;
-  top: var(--inset);
-  left: var(--inset);
+  top: var(--media-inset);
+  left: var(--media-inset);
   z-index: 10;
   display: flex;
-  gap: calc(var(--spacing) * 2);
+  gap: calc(var(--media-spacing) * 2);
   align-items: center;
-  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+  padding: calc(var(--media-spacing) * 1.5) calc(var(--media-spacing) * 3);
   color: oklch(1 0 0);
   pointer-events: none;
-  background-color: var(--publish-status-background);
+  background-color: var(--media-publish-status-background);
   border-radius: calc(Infinity * 1px);
   box-shadow:
-    0 0 0 1px var(--surface-outer-border-color),
-    0 1px 3px 0 var(--surface-shadow-color),
-    inset 0 1px 0 0 var(--surface-inner-border-color);
-  backdrop-filter: var(--surface-backdrop-filter);
+    0 0 0 1px var(--media-surface-outer-border-color),
+    0 1px 3px 0 var(--media-surface-shadow-color),
+    inset 0 1px 0 0 var(--media-surface-inner-border-color);
+  backdrop-filter: var(--media-surface-backdrop-filter);
 
   @container media-root (width > 42rem) {
-    --inset-factor: 3;
+    --media-inset-factor: 3;
   }
 }
 
@@ -87,7 +87,7 @@
    `.media-badge`. */
 .media-default-skin .media-badge--publish {
   display: inline-flex;
-  gap: calc(var(--spacing) * 1.5);
+  gap: calc(var(--media-spacing) * 1.5);
   align-items: center;
   padding: 0;
   font-weight: 600;
@@ -97,14 +97,14 @@
 
   &[data-publish-state="live"],
   &[data-publish-state="error"] {
-    padding: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+    padding: calc(var(--media-spacing) * 1) calc(var(--media-spacing) * 2);
   }
 
   &::before {
     display: inline-block;
     flex-shrink: 0;
-    width: calc(var(--spacing) * 2);
-    height: calc(var(--spacing) * 2);
+    width: calc(var(--media-spacing) * 2);
+    height: calc(var(--media-spacing) * 2);
     content: "";
     background-color: oklch(from currentColor l c h / 0.4);
     border-radius: 50%;
@@ -113,7 +113,7 @@
 
   &[data-publish-state="live"] {
     color: oklch(1 0 0);
-    background-color: var(--publish-live-color);
+    background-color: var(--media-publish-live-color);
 
     &::before {
       background-color: oklch(1 0 0);
@@ -121,8 +121,8 @@
   }
 
   &[data-publish-state="error"] {
-    color: var(--publish-live-color);
-    background-color: oklch(from var(--publish-live-color) l c h / 0.15);
+    color: var(--media-publish-live-color);
+    background-color: oklch(from var(--media-publish-live-color) l c h / 0.15);
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -136,7 +136,7 @@
 /* Publish timer — elapsed publish time. Only meaningful while live/stopping. */
 .media-default-skin .media-publish-timer {
   display: none;
-  font-size: var(--font-size-small);
+  font-size: var(--media-font-size-small);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -157,12 +157,12 @@
     opacity: 0.5;
   }
   &[data-quality="good"] {
-    color: var(--quality-good-color);
+    color: var(--media-quality-good-color);
   }
   &[data-quality="fair"] {
-    color: var(--quality-fair-color);
+    color: var(--media-quality-fair-color);
   }
   &[data-quality="poor"] {
-    color: var(--quality-poor-color);
+    color: var(--media-quality-poor-color);
   }
 }

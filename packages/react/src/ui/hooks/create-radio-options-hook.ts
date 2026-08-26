@@ -1,5 +1,3 @@
-'use client';
-
 import type { RadioOption, RadioOptionsState } from '@videojs/core';
 import { logMissingFeature } from '@videojs/core/dom';
 import { type Text, type TextParams, translateText } from '@videojs/core/i18n';
@@ -65,6 +63,7 @@ export function createRadioOptionsHook<Props, Media, State extends RadioOptionsS
 
     if (!media) {
       if (__DEV__) logMissingFeature(name, selector.displayName ?? feature);
+
       return null;
     }
 

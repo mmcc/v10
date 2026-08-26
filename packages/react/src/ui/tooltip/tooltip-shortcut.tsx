@@ -1,5 +1,3 @@
-'use client';
-
 import type { TooltipState } from '@videojs/core';
 import { forwardRef } from 'react';
 
@@ -16,10 +14,7 @@ export const TooltipShortcut = forwardRef<HTMLElement, TooltipShortcutProps>(fun
 ) {
   const { state, stateAttrMap, content } = useTooltipContext();
   const shortcut = children !== undefined && children !== null ? children : (content?.shortcut ?? null);
-
-  if (!shortcut) {
-    return null;
-  }
+  if (!shortcut) return null;
 
   return renderElement(
     'kbd',

@@ -1,10 +1,12 @@
 import type { MediaPictureInPictureState } from '@videojs/media';
 import { listen, type WebKitVideoElement } from '@videojs/utils/dom';
+
 import { definePlayerFeature } from '../../feature';
 import { exitFullscreen, isFullscreen } from '../../presentation/fullscreen';
 import {
   exitPictureInPicture,
   isPictureInPicture,
+  isPictureInPictureCapable,
   isPictureInPictureEnabled,
   requestPictureInPicture,
 } from '../../presentation/pip';
@@ -28,15 +30,13 @@ export const pipFeature = definePlayerFeature({
 
     async exitPictureInPicture() {
       const { media } = target();
+
       return exitPictureInPicture(media);
     },
 
     async togglePictureInPicture() {
       const { media, container } = target();
-
-      if (isPictureInPicture(media)) {
-        return exitPictureInPicture(media);
-      }
+      if (isPictureInPicture(media)) return exitPictureInPicture(media);
 
       if (isFullscreen(container, media)) {
         await exitFullscreen(media);
@@ -49,8 +49,12 @@ export const pipFeature = definePlayerFeature({
   attach({ target, signal, set }) {
     const { media } = target;
 
+    // Both halves have to hold: the browser has to offer picture-in-picture, and
+    // this media has to be able to enter it. Asking only the browser leaves an
+    // embed that has no picture-in-picture — YouTube, Cloudflare Stream — showing
+    // a control that silently does nothing.
     set({
-      pipAvailability: isPictureInPictureEnabled() ? 'available' : 'unsupported',
+      pipAvailability: isPictureInPictureEnabled() && isPictureInPictureCapable(media) ? 'available' : 'unsupported',
     });
 
     const sync = () =>
@@ -65,6 +69,7 @@ export const pipFeature = definePlayerFeature({
 
     // iOS Safari presentation mode change (covers PiP)
     const video = media as WebKitVideoElement;
+
     if ('webkitPresentationMode' in video) {
       listen(media, 'webkitpresentationmodechanged', sync, { signal });
     }

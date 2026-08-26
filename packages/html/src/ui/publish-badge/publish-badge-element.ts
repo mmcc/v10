@@ -10,9 +10,8 @@ import { PlayerController } from '../../player/player-controller';
 import { MediaUIElement } from '../media-ui-element';
 
 /**
- * `<media-publish-badge>` — publish session status badge. Renders the core's
- * translated label ("Live" / "Connecting…" / "Offline") as default content
- * when no custom content is authored, and reflects the session lifecycle on
+ * `<media-publish-badge>` — publish session status badge. Renders the core's translated label ("Live" / "Connecting…" /
+ * "Offline") as default content when no custom content is authored, and reflects the session lifecycle on
  * `data-publish-state` for styling.
  */
 export class PublishBadgeElement extends MediaUIElement<PublishBadgeCore> {
@@ -33,6 +32,7 @@ export class PublishBadgeElement extends MediaUIElement<PublishBadgeCore> {
 
   override connectedCallback(): void {
     super.connectedCallback();
+
     if (this.destroyed) return;
 
     this.#defaultContent ||= !this.textContent?.trim();

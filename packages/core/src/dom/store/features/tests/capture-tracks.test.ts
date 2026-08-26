@@ -1,5 +1,6 @@
 import { createStore } from '@videojs/store';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { captureTracksFeature } from '../capture-tracks';
@@ -11,6 +12,7 @@ interface CaptureToggleCapableMedia extends EventTarget {
 
 function createToggleMedia(initial: Partial<CaptureToggleCapableMedia> = {}): CaptureToggleCapableMedia {
   const media = new EventTarget() as CaptureToggleCapableMedia;
+
   media.cameraMuted = initial.cameraMuted ?? false;
   media.micMuted = initial.micMuted ?? false;
   return media;
@@ -22,6 +24,7 @@ describe('captureTracksFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.cameraMuted).toBe(false);
@@ -32,6 +35,7 @@ describe('captureTracksFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: video, container: null });
 
       expect(() => store.setCameraMuted(true)).not.toThrow();
@@ -46,6 +50,7 @@ describe('captureTracksFeature', () => {
       const media = createToggleMedia({ cameraMuted: true, micMuted: false });
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.cameraMuted).toBe(true);
@@ -56,6 +61,7 @@ describe('captureTracksFeature', () => {
       const media = createToggleMedia();
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.cameraMuted = true;
@@ -70,6 +76,7 @@ describe('captureTracksFeature', () => {
       const media = createToggleMedia();
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       store.setCameraMuted(true);
@@ -83,6 +90,7 @@ describe('captureTracksFeature', () => {
       const media = createToggleMedia();
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       store.setMicMuted(true);
@@ -96,6 +104,7 @@ describe('captureTracksFeature', () => {
       const media = createToggleMedia({ cameraMuted: false });
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleCameraMuted()).toBe(true);
@@ -109,6 +118,7 @@ describe('captureTracksFeature', () => {
       const media = createToggleMedia({ micMuted: true });
 
       const store = createStore<PlayerTarget>()(captureTracksFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.toggleMicMuted()).toBe(false);

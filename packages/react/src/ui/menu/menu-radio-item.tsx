@@ -1,12 +1,10 @@
-'use client';
-
 import type { MenuState } from '@videojs/core';
 import { completeMenuItemSelection } from '@videojs/core/dom';
 import { forwardRef, useCallback, useEffect, useRef } from 'react';
 
 import type { UIComponentProps } from '../../utils/types';
 import { renderElement } from '../../utils/use-render';
-import { useMenuContext, useMenuRadioGroupContext } from './context';
+import { MenuRadioItemContextProvider, useMenuContext, useMenuRadioGroupContext } from './context';
 
 export interface MenuRadioItemProps extends UIComponentProps<'div', MenuState> {
   /** The value this item represents. */
@@ -28,14 +26,18 @@ export const MenuRadioItem = forwardRef<HTMLDivElement, MenuRadioItemProps>(func
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return;
+
     return menu.registerItem(element);
   }, [menu]);
 
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (disabled) return;
+
       onClick?.(event);
+
       if (event.defaultPrevented) return;
+
       onValueChange(value);
       completeMenuItemSelection(menu);
     },
@@ -45,26 +47,31 @@ export const MenuRadioItem = forwardRef<HTMLDivElement, MenuRadioItemProps>(func
   const handlePointerEnter = useCallback(() => {
     const element = elementRef.current;
     if (!element || disabled) return;
-    menu.highlight(element, { focus: false });
+
+    menu.highlight(element, { focus: false, pointer: true });
   }, [menu, disabled]);
 
-  return renderElement(
-    'div',
-    { render, className, style },
-    {
-      state,
-      ref: [forwardedRef, elementRef],
-      props: [
+  return (
+    <MenuRadioItemContextProvider value={checked}>
+      {renderElement(
+        'div',
+        { render, className, style },
         {
-          role: 'menuitemradio' as const,
-          'aria-checked': checked,
-          'aria-disabled': disabled ? true : undefined,
-          onClick: handleClick,
-          onPointerEnter: handlePointerEnter,
-        },
-        elementProps,
-      ],
-    }
+          state,
+          ref: [forwardedRef, elementRef],
+          props: [
+            {
+              role: 'menuitemradio' as const,
+              'aria-checked': checked,
+              'aria-disabled': disabled ? true : undefined,
+              onClick: handleClick,
+              onPointerEnter: handlePointerEnter,
+            },
+            elementProps,
+          ],
+        }
+      )}
+    </MenuRadioItemContextProvider>
   );
 });
 

@@ -1,8 +1,8 @@
 import type { MediaTextCue } from '@videojs/media';
 import { findRangeAt } from '@videojs/utils/array';
 import { toPercent } from '@videojs/utils/number';
-import type { SliderSegmentRange, SliderSegmentState } from '../../slider/slider-segments-core';
 
+import type { SliderSegmentRange, SliderSegmentState } from '../../slider/segments-core';
 import type { TimeSliderChapterRange, TimeSliderChapterState } from './types';
 
 const cueKeys = new WeakMap<object, string>();
@@ -10,11 +10,14 @@ let cueKey = 0;
 
 function getCueKey(cue: MediaTextCue): string {
   let key = cueKeys.get(cue);
+
   if (!key) {
     const id = (cue as MediaTextCue & { id?: unknown }).id;
+
     key = `cue-${typeof id === 'string' && id ? `${id}-` : ''}${cueKey++}`;
     cueKeys.set(cue, key);
   }
+
   return key;
 }
 
@@ -53,7 +56,9 @@ export function normalizeChapterCues(
   }
 
   if (chapters.length === 0) return [{ key: 'gap-start-end', start: min, end: max, cue: null }];
+
   if (end < max) chapters.push({ key: `gap-${previousKey}-end`, start: end, end: max, cue: null });
+
   return chapters;
 }
 
@@ -72,7 +77,6 @@ export class TimeSliderChaptersCore {
     chapters: TimeSliderChapterRange[];
     ranges: SliderSegmentRange[];
     max: number;
-    hasChapters: boolean;
   } {
     if (
       this.#result &&
@@ -83,17 +87,15 @@ export class TimeSliderChaptersCore {
       return this.#result;
     }
 
-    const chapters = normalizeChapterCues(cues, min, max);
-    const hasChapters = chapters.some((chapter) => chapter.cue !== null);
-    const rangeMax = max > min ? max : min + 1;
-    const ranges = hasChapters
-      ? chapters.map(({ key, start, end, cue }) => ({ key, start, end, highlight: cue !== null }))
-      : [{ key: 'fallback', start: min, end: rangeMax, highlight: false }];
+    const hasRange = max > min;
+    const rangeMax = hasRange ? max : min + 1;
+    const chapters = normalizeChapterCues(hasRange ? cues : [], min, rangeMax);
+    const ranges = chapters.map(({ key, start, end, cue }) => ({ key, start, end, highlight: cue !== null }));
 
     this.#cues = cues;
     this.#min = min;
     this.#max = max;
-    this.#result = { chapters, ranges, max: rangeMax, hasChapters };
+    this.#result = { chapters, ranges, max: rangeMax };
     return this.#result;
   }
 

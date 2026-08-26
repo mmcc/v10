@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { ByteReader, ByteWriter, utf8Encode } from '../bytes';
 import {
   ControlMessageDeframer,
@@ -31,15 +32,18 @@ import { MoqtProtocolError } from '../errors';
 function frames(...messages: Uint8Array[]): Uint8Array {
   const merged = new Uint8Array(messages.reduce((total, m) => total + m.length, 0));
   let offset = 0;
+
   for (const message of messages) {
     merged.set(message, offset);
     offset += message.length;
   }
+
   return merged;
 }
 
 function decodeAll(bytes: Uint8Array) {
   const deframer = new ControlMessageDeframer();
+
   return deframer.push(bytes).map(decodeControlMessage);
 }
 
@@ -56,6 +60,7 @@ describe('ControlMessageDeframer', () => {
       const first = deframer.push(encoded.subarray(0, split));
       const second = deframer.push(encoded.subarray(split));
       const all = [...first, ...second];
+
       expect(all).toHaveLength(2);
       expect(all[0]!.type).toBe(MESSAGE_TYPE.SUBSCRIBE);
       expect(all[1]!.type).toBe(MESSAGE_TYPE.GOAWAY);
@@ -65,6 +70,7 @@ describe('ControlMessageDeframer', () => {
 
   it('yields one frame per push when messages arrive whole', () => {
     const deframer = new ControlMessageDeframer();
+
     expect(deframer.push(encodeGoaway(0))).toHaveLength(1);
     expect(deframer.push(encodePublishDone(0x2, 5, 'track ended'))).toHaveLength(1);
   });
@@ -113,6 +119,7 @@ describe('encodeFetch', () => {
         endLocation: { group: 12, object: 0 },
       })
     );
+
     expect(message).toMatchObject({
       kind: 'fetch',
       request: {
@@ -128,6 +135,7 @@ describe('encodeFetch', () => {
     const [message] = decodeAll(
       encodeFetch({ requestId: 6, type: 'relative-joining', joiningRequestId: 4, joiningStart: 0 })
     );
+
     expect(message).toMatchObject({
       kind: 'fetch',
       request: { type: 'relative-joining', requestId: 6, joiningRequestId: 4, joiningStart: 0 },
@@ -140,6 +148,7 @@ describe('encodeSubscribeOk', () => {
     const [message] = decodeAll(
       encodeSubscribeOk(7, { expires: 30_000, largestObject: { group: 41, object: 12 } }, [{ type: 0x02, value: 1 }])
     );
+
     expect(message).toMatchObject({
       kind: 'subscribe-ok',
       trackAlias: 7,
@@ -152,6 +161,7 @@ describe('encodeSubscribeOk', () => {
 describe('encodeRequestError', () => {
   it('round-trips code, retry interval, and reason', () => {
     const [message] = decodeAll(encodeRequestError(REQUEST_ERROR_CODE.DOES_NOT_EXIST, 'no such track', 1500));
+
     expect(message).toEqual({
       kind: 'request-error',
       errorCode: REQUEST_ERROR_CODE.DOES_NOT_EXIST,
@@ -169,8 +179,11 @@ describe('encodeSetup', () => {
         { type: SETUP_OPTION.MAX_REQUEST_UPDATES, value: 3 },
       ])
     );
+
     expect(message?.kind).toBe('setup');
+
     if (message?.kind !== 'setup') return;
+
     // Serialized in ascending type order regardless of input order.
     expect(message.options.map((o) => o.type)).toEqual([
       SETUP_OPTION.MOQT_IMPLEMENTATION,
@@ -183,6 +196,7 @@ describe('encodeSetup', () => {
 describe('encodeGoaway', () => {
   it('encodes a zero-length URI (client rule) and round-trips the timeout', () => {
     const [message] = decodeAll(encodeGoaway(500));
+
     expect(message).toEqual({ kind: 'goaway', newSessionUri: '', timeout: 500 });
   });
 });
@@ -192,6 +206,7 @@ describe('encodePublishNamespace', () => {
     const [message] = decodeAll(
       encodePublishNamespace({ requestId: 1, trackNamespace: ['anon'], parameters: { forward: 1 } })
     );
+
     expect(message).toMatchObject({
       kind: 'publish-namespace',
       requestId: 1,
@@ -223,6 +238,7 @@ describe('decodeControlMessage', () => {
 
     // A namespace field whose declared length overruns the frame.
     const body = new ByteWriter();
+
     body.writeVarint(1); // request id
     body.writeVarint(1); // field count
     body.writeVarint(10); // field length, followed by only 2 bytes
@@ -248,14 +264,17 @@ describe('encodeMessageParameters', () => {
       newGroupRequest: 42,
     };
     const writer = new ByteWriter();
+
     encodeMessageParameters(writer, parameters);
     const decoded = decodeMessageParameters(new ByteReader(writer.toBytes()));
+
     expect(decoded).toEqual(parameters);
   });
 
   it('throws MoqtProtocolError on an unknown parameter type', () => {
     // Hand-craft: 1 parameter, type 0x99 (unknown).
     const writer = new ByteWriter();
+
     writer.writeVarint(1);
     writer.writeVarint(0x99);
     expect(() => decodeMessageParameters(new ByteReader(writer.toBytes()))).toThrow(MoqtProtocolError);
@@ -270,6 +289,7 @@ describe('encodeLocationFilter', () => {
       { type: 'absolute-start', start: { group: 3, object: 9 } },
       { type: 'absolute-range', start: { group: 3, object: 9 }, endGroupDelta: 0 },
     ] as const;
+
     for (const filter of filters) {
       expect(decodeLocationFilter(encodeLocationFilter(filter))).toEqual(filter);
     }
@@ -278,6 +298,7 @@ describe('encodeLocationFilter', () => {
   it('rejects trailing bytes after the filter', () => {
     const encoded = encodeLocationFilter({ type: 'next-group-start' });
     const padded = new Uint8Array(encoded.length + 1);
+
     padded.set(encoded);
     expect(() => decodeLocationFilter(padded)).toThrow(MoqtProtocolError);
   });
@@ -287,12 +308,14 @@ describe('encodeFetchOk', () => {
   it('round-trips and rejects end-of-track values other than 0 and 1', () => {
     const notEnded = encodeFetchOk(false, { group: 3, object: 9 });
     const ended = encodeFetchOk(true, { group: 3, object: 9 });
+
     expect(decodeAll(notEnded)[0]).toMatchObject({ kind: 'fetch-ok', endOfTrack: false });
     expect(decodeAll(ended)[0]).toMatchObject({ kind: 'fetch-ok', endOfTrack: true });
 
     // The end-of-track byte is the single position where the two differ.
     const offset = notEnded.findIndex((byte, index) => byte !== ended[index]);
     const invalid = notEnded.slice();
+
     invalid[offset] = 2;
     expect(() => decodeAll(invalid)).toThrow(MoqtProtocolError);
   });
@@ -306,11 +329,14 @@ describe('encodeKeyValuePairs', () => {
       { type: 0x08, value: 1_000_000 },
     ];
     const writer = new ByteWriter();
+
     encodeKeyValuePairs(writer, pairs);
     const bytes = writer.toBytes();
+
     // First delta is the absolute type (0x02), then 5, then 1.
     expect(bytes[0]).toBe(0x02);
     const decoded = decodeKeyValuePairs(new ByteReader(bytes), bytes.length);
+
     expect(decoded).toEqual(pairs);
   });
 });

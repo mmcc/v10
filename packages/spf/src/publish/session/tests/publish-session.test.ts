@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { toLocFrame } from '../../../media/moq/loc';
 import { packageLocFrame } from '../../../media/moq/loc-packaging';
 import { applyMoqCatalogUpdate } from '../../../media/moq/parse-catalog';
@@ -46,6 +47,7 @@ function makePublishHarness(callbacks: MoqtPublishSessionCallbacks = {}) {
   const pair = createTransportPair();
   const subscriber = createMoqtSession(pair.server, { unknownAliasTimeoutMs: 500 });
   const session = createMoqtPublishSession(pair.client, { callbacks });
+
   return { pair, session, subscriber };
 }
 
@@ -62,12 +64,14 @@ function collectTrack(
       onObject: (object) => objects.push(object),
     }
   );
+
   return { objects, aliases, subscription };
 }
 
 describe('createMoqtPublishSession', () => {
   it('completes SETUP both ways against the existing subscribe driver', async () => {
     const { session, subscriber } = makePublishHarness();
+
     await expect(session.ready).resolves.toBeUndefined();
     await expect(subscriber.ready).resolves.toBeUndefined();
     session.destroy();
@@ -79,11 +83,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounced: ({ namespace }) => announced.push(namespace),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
@@ -96,12 +102,14 @@ describe('createMoqtPublishSession', () => {
 
   it('defers the announce until the first track is registered', async () => {
     const { pair, session, subscriber } = makePublishHarness();
+
     await session.ready;
     session.announce(NAMESPACE);
 
     // Solicited and announced, but nothing to serve yet: an announce now
     // would invite SUBSCRIBEs that DOES_NOT_EXIST terminally.
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok']);
     });
@@ -122,9 +130,11 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounced: ({ namespace }) => announced.push(namespace),
     });
+
     await session.ready;
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok']);
     });
@@ -141,11 +151,13 @@ describe('createMoqtPublishSession', () => {
 
   it('announces the suffix relative to a non-empty solicited prefix', async () => {
     const { pair, session, subscriber } = makePublishHarness();
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, ['live']);
+
     await vi.waitFor(() => {
       expect(solicitation.received).toHaveLength(2);
     });
@@ -159,11 +171,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounced: ({ namespace }) => announced.push(namespace),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, ['other']);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok']);
     });
@@ -179,11 +193,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received).toHaveLength(2);
     });
@@ -205,11 +221,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
@@ -234,11 +252,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const broad = await solicitNamespace(pair.server, [], 1);
+
     await vi.waitFor(() => {
       expect(broad.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
@@ -247,6 +267,7 @@ describe('createMoqtPublishSession', () => {
     // established one would produce duplicate namespace state — refused,
     // and the established carrier is untouched.
     const narrow = await solicitNamespace(pair.server, ['live'], 3);
+
     await vi.waitFor(() => {
       expect(narrow.received.map((m) => m.kind)).toEqual(['request-error']);
       expect(narrow.ended()).toBe(true);
@@ -264,6 +285,7 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
@@ -284,6 +306,7 @@ describe('createMoqtPublishSession', () => {
     expect([broad.received[0]?.kind, narrow.received[0]?.kind].sort()).toEqual(['request-error', 'request-ok']);
     const refused = broad.received[0]?.kind === 'request-error' ? broad : narrow;
     const accepted = refused === broad ? narrow : broad;
+
     expect(refused.received[0]).toMatchObject({ errorCode: REQUEST_ERROR_CODE.PREFIX_OVERLAP });
     await vi.waitFor(() => {
       expect(accepted.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
@@ -303,10 +326,12 @@ describe('createMoqtPublishSession', () => {
       onRequestUpdate: (update) => updates.push({ requestId: update.requestId }),
       onTrackBinding: (binding) => bindings.push(binding),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     const video = collectTrack(subscriber, 'video');
+
     await vi.waitFor(() => {
       // The peer's request ids are session-unique, so they double as the
       // alias — two live request ids sharing an alias is a session-fatal
@@ -323,6 +348,7 @@ describe('createMoqtPublishSession', () => {
       { trackNamespace: NAMESPACE, trackName: 'video' },
       { onUpdateOk: () => updateAcks.push(1) }
     );
+
     await vi.waitFor(() => {
       expect(subscribes).toHaveLength(2);
     });
@@ -337,10 +363,12 @@ describe('createMoqtPublishSession', () => {
 
   it('declares the microsecond timescale in SUBSCRIBE_OK track properties', async () => {
     const { pair, session, subscriber } = makePublishHarness();
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     const subscribe = await rawSubscribe(pair.server, 'video', 11);
+
     await vi.waitFor(() => {
       expect(subscribe.received).toHaveLength(1);
     });
@@ -358,9 +386,11 @@ describe('createMoqtPublishSession', () => {
 
   it('rejects inbound SUBSCRIBE for unknown tracks with DOES_NOT_EXIST', async () => {
     const { session, subscriber } = makePublishHarness();
+
     await session.ready;
 
     const errors: number[] = [];
+
     subscriber.subscribe(
       { trackNamespace: NAMESPACE, trackName: 'nope' },
       { onError: (error) => errors.push(error.errorCode) }
@@ -379,10 +409,12 @@ describe('createMoqtPublishSession', () => {
       onSubscribeEnd: ({ requestId }) => endedRequests.push(requestId),
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
     });
+
     await session.ready;
     const track = session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     const subscribe = await rawSubscribe(pair.server, 'video', 21);
+
     await vi.waitFor(() => {
       expect(subscribe.received).toHaveLength(1);
     });
@@ -416,15 +448,18 @@ describe('createMoqtPublishSession', () => {
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
       onSubscribeEnd: ({ requestId }) => endedRequests.push(requestId),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     const first = await rawSubscribe(pair.server, 'video', 31);
+
     await vi.waitFor(() => {
       expect(first.received).toHaveLength(1);
     });
 
     const second = await rawSubscribe(pair.server, 'video', 33);
+
     await vi.waitFor(() => {
       expect(second.received).toHaveLength(1);
       // The replaced subscription ends cleanly (FIN, no trailing bytes).
@@ -451,6 +486,7 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
@@ -459,13 +495,16 @@ describe('createMoqtPublishSession', () => {
     const openHeld = async (requestId: number) => {
       const stream = await pair.server.createBidirectionalStream();
       const writer = stream.writable.getWriter();
+
       await writer.write(encodeSubscribe({ requestId, trackNamespace: NAMESPACE, trackName: 'video', parameters: {} }));
       let ended = false;
+
       return {
         ended: () => ended,
         drain: () => {
           void (async () => {
             const reader = stream.readable.getReader();
+
             while (true) {
               const { done } = await reader.read();
               if (done) break;
@@ -482,8 +521,10 @@ describe('createMoqtPublishSession', () => {
       };
     };
     const older = await openHeld(91);
+
     await new Promise((resolve) => setTimeout(resolve, 20));
     const newer = await openHeld(93);
+
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Older accepts first — it may bind transiently, but must not sweep
@@ -511,6 +552,7 @@ describe('createMoqtPublishSession', () => {
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
       onSubscribe: ({ requestId }) => subscribed.push(requestId),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
@@ -519,6 +561,7 @@ describe('createMoqtPublishSession', () => {
     // reads, so A's SUBSCRIBE_OK hangs in flight.
     const streamA = await pair.server.createBidirectionalStream();
     const writerA = streamA.writable.getWriter();
+
     await writerA.write(
       encodeSubscribe({ requestId: 61, trackNamespace: NAMESPACE, trackName: 'video', parameters: {} })
     );
@@ -527,6 +570,7 @@ describe('createMoqtPublishSession', () => {
     // Subscription B reads immediately: its acceptance settles first,
     // replaces A, and takes the binding.
     const b = await rawSubscribe(pair.server, 'video', 63);
+
     await vi.waitFor(() => {
       expect(b.received).toHaveLength(1);
       expect(bindings.at(-1)).toBe(63);
@@ -535,6 +579,7 @@ describe('createMoqtPublishSession', () => {
     // Now drain A: its stale acceptance completes against a subscription
     // that was already replaced — it must not rebind the track.
     const readerA = streamA.readable.getReader();
+
     void (async () => {
       while (true) {
         const { done } = await readerA.read();
@@ -556,6 +601,7 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
@@ -564,6 +610,7 @@ describe('createMoqtPublishSession', () => {
       pair.server,
       encodeSubscribe({ requestId: 81, trackNamespace: NAMESPACE, trackName: 'video', parameters: { forward: 0 } })
     );
+
     await vi.waitFor(() => {
       expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
       expect(bindings).toEqual([undefined]);
@@ -594,11 +641,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     // A: fully accepted and bound.
     const a = await rawSubscribe(pair.server, 'video', 71);
+
     await vi.waitFor(() => {
       expect(bindings.at(-1)).toBe(71);
     });
@@ -606,6 +655,7 @@ describe('createMoqtPublishSession', () => {
     // B: acceptance held in flight (unread response).
     const streamB = await pair.server.createBidirectionalStream();
     const writerB = streamB.writable.getWriter();
+
     await writerB.write(
       encodeSubscribe({ requestId: 73, trackNamespace: NAMESPACE, trackName: 'video', parameters: {} })
     );
@@ -614,6 +664,7 @@ describe('createMoqtPublishSession', () => {
     // C settles first and must sweep BOTH A and B — leaving A live would
     // let it reclaim the binding when C ends.
     const c = await rawSubscribe(pair.server, 'video', 75);
+
     await vi.waitFor(() => {
       expect(c.received).toHaveLength(1);
       expect(bindings.at(-1)).toBe(75);
@@ -636,9 +687,11 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok']);
     });
@@ -661,9 +714,11 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
 
     const dead = await solicitNamespace(pair.server, [], 1);
+
     await vi.waitFor(() => {
       expect(dead.received.map((m) => m.kind)).toEqual(['request-ok']);
     });
@@ -678,6 +733,7 @@ describe('createMoqtPublishSession', () => {
     // loss report, so the relay's retry is a fresh start — not a
     // PREFIX_OVERLAP refusal against a corpse.
     const retry = await solicitNamespace(pair.server, [], 3);
+
     await vi.waitFor(() => {
       expect(retry.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
@@ -694,11 +750,13 @@ describe('createMoqtPublishSession', () => {
       onClosed: (info) => closes.push(info),
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received).toHaveLength(2);
     });
@@ -724,11 +782,13 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onClosed: (info) => closes.push(info),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'audio' });
 
     const first = await rawSubscribe(pair.server, 'video', 101);
+
     await vi.waitFor(() => {
       expect(first.received).toHaveLength(1);
     });
@@ -749,6 +809,7 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onClosed: (info) => closes.push(info),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
@@ -757,6 +818,7 @@ describe('createMoqtPublishSession', () => {
       pair.server,
       encodePublish({ requestId: 121, trackNamespace: NAMESPACE, trackName: 'video', trackAlias: 9 })
     );
+
     await vi.waitFor(() => {
       expect(publish.received.map((m) => m.kind)).toEqual(['request-error']);
     });
@@ -777,10 +839,12 @@ describe('createMoqtPublishSession', () => {
       onSubscribeEnd: ({ requestId }) => endedRequests.push(requestId),
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     const sub = await rawSubscribe(pair.server, 'video', 111);
+
     await vi.waitFor(() => {
       expect(bindings.at(-1)).toBe(111);
     });
@@ -805,11 +869,13 @@ describe('createMoqtPublishSession', () => {
       onGoaway: (goaway) => goaways.push(goaway.timeout),
       onAnnounceEnded: ({ error }) => endings.push(error),
     });
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received).toHaveLength(2);
     });
@@ -833,10 +899,12 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
     });
+
     await session.ready;
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
 
     const subscribe = await rawSubscribe(pair.server, 'video', 41);
+
     await vi.waitFor(() => {
       expect(bindings).toEqual([41]);
     });
@@ -858,21 +926,26 @@ describe('createMoqtPublishSession', () => {
     // publisher's control stream — it must carry SETUP and nothing else
     // (a client GOAWAY closes a moq-lite-rs session, code 17).
     const controlFrames: ControlMessage[] = [];
+
     void (async () => {
       const control = await pair.server.createUnidirectionalStream();
       const writer = control.getWriter();
+
       await writer.write(encodeSetup([]));
       const reader = pair.server.incomingUnidirectionalStreams.getReader();
       const { value: publisherControl } = await reader.read();
       const deframer = new ControlMessageDeframer();
       const streamReader = publisherControl!.getReader();
+
       while (true) {
         const { done, value } = await streamReader.read().catch(() => ({ done: true, value: undefined }) as const);
         if (done) break;
+
         for (const frame of deframer.push(value!)) controlFrames.push(decodeControlMessage(frame));
       }
     })();
     const session = createMoqtPublishSession(pair.client);
+
     await session.ready;
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
@@ -880,6 +953,7 @@ describe('createMoqtPublishSession', () => {
 
     const solicitation = await solicitNamespace(pair.server, []);
     const subscribe = await rawSubscribe(pair.server, 'video', 51);
+
     await vi.waitFor(() => {
       expect(solicitation.received).toHaveLength(2);
       expect(subscribe.received).toHaveLength(1);
@@ -898,14 +972,18 @@ describe('createMoqtPublishSession', () => {
 
   it('close() leaves no timer running', async () => {
     vi.useFakeTimers();
+
     try {
       const pair = createTransportPair();
+
       void (async () => {
         const control = await pair.server.createUnidirectionalStream();
         const writer = control.getWriter();
+
         await writer.write(encodeSetup([]));
       })();
       const session = createMoqtPublishSession(pair.client);
+
       await session.ready;
       session.close();
       // Room for the close drain's own (self-clearing) timers.
@@ -918,10 +996,12 @@ describe('createMoqtPublishSession', () => {
 
   it('registerTrack() after destroy is inert — no track state, end() safe', async () => {
     const { session, subscriber } = makePublishHarness();
+
     await session.ready;
     session.destroy();
 
     const handle = session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'late' });
+
     expect(handle.trackName).toBe('late');
     expect(() => handle.end()).not.toThrow();
     subscriber.destroy();
@@ -929,9 +1009,11 @@ describe('createMoqtPublishSession', () => {
 
   it('surfaces a control-stream GOAWAY', async () => {
     const pair = createTransportPair();
+
     void (async () => {
       const control = await pair.server.createUnidirectionalStream();
       const writer = control.getWriter();
+
       await writer.write(encodeSetup([]));
       await writer.write(encodeGoaway(1500));
     })();
@@ -939,6 +1021,7 @@ describe('createMoqtPublishSession', () => {
     const session = createMoqtPublishSession(pair.client, {
       callbacks: { onGoaway: (goaway) => goaways.push(goaway.timeout) },
     });
+
     await session.ready;
     await vi.waitFor(() => {
       expect(goaways).toEqual([1500]);
@@ -955,12 +1038,14 @@ describe('createMoqtPublishSession', () => {
     const { pair, session, subscriber } = makePublishHarness({
       onTrackBinding: ({ trackName, trackAlias }) => bindings.set(trackName, trackAlias),
     });
+
     await session.ready;
     await subscriber.ready;
 
     session.announce(NAMESPACE);
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace']);
     });
@@ -985,6 +1070,7 @@ describe('createMoqtPublishSession', () => {
       version: 'draft-01',
       tracks: [{ name: 'video', packaging: 'loc', isLive: true, role: 'video', codec: 'vp8' }],
     });
+
     catalogPublisher.send({
       type: 'frame',
       payload: utf8Encode(catalogJson),
@@ -995,6 +1081,7 @@ describe('createMoqtPublishSession', () => {
 
     const catalog = collectTrack(subscriber, 'catalog');
     const video = collectTrack(subscriber, 'video');
+
     await vi.waitFor(() => {
       expect(bindings.get('catalog')).toBeDefined();
       expect(bindings.get('video')).toBeDefined();
@@ -1008,6 +1095,7 @@ describe('createMoqtPublishSession', () => {
       { data: [2, 2], timestampUs: 33_333, key: false },
       { data: [3], timestampUs: 2_000_000, key: true },
     ];
+
     for (const frame of frames) {
       const data = new Uint8Array(frame.data);
       const packaged = packageLocFrame(
@@ -1019,6 +1107,7 @@ describe('createMoqtPublishSession', () => {
         },
         frame.key ? { videoConfig: new Uint8Array([0xc0]) } : {}
       );
+
       videoPublisher.send({
         type: 'frame',
         payload: packaged.payload,
@@ -1035,6 +1124,7 @@ describe('createMoqtPublishSession', () => {
     const parsed = applyMoqCatalogUpdate(undefined, utf8Decode(catalog.objects[0]!.payload), {
       catalogNamespace: NAMESPACE,
     });
+
     expect(parsed.tracks.map((track) => track.name)).toEqual(['video']);
     expect(parsed.tracks[0]!.packaging).toBe('loc');
 
@@ -1048,6 +1138,7 @@ describe('createMoqtPublishSession', () => {
       [1, 0],
     ]);
     const extracted = video.objects.map((object) => toLocFrame(object)!);
+
     expect(extracted.map((frame) => frame.isKey)).toEqual([true, false, true]);
     expect(extracted.map((frame) => frame.timestampUs)).toEqual([0, 33_333, 2_000_000]);
     expect(extracted[0]!.payload).toEqual(new Uint8Array([1, 1, 1]));
@@ -1071,8 +1162,10 @@ describe('createPublishSessionActor', () => {
     });
     const record = () => {
       const status = actor.snapshot.get().context.status;
+
       if (statuses.at(-1) !== status) statuses.push(status);
     };
+
     record();
 
     await vi.waitFor(() => {
@@ -1083,6 +1176,7 @@ describe('createPublishSessionActor', () => {
     // A track registers (the behavior layer's job) and the relay's
     // solicitation arrives; the actor's announce answers it.
     const session = actor.snapshot.get().context.session!;
+
     session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
     void solicitNamespace(pair.server, []);
     await vi.waitFor(() => {
@@ -1092,6 +1186,7 @@ describe('createPublishSessionActor', () => {
     expect(statuses).toEqual(['connecting', 'ready', 'live']);
 
     const subscription = subscriber.subscribe({ trackNamespace: NAMESPACE, trackName: 'video' }, {});
+
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.subscriberCount).toBe(1);
       expect(actor.snapshot.get().context.trackBindings).toEqual({ video: subscription.requestId });
@@ -1103,15 +1198,18 @@ describe('createPublishSessionActor', () => {
 
   it('stays ready when the peer never solicits the namespace', async () => {
     const pair = createTransportPair();
+
     void (async () => {
       const control = await pair.server.createUnidirectionalStream();
       const writer = control.getWriter();
+
       await writer.write(encodeSetup([]));
     })();
     const actor = createPublishSessionActor({
       endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE },
       connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
     });
+
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.status).toBe('ready');
     });
@@ -1122,21 +1220,25 @@ describe('createPublishSessionActor', () => {
 
   it('moves to failed when the solicitation carrying the announce ends', async () => {
     const pair = createTransportPair();
+
     void (async () => {
       const control = await pair.server.createUnidirectionalStream();
       const writer = control.getWriter();
+
       await writer.write(encodeSetup([]));
     })();
     const actor = createPublishSessionActor({
       endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE },
       connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
     });
+
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.status).toBe('ready');
     });
     actor.snapshot.get().context.session!.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog' });
 
     const solicitation = await solicitNamespace(pair.server, []);
+
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.status).toBe('live');
     });
@@ -1151,9 +1253,11 @@ describe('createPublishSessionActor', () => {
 
   it('moves to draining on GOAWAY', async () => {
     const pair = createTransportPair();
+
     void (async () => {
       const control = await pair.server.createUnidirectionalStream();
       const writer = control.getWriter();
+
       await writer.write(encodeSetup([]));
       await writer.write(encodeGoaway(0));
     })();
@@ -1161,6 +1265,7 @@ describe('createPublishSessionActor', () => {
       endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE },
       connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
     });
+
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.status).toBe('draining');
     });
@@ -1174,6 +1279,7 @@ describe('createPublishSessionActor', () => {
         throw new Error('connect refused');
       },
     });
+
     await vi.waitFor(() => {
       expect(actor.snapshot.get().context.status).toBe('failed');
     });
@@ -1187,14 +1293,17 @@ describe('createPublishSessionActor', () => {
   it('keeps draft-19 auth structures off the wire even with an endpoint token', async () => {
     const pair = createTransportPair();
     const setupOptions: { type: number }[] = [];
+
     void (async () => {
       const reader = pair.server.incomingUnidirectionalStreams.getReader();
       const { value: control } = await reader.read();
       const deframer = new ControlMessageDeframer();
       const streamReader = control!.getReader();
       const { value } = await streamReader.read();
+
       for (const frame of deframer.push(value!)) {
         const message = decodeControlMessage(frame);
+
         if (message.kind === 'setup') setupOptions.push(...message.options);
       }
     })();
@@ -1202,6 +1311,7 @@ describe('createPublishSessionActor', () => {
       endpoint: { url: 'https://relay.example.com/moq', namespace: NAMESPACE, authToken: 'secret' },
       connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }),
     });
+
     await vi.waitFor(() => {
       expect(setupOptions.length).toBeGreaterThan(0);
     });

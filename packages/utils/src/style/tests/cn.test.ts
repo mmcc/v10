@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { cn } from '../cn';
+import { describe, expect, it } from 'vite-plus/test';
+
+import { cn, resolveClassName } from '../cn';
 
 describe('cn', () => {
   it('returns an empty string for no arguments', () => {
@@ -56,5 +57,17 @@ describe('cn', () => {
 
   it('mixes strings, objects, and undefined', () => {
     expect(cn('foo', undefined, { bar: true }, '', { baz: false })).toBe('foo bar');
+  });
+});
+
+describe('resolveClassName', () => {
+  it('returns a static class name', () => {
+    expect(resolveClassName('active', { active: true })).toBe('active');
+  });
+
+  it('resolves a class name from state', () => {
+    expect(
+      resolveClassName((state: { active: boolean }) => (state.active ? 'active' : undefined), { active: true })
+    ).toBe('active');
   });
 });

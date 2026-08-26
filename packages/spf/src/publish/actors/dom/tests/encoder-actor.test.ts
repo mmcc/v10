@@ -1,16 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
+
 import { LOC_PROPERTY } from '../../../../media/moq/loc';
 import type { EncodedChunkLike, PackagedLocFrame } from '../../../../media/moq/loc-packaging';
 import type { EncodedChunkSinkMeta, EncoderInstance, EncoderOutputMetadata, TrackTimeline } from '../encoder-actor';
 import { createEncoderActor, createTrackTimeline } from '../encoder-actor';
 
 /**
- * Description carriage contract, exercised through a stubbed codec:
- * WebCodecs emits `metadata.decoderConfig` only on the FIRST output after
- * a configure (and on changes), but the LOC Config property must ride
- * EVERY keyframe — a late-joining subscriber configures its `avc`-format
- * decoder from whatever group it lands on, so a keyframe without the
- * description is undecodable for it.
+ * Description carriage contract, exercised through a stubbed codec: WebCodecs emits `metadata.decoderConfig` only on
+ * the FIRST output after a configure (and on changes), but the LOC Config property must ride EVERY keyframe — a
+ * late-joining subscriber configures its `avc`-format decoder from whatever group it lands on, so a keyframe without
+ * the description is undecodable for it.
  */
 
 interface FakeFrame {
@@ -32,6 +31,7 @@ function descriptionOf(
   property: number = LOC_PROPERTY.VIDEO_CONFIG
 ): Uint8Array | undefined {
   const pair = packaged.properties.find(({ type }) => type === property);
+
   return pair && typeof pair.value !== 'number' ? pair.value : undefined;
 }
 
@@ -61,9 +61,11 @@ function setupStubbedActor(
         close: () => undefined,
         encodeQueueSize: 0,
       };
+
       return instance;
     },
   });
+
   disposals.push(() => actor.destroy());
   return { actor, sunk, emit: (chunk: EncodedChunkLike, metadata?: EncoderOutputMetadata) => output(chunk, metadata) };
 }
@@ -74,6 +76,7 @@ function makeFrame(timestamp: number): FakeFrame {
 
 function locTimestampOf(packaged: PackagedLocFrame): number | undefined {
   const property = packaged.properties.find(({ type }) => type === LOC_PROPERTY.TIMESTAMP);
+
   return typeof property?.value === 'number' ? property.value : undefined;
 }
 
@@ -84,9 +87,11 @@ describe('createEncoderActor', () => {
 
   it('carries the cached decoder description on every keyframe, not just the first output', () => {
     const { actor, sunk, emit } = setupStubbedActor();
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     const description = Uint8Array.from([1, 66, 224, 31, 255]);
+
     // Group 1: the codec reports the config on the first output only.
     emit(makeChunk('key', 0), { decoderConfig: { description } });
     emit(makeChunk('delta', 33_000));
@@ -97,10 +102,13 @@ describe('createEncoderActor', () => {
     emit(makeChunk('key', 4_000_000));
 
     const keys = sunk.filter(({ meta }) => meta.keyframe);
+
     expect(keys).toHaveLength(3);
+
     for (const { packaged } of keys) {
       expect(descriptionOf(packaged)).toEqual(description);
     }
+
     // Delta frames never carry the Config property.
     for (const { packaged, meta } of sunk) {
       if (!meta.keyframe) expect(descriptionOf(packaged)).toBeUndefined();
@@ -109,15 +117,18 @@ describe('createEncoderActor', () => {
 
   it('labels an audio track description as Audio Config, not Video Config', () => {
     const { actor, sunk, emit } = setupStubbedActor({ track: 'audio' });
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     // AAC-shaped: an AudioSpecificConfig on the first output, then none —
     // audio chunks are all 'key', so the config must ride every frame.
     const description = Uint8Array.from([0x11, 0x90]);
+
     emit(makeChunk('key', 0), { decoderConfig: { description } });
     emit(makeChunk('key', 20_000));
 
     expect(sunk).toHaveLength(2);
+
     for (const { packaged } of sunk) {
       expect(descriptionOf(packaged, LOC_PROPERTY.AUDIO_CONFIG)).toEqual(description);
       expect(descriptionOf(packaged, LOC_PROPERTY.VIDEO_CONFIG)).toBeUndefined();
@@ -127,9 +138,11 @@ describe('createEncoderActor', () => {
   it('reports each decoder description through onDecoderConfig, as an owned copy', () => {
     const reported: Uint8Array[] = [];
     const { actor, emit } = setupStubbedActor({ onDecoderConfig: (description) => reported.push(description) });
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     const description = Uint8Array.from([1, 66, 224, 31]);
+
     emit(makeChunk('key', 0), { decoderConfig: { description } });
     // Outputs without metadata report nothing — the callback is the
     // config-change channel, not a per-chunk one.
@@ -150,9 +163,11 @@ describe('createEncoderActor', () => {
 
   it('does not alias the codec-owned description buffer', () => {
     const { sunk, emit, actor } = setupStubbedActor();
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     const description = Uint8Array.from([9, 9, 9]);
+
     emit(makeChunk('key', 0), { decoderConfig: { description } });
     description.fill(0); // the codec may reuse its buffer
     emit(makeChunk('key', 2_000_000));
@@ -162,9 +177,11 @@ describe('createEncoderActor', () => {
 
   it('invalidates the cached description on reconfigure until the codec reports a new one', () => {
     const { actor, sunk, emit } = setupStubbedActor();
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     const first = Uint8Array.from([1, 1, 1]);
+
     emit(makeChunk('key', 0), { decoderConfig: { description: first } });
     expect(descriptionOf(sunk[0]!.packaged)).toEqual(first);
 
@@ -176,6 +193,7 @@ describe('createEncoderActor', () => {
     // WebCodecs reports a fresh decoderConfig on the first post-configure
     // output; from then on the new description rides every keyframe.
     const second = Uint8Array.from([2, 2, 2]);
+
     emit(makeChunk('key', 4_000_000), { decoderConfig: { description: second } });
     emit(makeChunk('key', 6_000_000));
     expect(descriptionOf(sunk[2]!.packaged)).toEqual(second);
@@ -186,6 +204,7 @@ describe('createEncoderActor', () => {
     // Capture clock 7 200 000 000 µs (two "hours" into some per-source
     // domain); shared wallclock 1 000 000 000 000 µs.
     const { actor, sunk, emit } = setupStubbedActor({ nowUs: () => 1_000_000_000_000 });
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     actor.send({ type: 'encode', frame: makeFrame(7_200_000_000), keyFrame: true });
@@ -207,10 +226,12 @@ describe('createEncoderActor', () => {
       nowUs: () => now,
       encode: () => {
         if (!failNext) return;
+
         failNext = false;
         throw new Error('encoder rejected the frame');
       },
     });
+
     actor.send({ type: 'configure', config: { id: 1 } });
 
     // First frame throws synchronously — no anchor may be committed for a
@@ -232,6 +253,7 @@ describe('createEncoderActor', () => {
     const timeline = createTrackTimeline({ nowUs: () => now, monotonicNowUs: () => mono });
 
     const first = setupStubbedActor({ timeline });
+
     first.actor.send({ type: 'configure', config: { id: 1 } });
     first.actor.send({ type: 'encode', frame: makeFrame(7_200_000_000), keyFrame: true });
     first.emit(makeChunk('key', 7_200_000_000));
@@ -249,6 +271,7 @@ describe('createEncoderActor', () => {
     mono = 233_000;
     now -= 3_600_000_000;
     const second = setupStubbedActor({ timeline });
+
     second.actor.send({ type: 'configure', config: { id: 2 } });
     second.actor.send({ type: 'encode', frame: makeFrame(42), keyFrame: true });
     second.emit(makeChunk('key', 42));
@@ -258,6 +281,7 @@ describe('createEncoderActor', () => {
   it('keeps the wallclock anchor across a mid-stream reconfigure', () => {
     let now = 1_000_000_000_000;
     const { actor, sunk, emit } = setupStubbedActor({ nowUs: () => now });
+
     actor.send({ type: 'configure', config: { id: 1 } });
     actor.send({ type: 'encode', frame: makeFrame(500), keyFrame: true });
     emit(makeChunk('key', 500));
@@ -283,6 +307,7 @@ describe('createTrackTimeline', () => {
     // First epoch: plain wallclock anchor (capture base two "hours" into
     // some per-source domain), frames recorded as they publish.
     const offset = timeline.anchorOffsetUs(7_200_000_000);
+
     expect(7_200_000_000 + offset).toBe(1_000_000_000_000);
     timeline.recordFrame(7_200_000_000 + offset);
     mono = 500_000;
@@ -295,6 +320,7 @@ describe('createTrackTimeline', () => {
     mono = 750_000;
     now -= 3_600_000_000;
     const nextOffset = timeline.anchorOffsetUs(42);
+
     expect(42 + nextOffset).toBe(1_000_000_750_000);
   });
 
@@ -306,11 +332,13 @@ describe('createTrackTimeline', () => {
     const timeline = createTrackTimeline({ nowUs: () => 1_000_000_000_000.6, monotonicNowUs: () => mono });
 
     const offset = timeline.anchorOffsetUs(3);
+
     expect(Number.isInteger(offset)).toBe(true);
     timeline.recordFrame(3 + offset);
 
     mono = 433.9; // a fractional 333.5 µs gap between epochs
     const nextOffset = timeline.anchorOffsetUs(7);
+
     expect(Number.isInteger(nextOffset)).toBe(true);
   });
 });

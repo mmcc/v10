@@ -2,7 +2,7 @@ import { cleanup, render } from '@testing-library/react';
 import { formatTimeAsPhrase } from '@videojs/utils/time';
 import type { HTMLAttributes } from 'react';
 import { createRef } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { I18nProvider } from '../../../i18n';
 import { createPlayerWrapper } from '../../../testing/mocks';
@@ -36,6 +36,7 @@ const {
     pointing: false,
     focused: false,
   };
+
   return {
     mockSliderApi: (options: { onDragStart?: () => void; onDragEnd?: () => void }) => {
       capturedSliderOptions.current = options;
@@ -91,6 +92,7 @@ const {
 
 vi.mock('@videojs/core/dom', async (importOriginal) => {
   const orig: Record<string, unknown> = await importOriginal();
+
   return { ...orig, createSlider: vi.fn(mockSliderApi) };
 });
 
@@ -98,6 +100,7 @@ vi.mock('@videojs/store/react', () => ({
   useSnapshot: vi.fn((state: { current: unknown }) => state.current),
   useStore: vi.fn((_store: unknown, selector?: (state: object) => unknown) => {
     if (!selector) return _store;
+
     try {
       const result = selector({
         time: mockTimeState,
@@ -109,6 +112,7 @@ vi.mock('@videojs/store/react', () => ({
     } catch {
       // fall through
     }
+
     try {
       return selector({ ...mockTimeState, ...mockBufferState, ...mockPlaybackState, ...mockTextTrackState });
     } catch {
@@ -147,6 +151,7 @@ describe('TimeSliderRoot', () => {
   it('forwards ref to the root element', () => {
     const { Wrapper } = createPlayerWrapper();
     const ref = createRef<HTMLDivElement>();
+
     render(
       <Wrapper>
         <TimeSliderRoot ref={ref} />
@@ -176,6 +181,7 @@ describe('TimeSliderRoot', () => {
     );
 
     const el = container.querySelector('[data-orientation]');
+
     expect(el?.getAttribute('data-orientation')).toBe('horizontal');
   });
 
@@ -188,6 +194,7 @@ describe('TimeSliderRoot', () => {
     );
 
     const el = container.querySelector('[data-orientation]') as HTMLElement;
+
     expect(el?.style.getPropertyValue('--media-slider-fill')).toBeTruthy();
     expect(el?.style.getPropertyValue('--media-slider-pointer')).toBeTruthy();
     expect(el?.style.getPropertyValue('--media-slider-buffer')).toBeTruthy();
@@ -196,7 +203,7 @@ describe('TimeSliderRoot', () => {
 
 describe('TimeSlider compound', () => {
   it('provides collection state to chapter collection callbacks', () => {
-    const className = vi.fn((state: TimeSliderChaptersState) => (state.hasChapters ? 'chapters' : 'fallback'));
+    const className = vi.fn((_state: TimeSliderChaptersState) => 'chapters');
     const renderRoot = vi.fn((props: HTMLAttributes<HTMLElement>, state: TimeSliderChaptersState) => (
       <section {...props} data-count={state.chapters.length} />
     ));
@@ -213,12 +220,12 @@ describe('TimeSlider compound', () => {
       </Wrapper>
     );
 
-    expect(className).toHaveBeenCalledWith(expect.objectContaining({ hasChapters: true }));
+    expect(className).toHaveBeenCalledWith(expect.objectContaining({ chapters: expect.any(Array) }));
     expect(className.mock.calls[0]?.[0].chapters).toHaveLength(3);
     expect(className.mock.calls[0]?.[0]).not.toHaveProperty('active');
     expect(renderRoot).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ hasChapters: true, chapters: expect.any(Array) })
+      expect.objectContaining({ chapters: expect.any(Array) })
     );
     expect(container.querySelector('section.chapters')?.getAttribute('data-count')).toBe('3');
   });
@@ -238,9 +245,7 @@ describe('TimeSlider compound', () => {
                 </SliderTrack>
               </div>
             )}
-          >
-            <SliderTrack className="fallback" />
-          </TimeSliderChapters>
+          />
           <TimeSliderChapterTitle className="chapter-title" />
         </TimeSliderRoot>
       </Wrapper>
@@ -248,6 +253,7 @@ describe('TimeSlider compound', () => {
 
     const chapters = container.querySelectorAll('.chapter');
     const collection = container.querySelector('.chapters');
+
     expect(chapters).toHaveLength(3);
     expect(collection?.getAttribute('data-orientation')).toBe('horizontal');
     expect(chapters[0]?.getAttribute('data-orientation')).toBe('horizontal');
@@ -259,7 +265,6 @@ describe('TimeSlider compound', () => {
     expect(chapters[0]?.querySelector('.chapter-track')).toBeTruthy();
     expect(chapters[0]?.querySelector('.chapter-buffer')).toBeTruthy();
     expect(chapters[0]?.querySelector('.chapter-fill')).toBeTruthy();
-    expect(container.querySelector('.fallback')).toBeNull();
     expect((chapters[0] as HTMLElement).style.getPropertyValue('--media-slider-chapter-start')).toBe('0%');
     expect((chapters[0] as HTMLElement).style.getPropertyValue('--media-slider-chapter-end')).toBe(
       `${(40 / 120) * 100}%`
@@ -273,8 +278,9 @@ describe('TimeSlider compound', () => {
     expect(container.querySelector('.chapter-title')?.textContent).toBe('First');
   });
 
-  it('renders the regular track until chapters are available', () => {
+  it('renders one full-range chapter when chapter cues are unavailable', () => {
     const cues = mockTextTrackState.chaptersCues;
+
     mockTextTrackState.chaptersCues = [];
 
     try {
@@ -282,19 +288,22 @@ describe('TimeSlider compound', () => {
       const { container } = render(
         <Wrapper>
           <TimeSliderRoot>
-            <TimeSliderChapters className="chapters" renderChapter={(props) => <div {...props} className="chapter" />}>
-              <SliderTrack className="fallback">
-                <SliderBuffer />
-                <SliderFill />
-              </SliderTrack>
-            </TimeSliderChapters>
+            <TimeSliderChapters
+              className="chapters"
+              renderChapter={(props, state) => <div {...props} className="chapter" data-has-cue={state.cue !== null} />}
+            />
           </TimeSliderRoot>
         </Wrapper>
       );
 
       expect(container.querySelector('.chapters')).toBeTruthy();
-      expect(container.querySelector('.fallback')).toBeTruthy();
-      expect(container.querySelector('.chapter')).toBeNull();
+      const chapter = container.querySelector('.chapter') as HTMLElement;
+
+      expect(chapter).toBeTruthy();
+      expect(chapter.dataset.hasCue).toBe('false');
+      expect(chapter.style.getPropertyValue('--media-slider-chapter-start')).toBe('0%');
+      expect(chapter.style.getPropertyValue('--media-slider-chapter-end')).toBe('100%');
+      expect(chapter.style.getPropertyValue('--media-slider-chapter-width')).toBe('100%');
     } finally {
       mockTextTrackState.chaptersCues = cues;
     }
@@ -304,6 +313,7 @@ describe('TimeSlider compound', () => {
     const duration = mockTimeState.duration;
     const currentTime = mockTimeState.currentTime;
     const cues = mockTextTrackState.chaptersCues;
+
     mockTimeState.duration = 0.5;
     mockTimeState.currentTime = 0.25;
     mockTextTrackState.chaptersCues = [{ id: 'short', startTime: 0, endTime: 0.5, text: 'Short' }];
@@ -319,6 +329,7 @@ describe('TimeSlider compound', () => {
       );
 
       const chapter = container.querySelector('.chapter') as HTMLElement;
+
       expect(chapter.style.getPropertyValue('--media-slider-chapter-end')).toBe('100%');
       expect(chapter.style.getPropertyValue('--media-slider-chapter-width')).toBe('100%');
     } finally {
@@ -331,6 +342,7 @@ describe('TimeSlider compound', () => {
   it('keeps the final chapter at the exact right edge', () => {
     const duration = mockTimeState.duration;
     const cues = mockTextTrackState.chaptersCues;
+
     mockTimeState.duration = 487.626;
     mockTextTrackState.chaptersCues = [
       { id: 'first', startTime: 0, endTime: 200, text: 'First' },
@@ -360,6 +372,7 @@ describe('TimeSlider compound', () => {
 
   it('announces the current chapter while using the keyboard', () => {
     const currentTime = mockTimeState.currentTime;
+
     mockTimeState.currentTime = 70;
     mockSliderInput.focused = true;
 
@@ -416,6 +429,7 @@ describe('TimeSlider compound', () => {
     );
 
     const thumb = container.querySelector('[data-testid="thumb"]');
+
     expect(thumb?.getAttribute('role')).toBe('slider');
     expect(thumb?.getAttribute('aria-label')).toBe('Seek');
   });
@@ -433,6 +447,7 @@ describe('TimeSlider compound', () => {
     );
 
     const thumb = container.querySelector('[data-testid="thumb"]');
+
     expect(thumb?.getAttribute('aria-valuetext')).toBe(
       `${formatTimeAsPhrase(30, { locale: 'fr' })} sur ${formatTimeAsPhrase(120, { locale: 'fr' })}`
     );
@@ -449,6 +464,7 @@ describe('TimeSlider compound', () => {
     );
 
     const output = container.querySelector('[data-testid="value"]');
+
     expect(output?.textContent).toBeTruthy();
   });
 });
@@ -460,6 +476,7 @@ describe('TimeSliderRoot pauseOnDrag', () => {
     mockPlaybackState.pause.mockClear();
 
     const { Wrapper } = createPlayerWrapper();
+
     render(
       <Wrapper>
         <TimeSliderRoot />
@@ -479,6 +496,7 @@ describe('TimeSliderRoot pauseOnDrag', () => {
     mockPlaybackState.pause.mockClear();
 
     const { Wrapper } = createPlayerWrapper();
+
     render(
       <Wrapper>
         <TimeSliderRoot pauseOnDrag />
@@ -498,6 +516,7 @@ describe('TimeSliderRoot pauseOnDrag', () => {
     mockPlaybackState.pause.mockClear();
 
     const { Wrapper } = createPlayerWrapper();
+
     render(
       <Wrapper>
         <TimeSliderRoot pauseOnDrag />
@@ -517,6 +536,7 @@ describe('TimeSliderRoot pauseOnDrag', () => {
     const onDragEnd = vi.fn();
 
     const { Wrapper } = createPlayerWrapper();
+
     render(
       <Wrapper>
         <TimeSliderRoot pauseOnDrag onDragStart={onDragStart} onDragEnd={onDragEnd} />

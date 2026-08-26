@@ -1,5 +1,3 @@
-'use client';
-
 import type { MenuState } from '@videojs/core';
 import { completeMenuItemSelection } from '@videojs/core/dom';
 import { forwardRef, useCallback, useEffect, useRef } from 'react';
@@ -26,14 +24,18 @@ export const MenuItem = forwardRef<HTMLDivElement, MenuItemProps>(function MenuI
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return;
+
     return menu.registerItem(element);
   }, [menu]);
 
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (disabled) return;
+
       onClick?.(event);
+
       if (event.defaultPrevented) return;
+
       onSelect?.();
       completeMenuItemSelection(menu);
     },
@@ -43,7 +45,8 @@ export const MenuItem = forwardRef<HTMLDivElement, MenuItemProps>(function MenuI
   const handlePointerEnter = useCallback(() => {
     const element = elementRef.current;
     if (!element || disabled) return;
-    menu.highlight(element, { focus: false });
+
+    menu.highlight(element, { focus: false, pointer: true });
   }, [menu, disabled]);
 
   return (

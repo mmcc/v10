@@ -1,65 +1,46 @@
 /**
- * **Own the capture stream for camera, screen share, and the microphone —
- * three independent pipelines, not one exclusive selection.** Each of
- * `acquireCameraSource` / `acquireScreenShare` / `acquireMicrophone` is a
- * single-positive-state reactor (`'inactive'` ↔ `'active'`) following
- * `setup-mediasource`'s machine-reactor idiom, sharing the acquire/release
- * mechanics in {@link runCaptureAcquisition} but each owning its own
- * state/context slots so starting a share never touches the camera and a
- * mic device change never touches either video source.
+ * **Own the capture stream for camera, screen share, and the microphone — three independent pipelines, not one
+ * exclusive selection.** Each of `acquireCameraSource` / `acquireScreenShare` / `acquireMicrophone` is a
+ * single-positive-state reactor (`'inactive'` ↔ `'active'`) following `setup-mediasource`'s machine-reactor idiom,
+ * sharing the acquire/release mechanics in {@link runCaptureAcquisition} but each owning its own state/context slots so
+ * starting a share never touches the camera and a mic device change never touches either video source.
  *
- * - **Camera**: `getUserMedia({video, audio: false})`, gated on
- *   `state.cameraActive`, re-acquiring on a `state.videoInputDeviceId`
- *   change.
- * - **Screen**: `getDisplayMedia({video: true, audio: false})` — system
- *   audio is never requested (see the multi-source design record's
- *   "System audio" decision) — gated on `state.screenShareActive`.
- * - **Microphone**: `getUserMedia({audio, video: false})`, gated on
- *   `state.micActive` OR *either* video source being active. Video intent
- *   implies audio (the permission prompt still waits for real capture
- *   intent, matching v1's UX); `micActive` is the audio-only seam — a
- *   voice-only session captures with no camera or screen share in the
- *   permission prompt and no video pipeline touched (issue #26). The
- *   pipeline is keyed for re-acquisition on `state.audioInputDeviceId`
- *   ALONE — never on which gate term is active. This is the actual fix
- *   for the confirmed defect: a mic device change used to no-op while
- *   screen-sharing because the mic was merged into the screen's stream;
- *   now it has no dependency on the video pipelines at all. Because video
- *   intent implies audio, a mic acquired under an active video source
- *   stays acquired when `micActive` drops — the slot is acquisition
- *   intent, not a mute (`micMuted` is).
+ * - **Camera**: `getUserMedia({video, audio: false})`, gated on `state.cameraActive`, re-acquiring on a
+ *   `state.videoInputDeviceId` change.
+ * - **Screen**: `getDisplayMedia({video: true, audio: false})` — system audio is never requested (see the multi-source
+ *   design record's "System audio" decision) — gated on `state.screenShareActive`.
+ * - **Microphone**: `getUserMedia({audio, video: false})`, gated on `state.micActive` OR _either_ video source being
+ *   active. Video intent implies audio (the permission prompt still waits for real capture intent, matching v1's UX);
+ *   `micActive` is the audio-only seam — a voice-only session captures with no camera or screen share in the permission
+ *   prompt and no video pipeline touched (issue #26). The pipeline is keyed for re-acquisition on
+ *   `state.audioInputDeviceId` ALONE — never on which gate term is active. This is the actual fix for the confirmed
+ *   defect: a mic device change used to no-op while screen-sharing because the mic was merged into the screen's stream;
+ *   now it has no dependency on the video pipelines at all. Because video intent implies audio, a mic acquired under an
+ *   active video source stays acquired when `micActive` drops — the slot is acquisition intent, not a mute (`micMuted`
+ *   is).
  *
- * **Intent consumption** (multi-writer contract on `cameraActive` /
- * `screenShareActive` / `micActive`): the adapter writes these slots to
- * record consumer intent; each acquire behavior is its own slot's second
- * writer, consuming the intent (writing `false`) when the pipeline
- * terminates without consumer action — permission `denied`, the track
- * `ended` outside our control, or any acquisition failure (surfaced as a
- * capture `publishError`). The slot therefore always means "a request
- * being served", so the mic's OR-gate collapses when nothing is really
- * capturing (no hot mic behind a dismissed screen picker) and the next
- * `true` write is a real rising edge — one-click retry after a denial.
- * The mic consumes only `micActive`, never the video slots its gate also
- * reads — a dead mic must not end a video capture. The terminal status
- * (`denied`/`ended`) survives the release so UIs keep their blocked/ended
- * messaging.
+ * **Intent consumption** (multi-writer contract on `cameraActive` / `screenShareActive` / `micActive`): the adapter
+ * writes these slots to record consumer intent; each acquire behavior is its own slot's second writer, consuming the
+ * intent (writing `false`) when the pipeline terminates without consumer action — permission `denied`, the track
+ * `ended` outside our control, or any acquisition failure (surfaced as a capture `publishError`). The slot therefore
+ * always means "a request being served", so the mic's OR-gate collapses when nothing is really capturing (no hot mic
+ * behind a dismissed screen picker) and the next `true` write is a real rising edge — one-click retry after a denial.
+ * The mic consumes only `micActive`, never the video slots its gate also reads — a dead mic must not end a video
+ * capture. The terminal status (`denied`/`ended`) survives the release so UIs keep their blocked/ended messaging.
  *
- * **Microphone failure policy**: a machine without a (satisfiable) mic
- * publishes video-only — missing-device failures land a quiet `idle`
- * with no `publishError`, and an exact `audioInputDeviceId` that can no
- * longer be honored falls back to the platform default. A mic parked in
- * `ended` (unplugged mid-capture) or that quiet `idle` re-acquires on
- * the next `devicechange` while the gate is still active.
+ * **Microphone failure policy**: a machine without a (satisfiable) mic publishes video-only — missing-device failures
+ * land a quiet `idle` with no `publishError`, and an exact `audioInputDeviceId` that can no longer be honored falls
+ * back to the platform default. A mic parked in `ended` (unplugged mid-capture) or that quiet `idle` re-acquires on the
+ * next `devicechange` while the gate is still active.
  *
- * The acquire work lives in each reactor's positive-state `effects:` (not
- * `entry`) so cleanup fires on BOTH state exit AND a within-state identity
- * change (kind-specific device id, or the mic's OR'd gate rising edge).
- * Stale-async guard: the effect-run closure carries a `stale` flag flipped
- * by its own cleanup — an acquire that resolves after the gate changed (or
- * capture was released) stops its tracks and discards without touching
- * the slots. This is the per-run generation/token pattern.
+ * The acquire work lives in each reactor's positive-state `effects:` (not `entry`) so cleanup fires on BOTH state exit
+ * AND a within-state identity change (kind-specific device id, or the mic's OR'd gate rising edge). Stale-async guard:
+ * the effect-run closure carries a `stale` flag flipped by its own cleanup — an acquire that resolves after the gate
+ * changed (or capture was released) stops its tracks and discards without touching the slots. This is the per-run
+ * generation/token pattern.
  */
 import { listen } from '@videojs/utils/dom';
+
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
@@ -98,36 +79,38 @@ function isNotAllowedError(error: unknown): boolean {
 }
 
 /**
- * getUserMedia failures a missing/unsatisfiable device produces:
- * NotFoundError (no such device at all) and OverconstrainedError (an
- * `exact` deviceId that cannot be honored). Name-checked rather than
- * instanceof — OverconstrainedError is its own constructor in some
- * engines.
+ * GetUserMedia failures a missing/unsatisfiable device produces: NotFoundError (no such device at all) and
+ * OverconstrainedError (an `exact` deviceId that cannot be honored). Name-checked rather than instanceof —
+ * OverconstrainedError is its own constructor in some engines.
  */
 function isMissingDeviceError(error: unknown): boolean {
   const name = (error as { name?: unknown } | null | undefined)?.name;
+
   return name === 'NotFoundError' || name === 'OverconstrainedError';
 }
 
 function snapshotVideoTrack(stream: MediaStream): CaptureTrackFacts | undefined {
   const track = stream.getVideoTracks()[0];
   if (!track) return undefined;
+
   const settings = track.getSettings();
+
   return { deviceId: settings.deviceId, width: settings.width, height: settings.height, frameRate: settings.frameRate };
 }
 
 function snapshotAudioTrack(stream: MediaStream): CaptureTrackFacts | undefined {
   const track = stream.getAudioTracks()[0];
   if (!track) return undefined;
+
   const settings = track.getSettings();
+
   return { deviceId: settings.deviceId, sampleRate: settings.sampleRate, channelCount: settings.channelCount };
 }
 
 /**
- * Shared acquire/release mechanics for one capture pipeline. `acquire`
- * resolves the platform stream; `snapshot` projects it to track facts.
- * Everything else — the stale-async guard, track-ended listeners, and
- * cleanup — is identical across camera, screen, and mic.
+ * Shared acquire/release mechanics for one capture pipeline. `acquire` resolves the platform stream; `snapshot`
+ * projects it to track facts. Everything else — the stale-async guard, track-ended listeners, and cleanup — is
+ * identical across camera, screen, and mic.
  */
 function runCaptureAcquisition({
   acquire,
@@ -146,11 +129,9 @@ function runCaptureAcquisition({
   stream: Signal<MediaStream | undefined>;
   publishError: Signal<PublishErrorFacts | undefined>;
   /**
-   * Consumer-intent slot this pipeline serves, consumed (set `false`) when
-   * it terminates without consumer action — `denied`, `ended`, or any
-   * acquisition failure — see the module doc's multi-writer contract. The
-   * mic passes its own `micActive`: consuming it never touches the video
-   * slots whose intent also holds its gate.
+   * Consumer-intent slot this pipeline serves, consumed (set `false`) when it terminates without consumer action —
+   * `denied`, `ended`, or any acquisition failure — see the module doc's multi-writer contract. The mic passes its own
+   * `micActive`: consuming it never touches the video slots whose intent also holds its gate.
    */
   intent?: Signal<boolean | undefined>;
   /** Mic-only policy: a missing/unsatisfiable device lands a quiet `idle` instead of a capture error. */
@@ -162,9 +143,13 @@ function runCaptureAcquisition({
 
   const release = () => {
     for (const dispose of trackCleanups) dispose();
+
     trackCleanups.length = 0;
+
     if (!owned) return;
+
     for (const track of owned.getTracks()) track.stop();
+
     owned = undefined;
     stream.set(undefined);
     tracks.set(undefined);
@@ -178,15 +163,18 @@ function runCaptureAcquisition({
 
   const run = async () => {
     let acquired: MediaStream;
+
     try {
       acquired = await acquire();
     } catch (error) {
       if (stale) return;
+
       if (isNotAllowedError(error)) {
         status.set('denied');
         intent?.set(false);
         return;
       }
+
       if (tolerateMissingDevice && isMissingDeviceError(error)) {
         // No (satisfiable) device is not a publish failure — capture goes
         // on without this pipeline (`tracks` simply stays unset), matching
@@ -195,6 +183,7 @@ function runCaptureAcquisition({
         status.set('idle');
         return;
       }
+
       status.set('idle');
       publishError.set({
         code: 'capture',
@@ -208,25 +197,32 @@ function runCaptureAcquisition({
       intent?.set(false);
       return;
     }
+
     if (stale) {
       for (const track of acquired.getTracks()) track.stop();
+
       return;
     }
+
     owned = acquired;
+
     for (const track of acquired.getTracks()) {
       trackCleanups.push(listen(track, 'ended', onTrackEnded, { once: true }));
     }
+
     stream.set(acquired);
     tracks.set(snapshot(acquired));
     status.set('active');
   };
 
   status.set('acquiring');
+
   // A fresh attempt supersedes any stale capture failure: the slot is
   // shared by three pipelines, so per-source blame isn't expressible —
   // but an in-flight acquisition either succeeds (error gone is right)
   // or re-writes its own failure below. Other codes are never touched.
   if (peek(publishError)?.code === 'capture') publishError.set(undefined);
+
   void run();
 
   return () => {
@@ -238,6 +234,7 @@ function runCaptureAcquisition({
     // in-flight or active pipeline resets to 'idle'; the next acquisition
     // overwrites either way with 'acquiring'.
     const settled = peek(status);
+
     if (settled !== 'denied' && settled !== 'ended') status.set('idle');
   };
 }
@@ -262,9 +259,11 @@ export interface AcquireCameraSourceContext {
 
 async function acquireCamera(videoInputDeviceId: string | undefined): Promise<MediaStream> {
   const mediaDevices = globalThis.navigator?.mediaDevices;
+
   if (!mediaDevices?.getUserMedia) {
     throw new Error('Media capture is not available in this environment (no navigator.mediaDevices).');
   }
+
   return mediaDevices.getUserMedia({ video: exactDeviceConstraint(videoInputDeviceId), audio: false });
 }
 
@@ -295,6 +294,7 @@ function acquireCameraSourceSetup({
         // through the cleanup below in addition to state exit / destroy.
         effects: () => {
           const deviceId = state.videoInputDeviceId.get();
+
           return runCaptureAcquisition({
             acquire: () => acquireCamera(deviceId),
             snapshot: snapshotVideoTrack,
@@ -333,16 +333,20 @@ export interface AcquireScreenShareContext {
 
 async function acquireScreen(): Promise<MediaStream> {
   const mediaDevices = globalThis.navigator?.mediaDevices;
+
   if (!mediaDevices?.getDisplayMedia) {
     throw new Error('Screen capture is not available in this environment (no navigator.mediaDevices).');
   }
+
   // System/tab audio is never requested — see the multi-source design
   // record's "System audio" decision. A screen-audio track is future work.
   const stream = await mediaDevices.getDisplayMedia({ video: true, audio: false });
+
   // Screen content favors legibility over motion smoothness; the hint
   // steers browser scaling/encoding heuristics (design record, "Encoder
   // budget & degradation" decision).
   for (const track of stream.getVideoTracks()) track.contentHint = 'detail';
+
   return stream;
 }
 
@@ -410,9 +414,11 @@ export interface AcquireMicrophoneContext {
 
 async function acquireMic(audioInputDeviceId: string | undefined): Promise<MediaStream> {
   const mediaDevices = globalThis.navigator?.mediaDevices;
+
   if (!mediaDevices?.getUserMedia) {
     throw new Error('Media capture is not available in this environment (no navigator.mediaDevices).');
   }
+
   try {
     return await mediaDevices.getUserMedia({ audio: exactDeviceConstraint(audioInputDeviceId), video: false });
   } catch (error) {
@@ -422,6 +428,7 @@ async function acquireMic(audioInputDeviceId: string | undefined): Promise<Media
     if (audioInputDeviceId && isMissingDeviceError(error)) {
       return mediaDevices.getUserMedia({ audio: true, video: false });
     }
+
     throw error;
   }
 }
@@ -450,6 +457,7 @@ function acquireMicrophoneSetup({
   // Bumped by the devicechange listener below to re-fire acquisition —
   // internal to this reactor, never a composition slot.
   const retryEpoch = signal(0);
+
   return createMachineReactor<CaptureFsmState>({
     initial: 'inactive',
     // Gated on the mic's own intent OR either video source wanting to
@@ -474,14 +482,17 @@ function acquireMicrophoneSetup({
         entry: () => {
           const mediaDevices = globalThis.navigator?.mediaDevices;
           if (!mediaDevices?.addEventListener) return;
+
           return listen(mediaDevices, 'devicechange', () => {
             const parked = peek(state.micState);
+
             if (parked === 'ended' || parked === 'idle') retryEpoch.set(peek(retryEpoch) + 1);
           });
         },
         effects: [
           () => {
             const deviceId = state.audioInputDeviceId.get();
+
             retryEpoch.get();
             return runCaptureAcquisition({
               acquire: () => acquireMic(deviceId),
@@ -507,7 +518,9 @@ function acquireMicrophoneSetup({
           // gate entry reads its synchronous 'acquiring' and stays quiet.
           () => {
             if (state.micActive.get() !== true) return;
+
             const parked = peek(state.micState);
+
             if (parked === 'denied' || parked === 'ended' || parked === 'idle') {
               retryEpoch.set(peek(retryEpoch) + 1);
             }

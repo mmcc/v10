@@ -1,16 +1,16 @@
 /**
  * Cross-renderer selectors that work for both HTML (Web Components) and React.
  *
- * HTML uses custom element tags: `media-play-button`, `media-time-slider`, etc.
- * React uses standard elements with CSS classes: `button.media-button--play`, etc.
+ * HTML uses custom element tags: `media-play-button`, `media-time-slider`, etc. React uses standard elements with CSS
+ * classes: `button.media-button--play`, etc.
  *
- * Both renderers apply the **same data attributes** for state (`data-paused`,
- * `data-muted`, etc.), which is what tests assert against.
+ * Both renderers apply the **same data attributes** for state (`data-paused`, `data-muted`, etc.), which is what tests
+ * assert against.
  *
  * Each selector uses a CSS `,` (or) to match either renderer.
  */
 
-/** Toolbar: HTML wraps controls in `<media-controls>`, React in `<div class="media-controls">`. */
+/** Toolbar: HTML renders `<media-controls-content>`, React renders `<div class="media-controls">`. */
 function withinControls(selector: string): string {
   return `media-controls ${selector}, .media-controls ${selector}`;
 }
@@ -40,7 +40,7 @@ export const SELECTORS = {
   container: '.media-default-skin, .media-minimal-skin',
 
   // Controls bar
-  controls: 'media-controls, .media-controls',
+  controls: 'media-controls-content, .media-controls',
 
   // Buttons
   playButton: 'media-play-button, .media-button--play',
@@ -49,6 +49,8 @@ export const SELECTORS = {
   muteButton: 'media-mute-button, .media-button--mute',
   fullscreenButton: 'media-fullscreen-button, .media-button--fullscreen',
   pipButton: 'media-pip-button, .media-button--pip',
+  castButton: 'media-cast-button, .media-button--cast',
+  airPlayButton: 'media-airplay-button, .media-button--airplay',
   captionsButton: 'media-captions-button, .media-button--captions',
   playbackRateButton: [
     withinControls('media-playback-rate-button'),
@@ -82,16 +84,17 @@ export const SELECTORS = {
     '[data-type="duration"].media-time',
     '[data-type="remaining"].media-time',
   ].join(', '),
+  timeToggle: 'media-time[toggle], time.media-time[role="button"]',
   poster: 'media-poster, img[data-loaded]',
   bufferingIndicator: 'media-buffering-indicator, .media-buffering-indicator',
   thumbnail: 'media-slider-thumbnail, .media-thumbnail__image',
 
   tooltip: 'media-tooltip, .media-tooltip',
   popover: 'media-popover, .media-popover',
-  errorDialog: 'media-error-dialog, .media-error',
+  errorDialog: 'media-error-dialog, .media-dialog__popup',
 
   // Media element — matches all renderer custom elements and native media
-  media: 'video, audio, hlsjs-video, hls-video, native-hls-video, dash-video, mux-video, mux-audio',
+  media: 'video, audio, hlsjs-video, hls-video, native-hls-video, dash-video, shaka-video, mux-video, mux-audio',
 } as const;
 
 /** Data attributes used for player state (same across both renderers). */

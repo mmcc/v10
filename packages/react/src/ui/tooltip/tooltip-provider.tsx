@@ -1,5 +1,3 @@
-'use client';
-
 import { TooltipGroupCore, type TooltipGroupProps } from '@videojs/core';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
@@ -12,6 +10,7 @@ export interface TooltipProviderProps extends TooltipGroupProps {
 
 export function TooltipProvider({ delay, closeDelay, timeout, children }: TooltipProviderProps): ReactNode {
   const [group] = useState(() => new TooltipGroupCore({ delay, closeDelay, timeout }));
+
   group.setProps({ delay, closeDelay, timeout });
 
   return <TooltipGroupContextProvider value={{ group }}>{children}</TooltipGroupContextProvider>;

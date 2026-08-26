@@ -111,7 +111,7 @@ pnpm build
 
 ### 🧹 Style & Linting
 
-For the bulk of our core code, we use [Biome](https://biomejs.dev). Between IDE configs, pre-commit hooks, and manual CLI fixes, many styling and linting issues should get caught automatically.
+We use [Vite+](https://viteplus.dev/) with Oxlint and Oxfmt for linting and formatting. Between IDE integration, pre-commit hooks, and manual CLI fixes, many issues should get caught automatically.
 
 To ensure your code follows our lint rules with:
 
@@ -121,7 +121,7 @@ pnpm lint:fix                # check and auto-fix the whole workspace
 pnpm lint:fix:file <file>    # check and auto-fix a single file
 ```
 
-Pre‑commit hooks automatically lint staged files via **simple-git-hooks** and **lint‑staged**.
+Vite+ pre-commit hooks automatically check and fix staged files.
 
 ### 🔎 Typechecking
 
@@ -199,6 +199,18 @@ On `pnpm dev:sandbox`, `setup.ts` copies any file from `templates/` that doesn't
 
 See [`apps/sandbox/README.md`](./apps/sandbox/README.md) for the full model, including the `app/` shell, the `@app/*` alias for shared code, and how to add a new sandbox entry point.
 
+### 🚚 Preview Releases
+
+Pull requests and commits on `main` publish an installable preview of the public packages to [pkg.pr.new][pkg-pr-new] — nothing is published to npm. A bot comment on the PR lists the install commands, and the same URLs work by commit SHA:
+
+```sh
+pnpm add https://pkg.pr.new/@videojs/html@<pr-number-or-sha>
+```
+
+Use this to try a change in a real project before it is released. Previews are versioned `0.0.0-preview-<sha>` so they can never satisfy a semver range for a real release, and they ship without the bundled markdown docs that real releases include.
+
+Because a preview is an installable artifact carrying the Video.js name, it is only published for code someone with repository access pushed or vouched for. Pull requests from a branch in this repo publish automatically; **pull requests from a fork publish only once a maintainer approves them**. The approval has to be written against the pull request's latest commit, so any new commit needs a fresh approval before it is published.
+
 ### ✅ Workspace Consistency
 
 Before opening a PR, run the workspace consistency check to catch common mistakes (CI coverage, scope mismatches, broken define imports, etc.):
@@ -227,6 +239,7 @@ pnpm up <package>@<version> -r
 > We try to be very intentional with any dependencies we add to this project. This is true of both developer/tooling dependencies and especially package-level (source) dependencies. If you find yourself needing to add a dependency, we strongly encourage you to check in with the core maintainers before proceeding to avoid wasted time and effort for everyone involved (yourself included!).
 
 [pnpm-filtering]: https://pnpm.io/filtering
+[pkg-pr-new]: https://github.com/stackblitz-labs/pkg.pr.new
 
 ## Using AI
 

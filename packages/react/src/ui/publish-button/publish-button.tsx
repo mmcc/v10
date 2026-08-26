@@ -15,26 +15,22 @@ import { useOptionalTooltipContext } from '../tooltip/context';
 const DISPLAY_NAME = 'PublishButton';
 
 export interface PublishButtonProps
-  extends UIComponentProps<'button', PublishButtonCore.State>,
-    PublishButtonCore.Props {}
+  extends UIComponentProps<'button', PublishButtonCore.State>, PublishButtonCore.Props {}
 
 /**
- * A button that starts and stops a publish (broadcast) session. Disabled
- * while capture is inactive or the session is transitioning, and exposes
- * `data-publish-state` / `data-disabled` so skins can style the "Go live" ↔
- * "Stop stream" treatment.
+ * A button that starts and stops a publish (broadcast) session. Disabled while capture is inactive or the session is
+ * transitioning, and exposes `data-publish-state` / `data-disabled` so skins can style the "Go live" ↔ "Stop stream"
+ * treatment.
  *
- * Selects from the `publish` and `captureSource` features and composes them
- * itself rather than going through `createMediaButton`, since the
- * PublishButton needs both slices to know whether a session can start.
+ * Selects from the `publish` and `captureSource` features and composes them itself rather than going through
+ * `createMediaButton`, since the PublishButton needs both slices to know whether a session can start.
  *
- * Displays the translated session label ("Go live" ↔ "Stop stream") when no
- * children are provided.
+ * Displays the translated session label ("Go live" ↔ "Stop stream") when no children are provided.
  *
  * @example
- * ```tsx
- * <PublishButton />
- * ```
+ *   ```tsx
+ *   <PublishButton />;
+ *   ```;
  */
 export const PublishButton = forwardRef<HTMLButtonElement, PublishButtonProps>(
   function PublishButton(componentProps, forwardedRef): ReactNode {
@@ -61,6 +57,7 @@ export const PublishButton = forwardRef<HTMLButtonElement, PublishButtonProps>(
     const tooltipCtx = useOptionalTooltipContext();
     const translator = useTranslator();
     const [core] = useState(() => new PublishButtonCore());
+
     core.setProps({ label, disabled });
 
     const { getButtonProps, buttonRef } = useButton({
@@ -73,17 +70,20 @@ export const PublishButton = forwardRef<HTMLButtonElement, PublishButtonProps>(
     });
 
     if (media) core.setMedia(media);
+
     const state = media ? core.getState() : null;
     const labelText = state ? translateText(core.getLabel(state), translator) : undefined;
 
     useLayoutEffect(() => {
       if (!tooltipCtx) return;
+
       tooltipCtx.setContent(labelText ? { label: labelText } : undefined);
       return () => tooltipCtx.setContent(undefined);
     }, [tooltipCtx, labelText]);
 
     if (!media || !state) {
       if (__DEV__) logMissingFeature(DISPLAY_NAME, selectPublish.displayName ?? 'publish');
+
       return null;
     }
 

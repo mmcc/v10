@@ -14,20 +14,18 @@ import { renderElement } from '../../utils/use-render';
 const DISPLAY_NAME = 'ConnectionIndicator';
 
 export interface ConnectionIndicatorProps
-  extends UIComponentProps<'div', ConnectionIndicatorCore.State>,
-    ConnectionIndicatorCore.Props {}
+  extends UIComponentProps<'div', ConnectionIndicatorCore.State>, ConnectionIndicatorCore.Props {}
 
 /**
- * Indicates coarse connection health for the active publish session.
- * Content (typically an icon) is authored by the skin; the component exposes
- * `data-quality` (`unknown`, `good`, `fair`, or `poor`) for styling.
+ * Indicates coarse connection health for the active publish session. Content (typically an icon) is authored by the
+ * skin; the component exposes `data-quality` (`unknown`, `good`, `fair`, or `poor`) for styling.
  *
  * @example
- * ```tsx
- * <ConnectionIndicator>
- *   <SignalIcon />
- * </ConnectionIndicator>
- * ```
+ *   ```tsx
+ *   <ConnectionIndicator>
+ *     <SignalIcon />
+ *   </ConnectionIndicator>;
+ *   ```;
  */
 export const ConnectionIndicator = forwardRef(function ConnectionIndicator(
   componentProps: ConnectionIndicatorProps,
@@ -38,10 +36,12 @@ export const ConnectionIndicator = forwardRef(function ConnectionIndicator(
   const publishStats = usePlayer(selectPublishStats);
   const translator = useTranslator();
   const [core] = useState(() => new ConnectionIndicatorCore());
+
   core.setProps({ label });
 
   if (!publishStats) {
     if (__DEV__) logMissingFeature(DISPLAY_NAME, selectPublishStats.displayName ?? 'publishStats');
+
     return null;
   }
 

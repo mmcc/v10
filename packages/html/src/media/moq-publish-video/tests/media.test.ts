@@ -1,17 +1,20 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { MoqPublishVideo } from '../media';
 
 customElements.define('test-moq-publish-video', MoqPublishVideo);
 
 function createMoqPublishVideo(): MoqPublishVideo {
   const el = new MoqPublishVideo();
+
   document.body.appendChild(el);
   return el;
 }
 
-/** happy-dom's mediaDevices is minimal — install a controllable stand-in. */
+/** Happy-dom's mediaDevices is minimal — install a controllable stand-in. */
 function stubMediaDevices(getUserMedia: (constraints?: MediaStreamConstraints) => Promise<MediaStream>): () => void {
   const original = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+
   Object.defineProperty(navigator, 'mediaDevices', {
     value: {
       getUserMedia,
@@ -81,6 +84,7 @@ describe('MoqPublishVideo', () => {
   it('clears the camera-active attribute when the engine consumes the intent, keeping property retry live', async () => {
     const getUserMedia = vi.fn().mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
     const restore = stubMediaDevices(getUserMedia);
+
     try {
       const el = createMoqPublishVideo();
 
@@ -99,6 +103,7 @@ describe('MoqPublishVideo', () => {
       const cameraCalls = () =>
         getUserMedia.mock.calls.filter((call) => (call[0] as MediaStreamConstraints | undefined)?.video).length;
       const callsAfterDenial = cameraCalls();
+
       el.cameraActive = true;
       await vi.waitFor(() => {
         expect(cameraCalls()).toBeGreaterThan(callsAfterDenial);
@@ -124,6 +129,7 @@ describe('MoqPublishVideo', () => {
   it('clears the mic-active attribute when the engine consumes the intent, keeping property retry live', async () => {
     const getUserMedia = vi.fn().mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
     const restore = stubMediaDevices(getUserMedia);
+
     try {
       const el = createMoqPublishVideo();
 
@@ -142,6 +148,7 @@ describe('MoqPublishVideo', () => {
       const micCalls = () =>
         getUserMedia.mock.calls.filter((call) => (call[0] as MediaStreamConstraints | undefined)?.audio).length;
       const callsAfterDenial = micCalls();
+
       el.micActive = true;
       await vi.waitFor(() => {
         expect(micCalls()).toBeGreaterThan(callsAfterDenial);

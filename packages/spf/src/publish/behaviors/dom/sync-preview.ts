@@ -1,20 +1,15 @@
 /**
- * **Mirror one capture stream into the preview element.** While
- * `context.previewElement` is present and `state.previewSource` names a
- * stream that is itself present (`context.cameraStream` /
- * `context.screenStream`), sets the element's `srcObject` to that stream,
- * forces `muted` + `playsInline` (local monitors must never echo the
- * microphone or block on autoplay policy), and kicks off a fire-and-forget
- * `play()`.
+ * **Mirror one capture stream into the preview element.** While `context.previewElement` is present and
+ * `state.previewSource` names a stream that is itself present (`context.cameraStream` / `context.screenStream`), sets
+ * the element's `srcObject` to that stream, forces `muted` + `playsInline` (local monitors must never echo the
+ * microphone or block on autoplay policy), and kicks off a fire-and-forget `play()`.
  *
- * v1 ships one switchable preview, not dual slots — see the multi-source
- * design record's "Preview" decision. `previewSource` picks a specific
- * stream; it does not fall back to whichever source happens to be live.
+ * V1 ships one switchable preview, not dual slots — see the multi-source design record's "Preview" decision.
+ * `previewSource` picks a specific stream; it does not fall back to whichever source happens to be live.
  *
- * Simple single-effect behavior. The effect's cleanup clears `srcObject`
- * from exactly the element/stream pair it wired — so a source switch, a
- * stream release, an element swap, a detach, or behavior teardown all
- * clear the old preview structurally before (or without) a new pairing.
+ * Simple single-effect behavior. The effect's cleanup clears `srcObject` from exactly the element/stream pair it wired
+ * — so a source switch, a stream release, an element swap, a detach, or behavior teardown all clear the old preview
+ * structurally before (or without) a new pairing.
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import { effect } from '../../../core/signals/effect';

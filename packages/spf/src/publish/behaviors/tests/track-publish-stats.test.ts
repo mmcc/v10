@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { ActorSnapshot } from '../../../core/actors/actor';
 import { type Signal, signal } from '../../../core/signals/primitives';
 import type { TrackPublisherActor, TrackPublisherCounters, TrackPublisherState } from '../../actors/track-publisher';
@@ -31,6 +32,7 @@ function makeSource(counters: Partial<EncoderActorCounters> = {}): {
     value: 'encoding',
     context: { ...ZERO_COUNTERS, ...counters },
   });
+
   return { source: { snapshot }, snapshot };
 }
 
@@ -39,6 +41,7 @@ function advance(
   counters: Partial<EncoderActorCounters>
 ): void {
   const current = snapshot.get();
+
   snapshot.set({ ...current, context: { ...current.context, ...counters } });
 }
 
@@ -57,6 +60,7 @@ function setupStats() {
     publishSessionActor: signal<TrackPublishStatsContext['publishSessionActor']>(undefined),
   };
   const reactor = trackPublishStats.setup({ state, context, config: { statsIntervalMs: STATS_INTERVAL_MS } });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -76,6 +80,7 @@ function makePublisher(counters: Partial<TrackPublisherCounters>): TrackPublishe
     value: 'publishing',
     context: { ...ZERO_PUBLISHER_COUNTERS, ...counters },
   });
+
   return { snapshot, send: () => {}, destroy: () => {} };
 }
 
@@ -84,6 +89,7 @@ function makeSessionActor(subscriberCount: number): PublishSessionActor {
     value: 'active',
     context: { status: 'live', subscriberCount, trackBindings: {} },
   });
+
   return { snapshot, destroy: () => {} };
 }
 
@@ -121,6 +127,7 @@ describe('trackPublishStats', () => {
     const { state, context } = setupStats();
     const video = makeSource({ droppedFrames: 2, keyframes: 1 });
     const audio = makeSource({ droppedFrames: 1 });
+
     context.cameraEncoderActor.set(video.source);
     context.audioEncoderActor.set(audio.source);
 
@@ -128,13 +135,17 @@ describe('trackPublishStats', () => {
     // window sees a positive delta.
     const grow = setInterval(() => {
       const v = video.snapshot.get().context;
+
       advance(video.snapshot, { encodedFrames: v.encodedFrames + 3, encodedBytes: v.encodedBytes + 5_000 });
       const a = audio.snapshot.get().context;
+
       advance(audio.snapshot, { encodedFrames: a.encodedFrames + 5, encodedBytes: a.encodedBytes + 1_000 });
     }, 5);
+
     disposals.push(() => clearInterval(grow));
 
     let stats: TrackPublishStatsState['publishStats'];
+
     await vi.waitFor(() => {
       stats = state.publishStats.get();
       expect(stats?.encodedFps ?? 0).toBeGreaterThan(0);
@@ -153,15 +164,19 @@ describe('trackPublishStats', () => {
     const { state, context } = setupStats();
     const camera = makeSource({ encodedFrames: 0, encodedBytes: 0, droppedFrames: 2 });
     const screen = makeSource({ encodedFrames: 0, encodedBytes: 0, droppedFrames: 3 });
+
     context.cameraEncoderActor.set(camera.source);
     context.screenEncoderActor.set(screen.source);
 
     const grow = setInterval(() => {
       const c = camera.snapshot.get().context;
+
       advance(camera.snapshot, { encodedFrames: c.encodedFrames + 2, encodedBytes: c.encodedBytes + 3_000 });
       const s = screen.snapshot.get().context;
+
       advance(screen.snapshot, { encodedFrames: s.encodedFrames + 1, encodedBytes: s.encodedBytes + 1_000 });
     }, 5);
+
     disposals.push(() => clearInterval(grow));
 
     await vi.waitFor(() => {
@@ -181,6 +196,7 @@ describe('trackPublishStats', () => {
 
   it('samples transport facts from the track publishers and the session actor', async () => {
     const { state, context } = setupStats();
+
     context.cameraEncoderActor.set(makeSource().source);
     context.catalogTrackPublisher.set(makePublisher({ bytesSent: 500 }));
     context.videoTrackPublisher.set(makePublisher({ droppedGroups: 2, bytesSent: 10_000 }));
@@ -191,6 +207,7 @@ describe('trackPublishStats', () => {
       expect(state.publishStats.get()).toBeDefined();
     });
     const stats = state.publishStats.get()!;
+
     expect(stats.droppedGroups).toBe(3);
     expect(stats.bytesSent).toBe(12_500);
     expect(stats.subscriberCount).toBe(4);
@@ -208,6 +225,7 @@ describe('trackPublishStats', () => {
   it('derives rates from deltas between samples, not cumulative totals', async () => {
     const { state, context } = setupStats();
     const video = makeSource({ encodedFrames: 1_000, encodedBytes: 1_000_000 });
+
     context.cameraEncoderActor.set(video.source);
 
     // No counter movement after the baseline: rates must be zero even
@@ -216,6 +234,7 @@ describe('trackPublishStats', () => {
       expect(state.publishStats.get()).toBeDefined();
     });
     const stats = state.publishStats.get()!;
+
     expect(stats.encodedFps).toBe(0);
     expect(stats.videoBitrate).toBe(0);
     expect(stats.droppedFrames).toBe(0);
@@ -224,6 +243,7 @@ describe('trackPublishStats', () => {
   it('works video-only, reporting the audio rate as unknown', async () => {
     const { state, context } = setupStats();
     const video = makeSource({ encodedFrames: 10, encodedBytes: 5_000 });
+
     context.cameraEncoderActor.set(video.source);
     context.videoTrackPublisher.set(makePublisher({ bytesSent: 4_000 }));
 
@@ -239,6 +259,7 @@ describe('trackPublishStats', () => {
   it('works audio-only, reporting the video rates as unknown', async () => {
     const { state, context } = setupStats();
     const audio = makeSource({ encodedFrames: 50, encodedBytes: 8_000 });
+
     context.audioEncoderActor.set(audio.source);
 
     await vi.waitFor(() => {
@@ -253,6 +274,7 @@ describe('trackPublishStats', () => {
   it('stops sampling and clears the stats when the encoders go away', async () => {
     const { state, context } = setupStats();
     const video = makeSource();
+
     context.cameraEncoderActor.set(video.source);
     await vi.waitFor(() => {
       expect(state.publishStats.get()).toBeDefined();
@@ -271,6 +293,7 @@ describe('trackPublishStats', () => {
 
   it('clears the interval on reactor destroy', async () => {
     const { state, context, reactor } = setupStats();
+
     context.cameraEncoderActor.set(makeSource().source);
     await vi.waitFor(() => {
       expect(state.publishStats.get()).toBeDefined();

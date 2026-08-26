@@ -1,6 +1,7 @@
 import type { MediaPublishStats } from '@videojs/media';
 import { createStore } from '@videojs/store';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { deriveConnectionQuality, publishStatsFeature } from '../publish-stats';
@@ -11,6 +12,7 @@ interface PublishStatsCapableMedia extends EventTarget {
 
 function createStatsMedia(publishStats: MediaPublishStats | null = null): PublishStatsCapableMedia {
   const media = new EventTarget() as PublishStatsCapableMedia;
+
   media.publishStats = publishStats;
   return media;
 }
@@ -34,6 +36,7 @@ describe('publishStatsFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.publishStats).toBeNull();
@@ -46,6 +49,7 @@ describe('publishStatsFeature', () => {
       const media = createStatsMedia();
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.publishStats).toBeNull();
@@ -56,9 +60,11 @@ describe('publishStatsFeature', () => {
       const media = createStatsMedia();
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       const stats = createStats();
+
       media.publishStats = stats;
       media.dispatchEvent(new Event('publishstatsupdate'));
 
@@ -70,6 +76,7 @@ describe('publishStatsFeature', () => {
       const media = createStatsMedia();
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.publishStats = createStats({ droppedFrames: 2 });
@@ -91,6 +98,7 @@ describe('publishStatsFeature', () => {
       const media = createStatsMedia();
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       // No video encoder: the stats sampler reports the video legs as NaN.
@@ -105,6 +113,7 @@ describe('publishStatsFeature', () => {
       const media = createStatsMedia();
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.publishStats = createStats();
@@ -123,6 +132,7 @@ describe('publishStatsFeature', () => {
       const media = createStatsMedia(createStats({ droppedFrames: 100 }));
 
       const store = createStore<PlayerTarget>()(publishStatsFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       // The historical count seeds the baseline instead of reading as growth.

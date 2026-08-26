@@ -1,43 +1,32 @@
 /**
- * **Resolve a MoQ presentation from its MSF catalog track.** The MoQ
- * analog of `resolve-presentation`: when the session is ready, subscribes
- * to the source's catalog track — per msf-01 §5, SUBSCRIBE plus a joining
- * FETCH (offset 0) to obtain the latest complete catalog and every
- * subsequent update — parses catalog objects (independent and delta), and
+ * **Resolve a MoQ presentation from its MSF catalog track.** The MoQ analog of `resolve-presentation`: when the session
+ * is ready, subscribes to the source's catalog track — per msf-01 §5, SUBSCRIBE plus a joining FETCH (offset 0) to
+ * obtain the latest complete catalog and every subsequent update — parses catalog objects (independent and delta), and
  * writes the projected `Presentation` to `state.presentation`.
  *
- * ```
- * 'preconditions-unmet' → 'awaiting-session' → 'catalog-active'
- * ```
+ *     'preconditions-unmet' → 'awaiting-session' → 'catalog-active'
  *
- * Unlike `resolvePresentation`'s fetch-once `'resolving' → 'resolved'`,
- * the positive state here spans resolution *and* live updates: the
- * catalog subscription stays open, and every new catalog object re-parses
- * and re-writes `state.presentation` (delta re-parse). Stable track ids
- * (`parse-catalog`) keep unchanged track lists from re-firing selection.
+ * Unlike `resolvePresentation`'s fetch-once `'resolving' → 'resolved'`, the positive state here spans resolution _and_
+ * live updates: the catalog subscription stays open, and every new catalog object re-parses and re-writes
+ * `state.presentation` (delta re-parse). Stable track ids (`parse-catalog`) keep unchanged track lists from re-firing
+ * selection.
  *
- * Ordering: live delta objects can arrive while the joining fetch is
- * still replaying the current group, so live objects buffer until the
- * fetch settles, then apply in (group, object) order. A delta that lands
- * with no prior catalog (fetch unavailable, e.g. nothing published) is
- * dropped — the next independent object (object 0 of a group) recovers.
+ * Ordering: live delta objects can arrive while the joining fetch is still replaying the current group, so live objects
+ * buffer until the fetch settles, then apply in (group, object) order. A delta that lands with no prior catalog (fetch
+ * unavailable, e.g. nothing published) is dropped — the next independent object (object 0 of a group) recovers.
  *
- * Auth-expiry retry (MSF §11.4): an EXPIRED_AUTH_TOKEN subscribe error
- * refreshes the token via the session actor and recreates the catalog
- * subscription + joining fetch once — same pattern as `track-subscriber`.
+ * Auth-expiry retry (MSF §11.4): an EXPIRED_AUTH_TOKEN subscribe error refreshes the token via the session actor and
+ * recreates the catalog subscription + joining fetch once — same pattern as `track-subscriber`.
  *
- * Failure recovery: a *transient* subscribe error retries with capped
- * backoff (`subscribeRetry` config, honoring a server-stated Retry
- * Interval) — the common case is DOES_NOT_EXIST because play was pressed
- * before the broadcast started — and a retryable PUBLISH_DONE
- * (broadcaster ended or dropped) re-subscribes the same way. Permanent
- * rejections and auth-shaped ends stop instead of looping
- * (`isRetryableRequestErrorCode` / `isRetryablePublishDoneStatus`).
- * Every recovery restart resets the local catalog base, so a delta from
- * a restarted publisher can never apply against the pre-outage catalog.
+ * Failure recovery: a _transient_ subscribe error retries with capped backoff (`subscribeRetry` config, honoring a
+ * server-stated Retry Interval) — the common case is DOES_NOT_EXIST because play was pressed before the broadcast
+ * started — and a retryable PUBLISH_DONE (broadcaster ended or dropped) re-subscribes the same way. Permanent
+ * rejections and auth-shaped ends stop instead of looping (`isRetryableRequestErrorCode` /
+ * `isRetryablePublishDoneStatus`). Every recovery restart resets the local catalog base, so a delta from a restarted
+ * publisher can never apply against the pre-outage catalog.
  *
- * Multi-writer on `state.presentation` with the engine adapter (initial
- * `{ url }` input) — same legitimate split as `resolvePresentation`.
+ * Multi-writer on `state.presentation` with the engine adapter (initial `{ url }` input) — same legitimate split as
+ * `resolvePresentation`.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -87,22 +76,17 @@ export interface ResolveCatalogConfig {
   /** Override MSF catalog parsing (alternate catalog formats/versions). */
   applyCatalogUpdate?: ApplyCatalogUpdate;
   /**
-   * Deadline for the joining fetch's replay. The session's request timeout
-   * only covers a fetch that never answers — a relay that sends FETCH_OK
-   * and then never opens (or never finishes) its data stream would leave
-   * `fetchSettled` false forever, buffering live deltas and never resolving
-   * a catalog. On expiry the behavior falls back to live-only, exactly as it
-   * does for an empty or truncated replay. Default 5000ms.
+   * Deadline for the joining fetch's replay. The session's request timeout only covers a fetch that never answers — a
+   * relay that sends FETCH_OK and then never opens (or never finishes) its data stream would leave `fetchSettled` false
+   * forever, buffering live deltas and never resolving a catalog. On expiry the behavior falls back to live-only,
+   * exactly as it does for an empty or truncated replay. Default 5000ms.
    */
   catalogFetchTimeoutMs?: number;
   /**
-   * Retry policy for a catalog subscription that fails or is ended by the
-   * publisher. A failed catalog SUBSCRIBE usually means the track does not
-   * exist *yet* — the viewer pressed play before the broadcast started, or
-   * the broadcaster is mid-reconnect — so the retry cadence is also the
-   * join latency once it appears. Defaults to
-   * {@link DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG}; `maxAttempts: 0`
-   * disables retry.
+   * Retry policy for a catalog subscription that fails or is ended by the publisher. A failed catalog SUBSCRIBE usually
+   * means the track does not exist _yet_ — the viewer pressed play before the broadcast started, or the broadcaster is
+   * mid-reconnect — so the retry cadence is also the join latency once it appears. Defaults to
+   * {@link DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG}; `maxAttempts: 0` disables retry.
    */
   subscribeRetry?: Partial<RetryBackoffConfig>;
 }
@@ -131,8 +115,10 @@ function setupResolveCatalog({
   const derivedStateSignal = computed<ResolveCatalogFsmState>(() => {
     const presentation = state.presentation.get();
     if (!presentation?.url || !isMoqSourceUrl(presentation.url)) return 'preconditions-unmet';
+
     const actor = context.moqSessionActor.get();
     if (!actor || actor.snapshot.get().context.status !== 'ready') return 'awaiting-session';
+
     return 'catalog-active';
   });
 
@@ -149,6 +135,7 @@ function setupResolveCatalog({
           const session = actor.snapshot.get().context.session!;
 
           let source: ReturnType<typeof parseMoqSource>;
+
           try {
             source = parseMoqSource(presentation.url);
           } catch (error) {
@@ -156,6 +143,7 @@ function setupResolveCatalog({
             console.error('[resolveCatalog] invalid MSF source URL:', error);
             return;
           }
+
           const updateOptions: MoqCatalogUpdateOptions = {
             catalogNamespace: source.namespace,
             variables: source.fragmentParams,
@@ -182,6 +170,7 @@ function setupResolveCatalog({
             // A delta with no prior catalog can't be interpreted (§5.1.6);
             // drop it and recover on the next independent object.
             if (catalog === undefined && objectId > 0) return;
+
             try {
               catalog = applyUpdate(catalog, text, updateOptions);
               state.presentation.set(moqCatalogToPresentation(catalog, presentation, source.sessionUri));
@@ -193,27 +182,25 @@ function setupResolveCatalog({
 
           const settleFetch = (): void => {
             if (fetchSettled) return;
+
             fetchSettled = true;
             clearTimeout(settleTimer);
             settleTimer = undefined;
             bufferedLive.sort((a, b) => a.groupId - b.groupId || a.objectId - b.objectId);
+
             for (const { text, objectId } of bufferedLive) apply(text, objectId);
+
             bufferedLive.length = 0;
           };
 
           /**
-           * Terminal stop: after this, nothing of the current attempt may
-           * write `state.presentation` — and no queued restart may reopen
-           * the subscription — until the state re-enters. Cancelling the
-           * handles alone is neither: the settle timer's callback never
-           * checks `isCurrent` and would still drain buffered objects, a
-           * cancel can itself surface in-flight onEnd/onReset, and a
-           * restart already booked by an earlier retryable report of the
-           * same death (an armed retry timer, or an in-flight auth
-           * refresh) would start a fresh attempt right over the terminal
-           * state. So the attempt token is bumped (invalidating every
-           * handler and the refresh restart, which check it), both timers
-           * are disarmed, and the buffer discarded before the handles go.
+           * Terminal stop: after this, nothing of the current attempt may write `state.presentation` — and no queued
+           * restart may reopen the subscription — until the state re-enters. Cancelling the handles alone is neither:
+           * the settle timer's callback never checks `isCurrent` and would still drain buffered objects, a cancel can
+           * itself surface in-flight onEnd/onReset, and a restart already booked by an earlier retryable report of the
+           * same death (an armed retry timer, or an in-flight auth refresh) would start a fresh attempt right over the
+           * terminal state. So the attempt token is bumped (invalidating every handler and the refresh restart, which
+           * check it), both timers are disarmed, and the buffer discarded before the handles go.
            */
           const stopCatalog = (): void => {
             attempt++;
@@ -228,32 +215,30 @@ function setupResolveCatalog({
           };
 
           /**
-           * Recover the catalog subscription: after the backoff (raised to
-           * a server-stated Retry Interval when one is given), tear the
-           * dead attempt down and run `start()` again with fresh auth
-           * parameters. Returns false once the retry budget is spent. A
-           * restart already scheduled is a no-op success — a PUBLISH_DONE
-           * and a stream error reporting the same death book one retry and
-           * burn one attempt, not two.
+           * Recover the catalog subscription: after the backoff (raised to a server-stated Retry Interval when one is
+           * given), tear the dead attempt down and run `start()` again with fresh auth parameters. Returns false once
+           * the retry budget is spent. A restart already scheduled is a no-op success — a PUBLISH_DONE and a stream
+           * error reporting the same death book one retry and burn one attempt, not two.
            *
-           * The local catalog base resets with the restart. Across a
-           * publisher restart the track's (group, object) numbering starts
-           * over, and a delta applied against the pre-outage base would
-           * silently produce a wrong catalog — dropping deltas until the
-           * next independent object (or the new attempt's joining-fetch
-           * replay) is the safe recovery §5.1.6 prescribes.
-           * `state.presentation` keeps the last resolved value meanwhile,
-           * so playback state doesn't flicker.
+           * The local catalog base resets with the restart. Across a publisher restart the track's (group, object)
+           * numbering starts over, and a delta applied against the pre-outage base would silently produce a wrong
+           * catalog — dropping deltas until the next independent object (or the new attempt's joining-fetch replay) is
+           * the safe recovery §5.1.6 prescribes. `state.presentation` keeps the last resolved value meanwhile, so
+           * playback state doesn't flicker.
            */
           const scheduleRestart = (retryIntervalMs = 0): boolean => {
             if (cancelled || retryTimer !== undefined) return true;
+
             const delay = retryDelayMs(retryAttempts, retryConfig);
             if (delay === undefined) return false;
+
             retryAttempts++;
             retryTimer = setTimeout(
               () => {
                 retryTimer = undefined;
+
                 if (cancelled) return;
+
                 fetchHandle?.cancel();
                 subscription?.cancel();
                 catalog = undefined;
@@ -269,6 +254,7 @@ function setupResolveCatalog({
             // group again, so live deltas must buffer until it settles.
             const thisAttempt = ++attempt;
             const isCurrent = (): boolean => attempt === thisAttempt;
+
             fetchSettled = false;
             bufferedLive.length = 0;
             clearTimeout(settleTimer);
@@ -298,17 +284,22 @@ function setupResolveCatalog({
                   // each *established* subscription gets one (§11.4 expects
                   // periodic expiry over a long session).
                   if (!isCurrent()) return;
+
                   retryAttempts = 0;
                   authRetried = false;
                 },
                 onObject: (object) => {
                   if (!isCurrent()) return;
+
                   if (object.status !== 'normal' || object.payload.length === 0) return;
+
                   const text = utf8Decode(object.payload);
+
                   if (!fetchSettled) {
                     bufferedLive.push({ groupId: object.groupId, objectId: object.objectId, text });
                     return;
                   }
+
                   apply(text, object.objectId);
                 },
                 onDone: (done) => {
@@ -320,6 +311,7 @@ function setupResolveCatalog({
                   // re-subscribe carries the same credentials the relay
                   // just rejected, so retrying loops forever.
                   if (!isCurrent()) return;
+
                   if (!isRetryablePublishDoneStatus(done.statusCode)) {
                     // Terminal: freeze the state — a subscription left open
                     // keeps delivering late objects (and the joining fetch
@@ -331,6 +323,7 @@ function setupResolveCatalog({
                     console.error('[resolveCatalog] catalog track ended with a non-retryable status:', done);
                     return;
                   }
+
                   if (!scheduleRestart()) {
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog track ended (retry budget spent)');
@@ -341,6 +334,7 @@ function setupResolveCatalog({
                   // the live attempt hears its own errors — including its
                   // own auth expiry, if the token really is stale.
                   if (!isCurrent()) return;
+
                   if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN) {
                     // Auth-expiry retry (MSF §11.4), same one-shot pattern
                     // as track-subscriber: refresh the token and recreate
@@ -361,6 +355,7 @@ function setupResolveCatalog({
                           // own: it would undo a terminal freeze, or
                           // double-start over a live newer attempt.
                           if (cancelled || !isCurrent()) return;
+
                           fetchHandle?.cancel();
                           subscription?.cancel();
                           start(refreshed);
@@ -368,15 +363,18 @@ function setupResolveCatalog({
                         .catch((refreshError) => {
                           // TODO(error-management): route to a state-error slot once one exists.
                           console.error('[resolveCatalog] auth refresh failed:', refreshError);
+
                           // No usable token is coming: terminal, same
                           // freeze as the other terminal branches — unless
                           // the attempt was already superseded, in which
                           // case the live attempt is not ours to stop.
                           if (cancelled || !isCurrent()) return;
+
                           stopCatalog();
                         });
                       return;
                     }
+
                     // The refreshed token was rejected too. The generic
                     // retry below would loop forever on a token the relay
                     // just refused — stop instead, freezing the state like
@@ -386,6 +384,7 @@ function setupResolveCatalog({
                     console.error('[resolveCatalog] catalog subscribe failed after auth refresh:', error);
                     return;
                   }
+
                   // A permanent rejection — wrong credentials, malformed
                   // request, unsupported feature — answers an identical
                   // retry identically: stop instead of looping forever, and
@@ -397,6 +396,7 @@ function setupResolveCatalog({
                     console.error('[resolveCatalog] catalog subscribe failed (non-retryable):', error);
                     return;
                   }
+
                   // The usual meaning is "track does not exist yet" — the
                   // viewer joined before the broadcast, or the broadcaster
                   // is mid-reconnect. Retry with backoff until the track
@@ -410,6 +410,7 @@ function setupResolveCatalog({
                   // was rejected" and stop for good. Consecutive expiries
                   // with nothing in between still hit the stop above.
                   authRetried = false;
+
                   if (!scheduleRestart(error.retryInterval)) {
                     // TODO(error-management): route to a state-error slot once one exists.
                     console.error('[resolveCatalog] catalog subscribe failed (retry budget spent):', error);
@@ -433,7 +434,9 @@ function setupResolveCatalog({
                   // subscription owns the catalog — late replay entries are
                   // stale and must not overwrite it.
                   if (!isCurrent() || fetchSettled) return;
+
                   if (entry.kind !== 'object' || entry.payload.length === 0) return;
+
                   apply(utf8Decode(entry.payload), entry.objectId);
                 },
                 onEnd: () => {

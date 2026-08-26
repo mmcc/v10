@@ -1,10 +1,30 @@
 import { HTMLVideoElementHost } from '@videojs/media/dom/video-host';
 import { createStore } from '@videojs/store';
 import type { WebKitVideoElement } from '@videojs/utils/dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { pipFeature } from '../pip';
+
+function enablePictureInPicture() {
+  Object.defineProperty(document, 'pictureInPictureEnabled', {
+    value: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * A video element as a browser that supports picture-in-picture presents one. happy-dom implements neither the method
+ * nor the property, so a bare element reads as media that cannot enter picture-in-picture at all.
+ */
+function createPipCapableVideo(): HTMLVideoElement {
+  const video = createMockVideo();
+
+  video.requestPictureInPicture = async () => ({}) as PictureInPictureWindow;
+  return video;
+}
 
 describe('pipFeature', () => {
   let originalPictureInPictureEnabled: boolean | undefined;
@@ -31,20 +51,46 @@ describe('pipFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.pip).toBe(false);
     });
 
     it('detects PiP availability when supported', () => {
-      Object.defineProperty(document, 'pictureInPictureEnabled', {
-        value: true,
-        writable: true,
-        configurable: true,
-      });
+      enablePictureInPicture();
 
-      const video = createMockVideo();
+      const video = createPipCapableVideo();
       const store = createStore<PlayerTarget>()(pipFeature);
+
+      store.attach({ media: video, container: null });
+
+      expect(store.state.pipAvailability).toBe('available');
+    });
+
+    it('reports media that cannot enter PiP as unsupported', () => {
+      enablePictureInPicture();
+
+      // What an iframe embed looks like when its provider has no
+      // picture-in-picture: the browser offers it, this media cannot use it.
+      const media = createMockVideo();
+      const store = createStore<PlayerTarget>()(pipFeature);
+
+      store.attach({ media, container: null });
+
+      expect(store.state.pipAvailability).toBe('unsupported');
+    });
+
+    it('reports WebKit presentation mode as available', () => {
+      enablePictureInPicture();
+
+      // iPhone Safari reaches picture-in-picture through presentation mode rather
+      // than through `requestPictureInPicture`, so the media is capable without it.
+      const video = createMockVideo() as WebKitVideoElement;
+
+      video.webkitSetPresentationMode = () => {};
+      const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.pipAvailability).toBe('available');
@@ -60,6 +106,7 @@ describe('pipFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.pip).toBe(false);
@@ -87,9 +134,11 @@ describe('pipFeature', () => {
 
     it('syncs pip on webkitpresentationmodechanged event (iOS Safari)', () => {
       const video = createMockVideo() as HTMLVideoElement & WebKitVideoElement;
+
       video.webkitPresentationMode = 'inline';
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.pip).toBe(false);
@@ -111,9 +160,11 @@ describe('pipFeature', () => {
   describe('actions', () => {
     it('requestPictureInPicture() calls requestPictureInPicture on video', async () => {
       const video = createMockVideo();
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       await store.requestPictureInPicture();
@@ -123,10 +174,12 @@ describe('pipFeature', () => {
 
     it('requestPictureInPicture() uses webkitSetPresentationMode first when available (iOS Safari)', async () => {
       const video = createMockVideo() as HTMLVideoElement & WebKitVideoElement;
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
       video.webkitSetPresentationMode = vi.fn();
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       await store.requestPictureInPicture();
@@ -137,6 +190,7 @@ describe('pipFeature', () => {
 
     it('exitPictureInPicture() calls document.exitPictureInPicture', async () => {
       const originalExit = document.exitPictureInPicture;
+
       document.exitPictureInPicture = vi.fn().mockResolvedValue(undefined);
 
       const video = createMockVideo();
@@ -149,6 +203,7 @@ describe('pipFeature', () => {
       });
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       await store.exitPictureInPicture();
@@ -160,6 +215,7 @@ describe('pipFeature', () => {
 
     it('exitPictureInPicture() calls document.exitPictureInPicture even without pictureInPictureElement', async () => {
       const originalExit = document.exitPictureInPicture;
+
       document.exitPictureInPicture = vi.fn().mockResolvedValue(undefined);
 
       const video = createMockVideo();
@@ -171,6 +227,7 @@ describe('pipFeature', () => {
       });
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       await store.exitPictureInPicture();
@@ -184,9 +241,11 @@ describe('pipFeature', () => {
   describe('transitions', () => {
     it('requestPictureInPicture() exits fullscreen first if active', async () => {
       const originalExit = document.exitFullscreen;
+
       document.exitFullscreen = vi.fn().mockResolvedValue(undefined);
 
       const video = createMockVideo();
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
       const container = document.createElement('div');
 
@@ -198,6 +257,7 @@ describe('pipFeature', () => {
       });
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container });
 
       await store.requestPictureInPicture();
@@ -210,12 +270,15 @@ describe('pipFeature', () => {
 
     it('requestPictureInPicture() does not exit fullscreen if not active', async () => {
       const originalExit = document.exitFullscreen;
+
       document.exitFullscreen = vi.fn().mockResolvedValue(undefined);
 
       const video = createMockVideo();
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: video, container: null });
 
       await store.requestPictureInPicture();
@@ -252,9 +315,11 @@ describe('pipFeature with HTMLVideoElementHost', () => {
     it('syncs initial state on attach', () => {
       const video = createMockVideo();
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       expect(store.state.pip).toBe(false);
@@ -269,6 +334,7 @@ describe('pipFeature with HTMLVideoElementHost', () => {
 
       const video = createMockVideo();
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       Object.defineProperty(document, 'pictureInPictureElement', {
@@ -278,6 +344,7 @@ describe('pipFeature with HTMLVideoElementHost', () => {
       });
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       expect(store.state.pip).toBe(true);
@@ -292,9 +359,11 @@ describe('pipFeature with HTMLVideoElementHost', () => {
 
       const video = createMockVideo();
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       expect(store.state.pip).toBe(false);
@@ -320,11 +389,14 @@ describe('pipFeature with HTMLVideoElementHost', () => {
 
     it('syncs pip on webkitpresentationmodechanged forwarded from target (iOS Safari)', () => {
       const video = createMockVideo() as HTMLVideoElement & WebKitVideoElement;
+
       video.webkitPresentationMode = 'inline';
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       expect(store.state.pip).toBe(false);
@@ -344,11 +416,14 @@ describe('pipFeature with HTMLVideoElementHost', () => {
   describe('actions', () => {
     it('requestPictureInPicture() delegates to underlying video', async () => {
       const video = createMockVideo();
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       await store.requestPictureInPicture();
@@ -358,12 +433,15 @@ describe('pipFeature with HTMLVideoElementHost', () => {
 
     it('requestPictureInPicture() prefers webkitSetPresentationMode on the underlying video (iOS Safari)', async () => {
       const video = createMockVideo() as HTMLVideoElement & WebKitVideoElement;
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
       video.webkitSetPresentationMode = vi.fn();
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       await store.requestPictureInPicture();
@@ -374,10 +452,12 @@ describe('pipFeature with HTMLVideoElementHost', () => {
 
     it('exitPictureInPicture() calls document.exitPictureInPicture when underlying video is the PiP element', async () => {
       const originalExit = document.exitPictureInPicture;
+
       document.exitPictureInPicture = vi.fn().mockResolvedValue(undefined);
 
       const video = createMockVideo();
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       Object.defineProperty(document, 'pictureInPictureElement', {
@@ -387,6 +467,7 @@ describe('pipFeature with HTMLVideoElementHost', () => {
       });
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container: null });
 
       await store.exitPictureInPicture();
@@ -400,12 +481,15 @@ describe('pipFeature with HTMLVideoElementHost', () => {
   describe('transitions', () => {
     it('requestPictureInPicture() exits fullscreen first if active', async () => {
       const originalExit = document.exitFullscreen;
+
       document.exitFullscreen = vi.fn().mockResolvedValue(undefined);
 
       const video = createMockVideo();
+
       video.requestPictureInPicture = vi.fn().mockResolvedValue({});
       const container = document.createElement('div');
       const host = new HTMLVideoElementHost();
+
       host.attach(video);
 
       Object.defineProperty(document, 'fullscreenElement', {
@@ -415,6 +499,7 @@ describe('pipFeature with HTMLVideoElementHost', () => {
       });
 
       const store = createStore<PlayerTarget>()(pipFeature);
+
       store.attach({ media: host, container });
 
       await store.requestPictureInPicture();

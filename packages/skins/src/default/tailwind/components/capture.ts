@@ -1,8 +1,8 @@
 import { cn } from '@videojs/utils/style';
 
 /**
- * Capture placeholder — covers the media area (like poster/overlay) until a
- * local capture stream is active. Visible for idle/acquiring/denied/ended.
+ * Capture placeholder — covers the media area (like poster/overlay) until a local capture stream is active. Visible for
+ * idle/acquiring/denied/ended.
  */
 export const capturePlaceholder = {
   root: cn(
@@ -17,11 +17,11 @@ export const capturePlaceholder = {
   ),
   icon: 'size-[calc(var(--media-icon-size)*2)] opacity-50',
   message: cn(
-    'text-(length:--font-size-medium) opacity-70 wrap-anywhere',
+    'text-(length:--media-font-size-medium) opacity-70 wrap-anywhere',
     // While idle/ended the message would repeat the enable-devices CTA text —
     // let the CTA carry it and only show acquiring/denied guidance here.
     'data-[capture-state=idle]:hidden data-[capture-state=ended]:hidden',
-    'group-data-[capture-state=denied]/capture:text-(--publish-live-color)',
+    'group-data-[capture-state=denied]/capture:text-(--media-publish-live-color)',
     'group-data-[capture-state=denied]/capture:opacity-100'
   ),
 };
@@ -34,23 +34,20 @@ export const enableDevicesButton = cn(
 );
 
 /**
- * Screen share toggle — active affordance while sharing (mirrors the
- * `aria-expanded` treatment on subtle buttons, slightly stronger). Pairs with
- * `button.base` + `button.subtle` + `button.icon`.
+ * Screen share toggle — active affordance while sharing (mirrors the `aria-expanded` treatment on subtle buttons,
+ * slightly stronger). Pairs with `button.base` + `button.subtle` + `button.icon`.
  */
 export const screenShareButton = 'data-sharing:bg-current/15';
 
 /**
- * Device split control (mirrors `components/capture.css`) — pairs a capture
- * toggle with the caret that opens its device picker so the picker reads as an
- * affordance on the toggle rather than a peer control in the bar.
+ * Device split control (mirrors `components/capture.css`) — pairs a capture toggle with the caret that opens its device
+ * picker so the picker reads as an affordance on the toggle rather than a peer control in the bar.
  */
 export const deviceControl = {
   /**
-   * Wrapper holding the toggle, its tooltip, the caret, and the picker menu.
-   * It carries the hover/focus pill spanning both segments; each segment keeps
-   * its own subtle background, which stacks on top so the hovered hit target
-   * stays legible.
+   * Wrapper holding the toggle, its tooltip, the caret, and the picker menu. It carries the hover/focus pill spanning
+   * both segments; each segment keeps its own subtle background, which stacks on top so the hovered hit target stays
+   * legible.
    */
   root: cn(
     'flex items-center rounded-full',
@@ -58,19 +55,16 @@ export const deviceControl = {
     'hover:bg-current/10 focus-within:bg-current/10'
   ),
   /**
-   * Group of split controls — segments sit flush inside a control, so the group
-   * needs more room than the shared 1px between its members. Important because
-   * this composes onto `buttonGroup`: Tailwind settles a same-property conflict
-   * by stylesheet order, where `gap-px` lands last, not by class order (the
-   * stylesheet twin gets the same override for free from the cascade).
+   * Group of split controls — segments sit flush inside a control, so the group needs more room than the shared 1px
+   * between its members. Important because this composes onto `buttonGroup`: Tailwind settles a same-property conflict
+   * by stylesheet order, where `gap-px` lands last, not by class order (the stylesheet twin gets the same override for
+   * free from the cascade).
    */
   group: 'gap-2!',
   /**
-   * Caret segment — narrower and dimmer than the toggle, but never below the
-   * 24px minimum target size. Pairs with `button.base` + `button.subtle`, but
-   * *not* `button.icon`, which forces a square. The `has-` rules mirror the
-   * stylesheet's availability hide for the HTML twin; the React skin omits the
-   * caret outright instead.
+   * Caret segment — narrower and dimmer than the toggle, but never below the 24px minimum target size. Pairs with
+   * `button.base` + `button.subtle`, but _not_ `button.icon`, which forces a square. The `has-` rules mirror the
+   * stylesheet's availability hide for the HTML twin; the React skin omits the caret outright instead.
    */
   caret: cn(
     'group/caret relative grid w-6 p-0!',
@@ -80,7 +74,7 @@ export const deviceControl = {
   ),
   /** Chevron inside the caret — the asset points right, so aim it at the menu above. */
   caretIcon: cn(
-    'size-3.5 -rotate-90 opacity-65 drop-shadow-[0_1px_0_var(--shadow-current-color)]',
+    'size-3.5 -rotate-90 opacity-65 drop-shadow-[0_1px_0_var(--media-shadow-current-color)]',
     'transition-[rotate,opacity] duration-150 ease-out motion-reduce:duration-0',
     'group-hover/caret:opacity-100 group-focus-visible/caret:opacity-100 group-aria-expanded/caret:opacity-100',
     // Point back at the toggle while the picker is open.
@@ -89,8 +83,8 @@ export const deviceControl = {
 };
 
 /**
- * Camera/mic icon state (mirrors `shared/tailwind/icon-state.ts`). The muted
- * (slashed) icon is tinted with the publisher live color as a warning.
+ * Camera/mic icon state (mirrors `shared/tailwind/icon-state.ts`). The muted (slashed) icon is tinted with the
+ * publisher live color as a warning.
  */
 export const captureIconState = {
   camera: {
@@ -98,7 +92,7 @@ export const captureIconState = {
     on: 'hidden opacity-0 group-not-data-muted:block group-not-data-muted:opacity-100',
     off: cn(
       'hidden opacity-0 group-data-muted:block group-data-muted:opacity-100',
-      'group-data-muted:text-(--publish-live-color)'
+      'group-data-muted:text-(--media-publish-live-color)'
     ),
   },
   mic: {
@@ -106,7 +100,7 @@ export const captureIconState = {
     on: 'hidden opacity-0 group-not-data-muted:block group-not-data-muted:opacity-100',
     off: cn(
       'hidden opacity-0 group-data-muted:block group-data-muted:opacity-100',
-      'group-data-muted:text-(--publish-live-color)'
+      'group-data-muted:text-(--media-publish-live-color)'
     ),
   },
 };

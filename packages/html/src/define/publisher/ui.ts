@@ -3,11 +3,14 @@
 // ejected (light DOM) publisher layout for MoQ broadcast.
 
 import { I18nProviderElement } from '../../i18n/provider-element';
-import { MediaContainerElement } from '../../media/container-element';
+import { VideoPublisherElement } from '../../presets/publisher/player';
+import { safeDefine } from '../../registration/safe-define';
+import { defineControls, defineErrorDialog, defineMenu, defineTooltip } from '../../registration/ui-compounds';
 import { CameraButtonElement } from '../../ui/camera-button/camera-button-element';
 import { CameraRadioGroupElement } from '../../ui/camera-radio-group/camera-radio-group-element';
 import { CapturePlaceholderElement } from '../../ui/capture-placeholder/capture-placeholder-element';
 import { ConnectionIndicatorElement } from '../../ui/connection-indicator/connection-indicator-element';
+import { ContainerElement } from '../../ui/container/container-element';
 import { EnableDevicesButtonElement } from '../../ui/enable-devices-button/enable-devices-button-element';
 import { FullscreenButtonElement } from '../../ui/fullscreen-button/fullscreen-button-element';
 import { HotkeyElement } from '../../ui/hotkey/hotkey-element';
@@ -19,16 +22,11 @@ import { PublishButtonElement } from '../../ui/publish-button/publish-button-ele
 import { PublishTimerElement } from '../../ui/publish-timer/publish-timer-element';
 import { ScreenShareButtonElement } from '../../ui/screen-share-button/screen-share-button-element';
 import { TextElement } from '../../ui/text/text-element';
-import { safeDefine } from '../safe-define';
-import { defineControls, defineErrorDialog, defineMenu, defineTooltip } from '../ui/compounds';
-
-// Value import — player.ts body runs before this module's body.
-import { VideoPublisherElement } from './player';
 
 // ── Registration (providers / parents first) ────────────────────────────
 
 safeDefine(VideoPublisherElement);
-safeDefine(MediaContainerElement);
+safeDefine(ContainerElement);
 safeDefine(I18nProviderElement);
 
 // Compound groups.

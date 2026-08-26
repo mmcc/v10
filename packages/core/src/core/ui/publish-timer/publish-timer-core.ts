@@ -3,6 +3,7 @@ import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import { formatTime } from '@videojs/utils/time';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { streamDurationText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
@@ -12,9 +13,8 @@ export interface PublishTimerProps {
   /** Custom label for accessibility. */
   label?: Text | string | ((state: PublishTimerState) => Text | string) | undefined;
   /**
-   * Current timestamp in epoch milliseconds used to compute elapsed time.
-   * The core holds no interval — adapters own the tick and pass `Date.now()`
-   * on each tick. Falls back to `Date.now()` when unset.
+   * Current timestamp in epoch milliseconds used to compute elapsed time. The core holds no interval — adapters own the
+   * tick and pass `Date.now()` on each tick. Falls back to `Date.now()` when unset.
    */
   now?: number | undefined;
 }
@@ -27,9 +27,8 @@ export interface PublishTimerState extends ButtonState {
 }
 
 /**
- * Core state machine for a stream-duration display. Elapsed time is derived
- * from `publishStartedAt` and the `now` prop; `0:00` before the session
- * first goes live.
+ * Core state machine for a stream-duration display. Elapsed time is derived from `publishStartedAt` and the `now` prop;
+ * `0:00` before the session first goes live.
  */
 export class PublishTimerCore {
   static readonly defaultProps: NonNullableObject<PublishTimerProps> = {

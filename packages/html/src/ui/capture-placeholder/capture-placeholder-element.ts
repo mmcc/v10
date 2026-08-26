@@ -10,11 +10,9 @@ import { PlayerController } from '../../player/player-controller';
 import { MediaUIElement } from '../media-ui-element';
 
 /**
- * `<media-capture-placeholder>` — placeholder shown over the preview area
- * before capture is active. Authored children are kept as-is; without them
- * the element renders the core's translated guidance text. Visibility is a
- * styling concern: skins show/hide it via the reflected
- * `data-capture-state` attribute.
+ * `<media-capture-placeholder>` — placeholder shown over the preview area before capture is active. Authored children
+ * are kept as-is; without them the element renders the core's translated guidance text. Visibility is a styling
+ * concern: skins show/hide it via the reflected `data-capture-state` attribute.
  */
 export class CapturePlaceholderElement extends MediaUIElement<CapturePlaceholderCore> {
   static readonly tagName = 'media-capture-placeholder';
@@ -34,6 +32,7 @@ export class CapturePlaceholderElement extends MediaUIElement<CapturePlaceholder
 
   override connectedCallback(): void {
     super.connectedCallback();
+
     if (this.destroyed) return;
 
     // Custom content may be icon-only, so check elements as well as text.

@@ -1,20 +1,20 @@
-import type { SliderPreviewOverflow } from '@videojs/core/dom';
+import type { SliderPreviewProps } from '@videojs/core';
 import { applyStateDataAttrs, getSliderPreviewStyle } from '@videojs/core/dom';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
 import { ContextConsumer } from '@videojs/element/context';
 import { applyStyles, observeResize } from '@videojs/utils/dom';
 
-import { MediaElement } from '../media-element';
+import { UIElement } from '../ui-element';
 import { sliderContext } from './context';
 
-export class SliderPreviewElement extends MediaElement {
+export class SliderPreviewElement extends UIElement {
   static readonly tagName = 'media-slider-preview';
 
   static override properties = {
     overflow: { type: String },
   } satisfies PropertyDeclarationMap<'overflow'>;
 
-  overflow: SliderPreviewOverflow = 'clamp';
+  overflow: NonNullable<SliderPreviewProps['overflow']> = 'clamp';
 
   readonly #ctx = new ContextConsumer(this, {
     context: sliderContext,
@@ -47,6 +47,7 @@ export class SliderPreviewElement extends MediaElement {
     super.update(_changed);
 
     const ctx = this.#ctx.value;
+
     if (ctx) applyStateDataAttrs(this, ctx.state, ctx.stateAttrMap);
 
     this.#applyPosition();

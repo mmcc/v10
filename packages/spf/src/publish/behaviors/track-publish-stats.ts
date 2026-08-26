@@ -1,27 +1,19 @@
 /**
- * **Sample the publish pipeline into `state.publishStats`.** While an
- * encoder actor exists, an interval owned by this behavior (~1 Hz) diffs
- * snapshot counters into rates — `encodedFps` from frame-count deltas,
- * `videoBitrate` / `audioBitrate` from byte deltas ×8 — alongside the
- * cumulative encode total (`droppedFrames`). Camera and screen are
- * aggregated into one `videoBitrate` / `encodedFps` reading (their
- * counters are summed before the rate diff) per the multi-source design
- * record's "Surface" decision — v1 has no per-track stats breakout. The
- * transport-side facts come from the track publishers and the session
- * actor when those exist: `droppedGroups` and `bytesSent` sum the
- * per-track publisher counters (bytes actually handed to the transport —
- * 0 while no session publishes), and `subscriberCount` reads the session
- * actor's live subscription count (`NaN` while no session exists —
- * genuinely unknown). The interval is cleared and the stats slot reset on
- * state exit / teardown; nothing samples while no encoder exists.
+ * **Sample the publish pipeline into `state.publishStats`.** While an encoder actor exists, an interval owned by this
+ * behavior (~1 Hz) diffs snapshot counters into rates — `encodedFps` from frame-count deltas, `videoBitrate` /
+ * `audioBitrate` from byte deltas ×8 — alongside the cumulative encode total (`droppedFrames`). Camera and screen are
+ * aggregated into one `videoBitrate` / `encodedFps` reading (their counters are summed before the rate diff) per the
+ * multi-source design record's "Surface" decision — v1 has no per-track stats breakout. The transport-side facts come
+ * from the track publishers and the session actor when those exist: `droppedGroups` and `bytesSent` sum the per-track
+ * publisher counters (bytes actually handed to the transport — 0 while no session publishes), and `subscriberCount`
+ * reads the session actor's live subscription count (`NaN` while no session exists — genuinely unknown). The interval
+ * is cleared and the stats slot reset on state exit / teardown; nothing samples while no encoder exists.
  *
- * DOM-free: the encoder actors are DOM-bound (WebCodecs), so this
- * behavior reads them through the structural `EncoderStatsSource` view
- * below (its shape mirrors `publish/actors/dom/encoder-actor.ts` — the
- * engine's context typing enforces that the two stay identical). The
- * track publishers and session actor are DOM-free, so their types import
- * directly; all transport slots are read lazily and untracked (`peek`)
- * inside each sample so churn never rebuilds the interval.
+ * DOM-free: the encoder actors are DOM-bound (WebCodecs), so this behavior reads them through the structural
+ * `EncoderStatsSource` view below (its shape mirrors `publish/actors/dom/encoder-actor.ts` — the engine's context
+ * typing enforces that the two stay identical). The track publishers and session actor are DOM-free, so their types
+ * import directly; all transport slots are read lazily and untracked (`peek`) inside each sample so churn never
+ * rebuilds the interval.
  *
  * Sole writer of `state.publishStats`.
  */
@@ -52,10 +44,9 @@ export interface PublishStatsFacts {
 }
 
 /**
- * Cumulative encode counters as exposed on an encoder actor snapshot.
- * Structural mirror of `publish/actors/dom/encoder-actor.ts`'s
- * `EncoderActorCounters` (DOM-bound, so not importable here) — the two
- * must stay identical.
+ * Cumulative encode counters as exposed on an encoder actor snapshot. Structural mirror of
+ * `publish/actors/dom/encoder-actor.ts`'s `EncoderActorCounters` (DOM-bound, so not importable here) — the two must
+ * stay identical.
  */
 export interface EncoderActorCounters {
   encodedFrames: number;
@@ -112,21 +103,22 @@ function perSecond(
   // zero rate: quality derivation reads 0 as a stalled encoder, which
   // branded every audio-only session 'fair'.
   if (now === undefined || last === undefined) return Number.NaN;
+
   if (dtSec <= 0) return 0;
+
   return (now[field] - last[field]) / dtSec;
 }
 
 /**
- * Merge two `lastTimestampUs` readings. NaN means "present but hasn't
- * emitted yet" (per the counters contract), not "unknown" — `Math.max`
- * alone would let one spinning-up encoder's NaN poison the other side's
- * real value. Treat NaN the same as absent, and only fall through to NaN
- * when neither side has ever emitted.
+ * Merge two `lastTimestampUs` readings. NaN means "present but hasn't emitted yet" (per the counters contract), not
+ * "unknown" — `Math.max` alone would let one spinning-up encoder's NaN poison the other side's real value. Treat NaN
+ * the same as absent, and only fall through to NaN when neither side has ever emitted.
  */
 function mergeLastTimestampUs(camera: number | undefined, screen: number | undefined): number {
   const cameraReal = camera !== undefined && !Number.isNaN(camera) ? camera : undefined;
   const screenReal = screen !== undefined && !Number.isNaN(screen) ? screen : undefined;
   if (cameraReal === undefined && screenReal === undefined) return Number.NaN;
+
   return Math.max(cameraReal ?? -Infinity, screenReal ?? -Infinity);
 }
 
@@ -136,6 +128,7 @@ export function mergeVideoCounters(
   screen: EncoderActorCounters | undefined
 ): EncoderActorCounters | undefined {
   if (camera === undefined && screen === undefined) return undefined;
+
   return {
     encodedFrames: (camera?.encodedFrames ?? 0) + (screen?.encodedFrames ?? 0),
     encodedBytes: (camera?.encodedBytes ?? 0) + (screen?.encodedBytes ?? 0),
@@ -204,6 +197,7 @@ function trackPublishStatsSetup({
             const sum = (read: (counters: TrackPublisherCounters) => number): number =>
               publishers.reduce((total, publisher) => total + read(peek(publisher.snapshot).context), 0);
             const sessionActor = peek(context.publishSessionActor);
+
             state.publishStats.set({
               encodedFps: perSecond(videoNow, lastVideo, 'encodedFrames', dtSec),
               videoBitrate: perSecond(videoNow, lastVideo, 'encodedBytes', dtSec) * 8,
@@ -224,6 +218,7 @@ function trackPublishStatsSetup({
             sample,
             config.statsIntervalMs ?? DEFAULT_STATS_INTERVAL_MS
           );
+
           return () => {
             clearInterval(intervalId);
             state.publishStats.set(undefined);

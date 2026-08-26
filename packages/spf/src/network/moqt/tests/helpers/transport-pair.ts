@@ -1,9 +1,7 @@
 /**
- * Symmetric in-memory `MoqtTransport` pair for loopback tests: two
- * transports whose stream-creation methods surface on the peer's incoming
- * stream queues, so a publish session on one side can talk to a subscribe
- * session on the other over real (in-process) WHATWG streams — the same
- * structural seam a `WebTransport` satisfies in production.
+ * Symmetric in-memory `MoqtTransport` pair for loopback tests: two transports whose stream-creation methods surface on
+ * the peer's incoming stream queues, so a publish session on one side can talk to a subscribe session on the other over
+ * real (in-process) WHATWG streams — the same structural seam a `WebTransport` satisfies in production.
  */
 import type { BidirectionalStreamLike } from '../../request-stream';
 import type { MoqtTransport } from '../../session';
@@ -20,6 +18,7 @@ function pushChannel<T>(): PushChannel<T> {
       controller = c;
     },
   });
+
   return { stream, push: (value) => controller.enqueue(value) };
 }
 
@@ -48,6 +47,7 @@ export function createTransportPair(): TransportPair {
 
   const closeBoth = (info?: { closeCode?: number; reason?: string }): void => {
     if (closed) return;
+
     closed = true;
     a.resolveClosed?.(info);
     b.resolveClosed?.(info);
@@ -58,14 +58,18 @@ export function createTransportPair(): TransportPair {
     incomingBidirectionalStreams: local.incomingBidi.stream,
     async createUnidirectionalStream() {
       if (closed) throw new Error('transport closed');
+
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
+
       remote.incomingUni.push(pipe.readable);
       return pipe.writable;
     },
     async createBidirectionalStream() {
       if (closed) throw new Error('transport closed');
+
       const localToRemote = new TransformStream<Uint8Array, Uint8Array>();
       const remoteToLocal = new TransformStream<Uint8Array, Uint8Array>();
+
       remote.incomingBidi.push({ readable: localToRemote.readable, writable: remoteToLocal.writable });
       return { readable: remoteToLocal.readable, writable: localToRemote.writable };
     },

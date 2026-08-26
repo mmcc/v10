@@ -1,7 +1,6 @@
 /**
- * Global type declarations for `MediaStreamTrackProcessor` (mediacapture-
- * transform) — Chromium-only, not yet in TS's DOM lib. Precedent:
- * `media/dom/mse/mediasource.d.ts` for `ManagedMediaSource`.
+ * Global type declarations for `MediaStreamTrackProcessor` (mediacapture- transform) — Chromium-only, not yet in TS's
+ * DOM lib. Precedent: `media/dom/mse/mediasource.d.ts` for `ManagedMediaSource`.
  */
 
 declare global {

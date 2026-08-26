@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { effect } from '../../../../core/signals/effect';
 import { toLocFrame } from '../../../../media/moq/loc';
 import { applyMoqCatalogUpdate } from '../../../../media/moq/parse-catalog';
@@ -10,15 +11,12 @@ import { createTransportPair } from '../../../../network/moqt/tests/helpers/tran
 import { MoqPublishMediaMixin } from '../adapter';
 
 /**
- * The full-pipeline proof: real capture (canvas + oscillator) → real
- * WebCodecs encode → the in-repo publish session over an in-memory
- * transport pair → the EXISTING subscribe driver on the far side.
+ * The full-pipeline proof: real capture (canvas + oscillator) → real WebCodecs encode → the in-repo publish session
+ * over an in-memory transport pair → the EXISTING subscribe driver on the far side.
  *
- * Ingest is announce-and-serve (moq-relay 0.14.7), so the peer speaks
- * first: it solicits announces on a raw bidi stream (SUBSCRIBE_NAMESPACE
- * — the subscribe driver never initiates one), reads the publisher's
- * REQUEST_OK and NAMESPACE entry off it, then pulls each track with the
- * driver's ordinary SUBSCRIBEs — the publisher answers SUBSCRIBE_OK and
+ * Ingest is announce-and-serve (moq-relay 0.14.7), so the peer speaks first: it solicits announces on a raw bidi stream
+ * (SUBSCRIBE_NAMESPACE — the subscribe driver never initiates one), reads the publisher's REQUEST_OK and NAMESPACE
+ * entry off it, then pulls each track with the driver's ordinary SUBSCRIBEs — the publisher answers SUBSCRIBE_OK and
  * only then lets data flow for that track.
  */
 class TestPublishMedia extends MoqPublishMediaMixin(EventTarget) {}
@@ -27,6 +25,7 @@ const disposals: (() => void)[] = [];
 
 function makeLiveCameraStream(): MediaStream {
   const canvas = document.createElement('canvas');
+
   canvas.width = 320;
   canvas.height = 240;
   const context = canvas.getContext('2d')!;
@@ -36,16 +35,20 @@ function makeLiveCameraStream(): MediaStream {
     context.fillStyle = `hsl(${hue}, 80%, 50%)`;
     context.fillRect(0, 0, canvas.width, canvas.height);
   }, 33);
+
   disposals.push(() => clearInterval(paint));
   const stream = canvas.captureStream(30);
 
   const audioContext = new AudioContext({ sampleRate: 48_000 });
+
   disposals.push(() => void audioContext.close().catch(() => undefined));
   const oscillator = audioContext.createOscillator();
   const destination = audioContext.createMediaStreamDestination();
+
   oscillator.connect(destination);
   oscillator.start();
   void audioContext.resume().catch(() => undefined);
+
   for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
 
   return stream;
@@ -54,6 +57,7 @@ function makeLiveCameraStream(): MediaStream {
 describe('MoqPublishMediaMixin transport (M3)', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -74,6 +78,7 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
         },
       },
     });
+
     disposals.push(() => subscriber.destroy());
 
     const media = new TestPublishMedia({
@@ -83,12 +88,15 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
         dataTracks: [{ name: 'overlay', role: 'data' }],
       },
     });
+
     disposals.push(() => media.destroy());
 
     const statuses: (string | undefined)[] = [];
+
     disposals.push(
       effect(() => {
         const status = media.engine.state.sessionStatus.get();
+
         if (statuses.at(-1) !== status) statuses.push(status);
       })
     );
@@ -134,6 +142,7 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     const namespace = ['live', 'abc123'];
     const collect = (trackName: string) => {
       const objects: MoqtObject[] = [];
+
       subscriber.subscribe({ trackNamespace: namespace, trackName }, { onObject: (object) => objects.push(object) });
       return { objects };
     };
@@ -152,6 +161,7 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
       catalogNamespace: namespace,
     });
     const names = parsed.tracks.map((track) => track.name);
+
     expect(names).toContain('video');
     expect(names).toContain('audio');
     expect(names).toContain('overlay');
@@ -169,8 +179,10 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
       { timeout: 20_000, interval: 250 }
     );
     const firstVideo = video.objects[0]!;
+
     expect(firstVideo.objectId).toBe(0);
     const firstFrame = toLocFrame(firstVideo)!;
+
     expect(firstFrame.isKey).toBe(true);
     expect(firstFrame.payload.length).toBeGreaterThan(0);
     // Keyframe cadence → group ids advance.
@@ -189,8 +201,10 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     // binds (pull-through — nothing flows before the SUBSCRIBE above).
     const overlay = collect('overlay');
     const producer = media.engine.context.dataTrackProducers.get()!.overlay!;
+
     await vi.waitFor(() => {
       const bindings = media.engine.context.publishSessionActor.get()!.snapshot.get().context.trackBindings;
+
       expect(bindings.overlay).toBeDefined();
     });
     producer.publish(new TextEncoder().encode('LIVE: hello overlay'), { timestampUs: 123_000_000 });
@@ -201,6 +215,7 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
       { timeout: 10_000 }
     );
     const overlayFrame = toLocFrame(overlay.objects[0]!)!;
+
     expect(utf8Decode(overlayFrame.payload)).toBe('LIVE: hello overlay');
     expect(overlayFrame.timestampUs).toBe(123_000_000);
     expect(overlay.objects[0]!.objectId).toBe(0);

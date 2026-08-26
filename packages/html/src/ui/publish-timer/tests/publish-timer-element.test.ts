@@ -2,10 +2,10 @@ import type { AnyPlayerStore } from '@videojs/core/dom';
 import { ContextProvider } from '@videojs/element/context';
 import type { MediaPublishState } from '@videojs/media';
 import { createStore, flush } from '@videojs/store';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { playerContext } from '../../../player/context';
-import { MediaElement } from '../../media-element';
+import { UIElement } from '../../ui-element';
 import { PublishTimerElement } from '../publish-timer-element';
 
 let tagCounter = 0;
@@ -16,6 +16,7 @@ function uniqueTag(base: string): string {
 
 function createElement<Element extends HTMLElement>(Base: abstract new () => Element): Element {
   const tag = uniqueTag('test-el');
+
   customElements.define(tag, class extends (Base as unknown as typeof HTMLElement) {});
   return document.createElement(tag) as Element;
 }
@@ -62,13 +63,14 @@ function createPublishStore(initial: Partial<MediaPublishState> = {}): PublishSt
   };
 }
 
-class TestPlayerProviderElement extends MediaElement {
+class TestPlayerProviderElement extends UIElement {
   store: AnyPlayerStore | null = null;
 
   readonly #provider = new ContextProvider(this, { context: playerContext });
 
   override connectedCallback(): void {
     if (this.store) this.#provider.setValue(this.store);
+
     super.connectedCallback();
   }
 

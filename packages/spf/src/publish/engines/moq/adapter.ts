@@ -1,24 +1,20 @@
 /**
- * Media-host adapter for the MoQ publish engine, mirroring
- * `SimpleHlsMediaMixin` / `MoqMediaMixin`'s shape: one engine per
- * instance (created at construction, signals captured via
- * `onSignalsReady`), with the publisher media-contract surface —
- * `MediaPublishCapability`, `MediaCaptureSourceCapability`,
- * `MediaCaptureDevicesCapability`, `MediaCaptureToggleCapability`,
- * `MediaPublishStatsCapability` — expressed structurally so any host base
- * class can compose it without inheriting from the contracts package.
+ * Media-host adapter for the MoQ publish engine, mirroring `SimpleHlsMediaMixin` / `MoqMediaMixin`'s shape: one engine
+ * per instance (created at construction, signals captured via `onSignalsReady`), with the publisher media-contract
+ * surface — `MediaPublishCapability`, `MediaCaptureSourceCapability`, `MediaCaptureDevicesCapability`,
+ * `MediaCaptureToggleCapability`, `MediaPublishStatsCapability` — expressed structurally so any host base class can
+ * compose it without inheriting from the contracts package.
  *
- * All members are prototype accessors/methods: `CustomMediaElement` only
- * forwards prototype accessors, so instance fields would not surface on a
- * custom-element host.
+ * All members are prototype accessors/methods: `CustomMediaElement` only forwards prototype accessors, so instance
+ * fields would not surface on a custom-element host.
  *
- * The adapter owns the contract events: `effect()` bridges on the engine's
- * fact signals dispatch `publishstatechange`, `capturestatechange`,
- * `capturesourcechange`, `capturestreamchange`, `capturedeviceschange`,
- * `capturetogglechange`, and `publishstatsupdate` on `this` (when the base
- * class provides `dispatchEvent`) — the engine itself stays event-free.
+ * The adapter owns the contract events: `effect()` bridges on the engine's fact signals dispatch `publishstatechange`,
+ * `capturestatechange`, `capturesourcechange`, `capturestreamchange`, `capturedeviceschange`, `capturetogglechange`,
+ * and `publishstatsupdate` on `this` (when the base class provides `dispatchEvent`) — the engine itself stays
+ * event-free.
  */
 import type { Constructor, MixinReturn } from '@videojs/utils/types';
+
 import type { Composition } from '../../../core/composition/create-composition';
 import { effect } from '../../../core/signals/effect';
 import { peek } from '../../../core/signals/primitives';
@@ -36,10 +32,9 @@ import type {
 import { createMoqPublishEngine } from './engine';
 
 /**
- * Publish session lifecycle exposed on the media surface
- * (`MediaPublishSessionState`-shaped). The engine's finer-grained
- * `PublishSessionStatus` collapses onto it: `idle`/`closed` → `'idle'`,
- * `connecting`/`ready` → `'connecting'`, `draining` → `'stopping'`.
+ * Publish session lifecycle exposed on the media surface (`MediaPublishSessionState`-shaped). The engine's
+ * finer-grained `PublishSessionStatus` collapses onto it: `idle`/`closed` → `'idle'`, `connecting`/`ready` →
+ * `'connecting'`, `draining` → `'stopping'`.
  */
 export type MoqPublishMediaSessionState = 'idle' | 'connecting' | 'live' | 'stopping' | 'error';
 
@@ -49,15 +44,9 @@ export interface MoqPublishMediaError {
   readonly message: string;
 }
 
-/**
- * Constructor options for {@link MoqPublishMediaMixin} classes, read from
- * the first constructor argument.
- */
+/** Constructor options for {@link MoqPublishMediaMixin} classes, read from the first constructor argument. */
 export interface MoqPublishMediaOptions {
-  /**
-   * Engine config forwarded to `createMoqPublishEngine`. The adapter owns
-   * `onSignalsReady`, so it is not overridable.
-   */
+  /** Engine config forwarded to `createMoqPublishEngine`. The adapter owns `onSignalsReady`, so it is not overridable. */
   engineConfig?: Omit<MoqPublishEngineConfig, 'onSignalsReady'>;
 }
 
@@ -66,19 +55,15 @@ export interface MoqPublishMediaProps {
   publishEndpoint: string;
   /** Namespace/path the media is published under, `'/'`-delimited. */
   publishNamespace: string;
-  /**
-   * Bearer token sent as the MOQT `AUTHORIZATION TOKEN` parameter on the
-   * session's requests; empty string sends none.
-   */
+  /** Bearer token sent as the MOQT `AUTHORIZATION TOKEN` parameter on the session's requests; empty string sends none. */
   publishAuthToken: string;
   /** Camera acquisition; additive with `screenShareActive`, not exclusive. */
   cameraActive: boolean;
   /** Screen-share acquisition; additive with `cameraActive`, not exclusive. */
   screenShareActive: boolean;
   /**
-   * Microphone acquisition without a video source — the audio-only
-   * publish seam. Either video source active still implies the mic;
-   * acquisition intent, not a mute (`micMuted` is).
+   * Microphone acquisition without a video source — the audio-only publish seam. Either video source active still
+   * implies the mic; acquisition intent, not a mute (`micMuted` is).
    */
   micActive: boolean;
   /** Which capture stream the preview element mirrors. */
@@ -114,9 +99,8 @@ export interface MoqPublishMediaAPI extends MoqPublishMediaProps {
   /** Screen-share pipeline lifecycle. Fires `capturestatechange`. */
   readonly screenShareState: CaptureStatus;
   /**
-   * Microphone pipeline lifecycle. Fires `capturestatechange`. `idle`
-   * while video captures means audio-less publish (no usable mic);
-   * `denied`/`ended` say why a live broadcast has no sound.
+   * Microphone pipeline lifecycle. Fires `capturestatechange`. `idle` while video captures means audio-less publish (no
+   * usable mic); `denied`/`ended` say why a live broadcast has no sound.
    */
   readonly micState: CaptureStatus;
   /** Live camera stream while `cameraState` is `active`, else `null`. */
@@ -128,9 +112,8 @@ export interface MoqPublishMediaAPI extends MoqPublishMediaProps {
   /** Current publish session lifecycle. Fires `publishstatechange`. */
   readonly publishState: MoqPublishMediaSessionState;
   /**
-   * Epoch ms when the session last entered `live`. Held through
-   * `'stopping'` (so UIs keep showing the elapsed time while draining)
-   * and reset to `NaN` once the session settles on `'idle'` or `'error'`.
+   * Epoch ms when the session last entered `live`. Held through `'stopping'` (so UIs keep showing the elapsed time
+   * while draining) and reset to `NaN` once the session settles on `'idle'` or `'error'`.
    */
   readonly publishStartedAt: number;
   /** The failure that moved `publishState` to `error`, if any. */
@@ -138,11 +121,9 @@ export interface MoqPublishMediaAPI extends MoqPublishMediaProps {
   /** Latest sampled stats, `null` before the first sample. */
   readonly publishStats: PublishStatsFacts | null;
   /**
-   * Start publishing. Resolves once the session is `live`; rejects when
-   * the attempt fails, when `unpublish()` abandons it, or immediately
-   * (`play()`-like) when its preconditions are unmet — a `publishEndpoint`
-   * must be set and capture must be `'active'`. Calling it again after an
-   * `'error'` tears the failed session down and reconnects, settling on
+   * Start publishing. Resolves once the session is `live`; rejects when the attempt fails, when `unpublish()` abandons
+   * it, or immediately (`play()`-like) when its preconditions are unmet — a `publishEndpoint` must be set and capture
+   * must be `'active'`. Calling it again after an `'error'` tears the failed session down and reconnects, settling on
    * the new attempt's outcome.
    */
   publish(): Promise<void>;
@@ -177,13 +158,13 @@ function toPublishState(status: PublishSessionStatus | undefined): MoqPublishMed
  * Mixin that adds MoQ publish-engine behavior to any base class.
  *
  * @example
- * class MoqPublishMedia extends MoqPublishMediaMixin(HTMLVideoElementHost) {}
+ *   class MoqPublishMedia extends MoqPublishMediaMixin(HTMLVideoElementHost) {}
  *
- * const media = new MoqPublishMedia();
- * media.attach(document.querySelector('video')!);
- * media.cameraActive = true;
- * media.publishEndpoint = 'https://relay.example.com/moq';
- * media.publishNamespace = 'live/abc123';
+ *   const media = new MoqPublishMedia();
+ *   media.attach(document.querySelector('video')!);
+ *   media.cameraActive = true;
+ *   media.publishEndpoint = 'https://relay.example.com/moq';
+ *   media.publishNamespace = 'live/abc123';
  */
 export function MoqPublishMediaMixin<Base extends Constructor<any>>(
   BaseClass: Base
@@ -208,15 +189,15 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           this.#signals = refs;
         },
       };
+
       this.#engine = createMoqPublishEngine(config);
       this.#disposeBridges = this.#installEventBridges();
     }
 
     /**
-     * Underlying publish engine — the low-level SPF reactive composition
-     * that drives capture, encode, and the MOQT publish transport. An
-     * advanced escape hatch; normal publishing is driven through this
-     * adapter's own properties and methods.
+     * Underlying publish engine — the low-level SPF reactive composition that drives capture, encode, and the MOQT
+     * publish transport. An advanced escape hatch; normal publishing is driven through this adapter's own properties
+     * and methods.
      */
     get engine(): Composition<MoqPublishEngineState, MoqPublishEngineContext> {
       return this.#engine;
@@ -232,6 +213,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     set publishEndpoint(value: string) {
       if (value === this.#publishEndpoint) return;
+
       this.#publishEndpoint = value;
       this.#syncEndpoint();
     }
@@ -242,6 +224,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     set publishNamespace(value: string) {
       if (value === this.#publishNamespace) return;
+
       this.#publishNamespace = value;
       this.#syncEndpoint();
     }
@@ -252,6 +235,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     set publishAuthToken(value: string) {
       if (value === this.#publishAuthToken) return;
+
       this.#publishAuthToken = value;
       this.#syncEndpoint();
     }
@@ -342,6 +326,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     set videoInputDeviceId(value: string) {
       if (value === this.#videoInputDeviceId) return;
+
       this.#videoInputDeviceId = value;
       this.#signals.state.videoInputDeviceId.set(value);
       // Selections travel on the devices event — store slices re-read both
@@ -355,6 +340,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     set audioInputDeviceId(value: string) {
       if (value === this.#audioInputDeviceId) return;
+
       this.#audioInputDeviceId = value;
       this.#signals.state.audioInputDeviceId.set(value);
       this.#dispatch('capturedeviceschange');
@@ -394,6 +380,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     get publishError(): MoqPublishMediaError | null {
       const error = this.#signals.state.publishError.get();
+
       return error ? { code: publishErrorCodes[error.code], message: error.message } : null;
     }
 
@@ -403,6 +390,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     publish(): Promise<void> {
       const { state } = this.#signals;
+
       // play()-like precondition rejections: the session gate requires an
       // endpoint and active capture — neither is something publish() can
       // produce, so waiting on them would pend forever. The intent slot
@@ -412,6 +400,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           new Error('MoqPublishMedia: publish() requires a publishEndpoint before it can start a session.')
         );
       }
+
       if (
         peek(state.cameraState) !== 'active' &&
         peek(state.screenShareState) !== 'active' &&
@@ -419,11 +408,13 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
       ) {
         return Promise.reject(new Error('MoqPublishMedia: publish() requires an active capture source.'));
       }
+
       return this.#activatePublish();
     }
 
     async #activatePublish(): Promise<void> {
       const { state } = this.#signals;
+
       if (peek(state.sessionStatus) === 'error') {
         // Restart after a failure: the session behavior reconnects on the
         // activation gate's rising edge, so cycle the (adapter-owned)
@@ -433,6 +424,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
         state.publishActivated.set(false);
         await Promise.resolve();
       }
+
       // Record the intent — the transport behaviors gate on this slot.
       state.publishActivated.set(true);
       // Settle on the session outcome: resolve once live, reject on a
@@ -448,15 +440,19 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
         const staleError = peek(state.publishError);
         const settle = (complete: () => void): void => {
           if (settled) return;
+
           settled = true;
           complete();
           dispose?.();
         };
+
         dispose = effect(() => {
           const status = state.sessionStatus.get();
           const error = state.publishError.get();
           const statusChanged = status !== lastStatus;
+
           lastStatus = status;
+
           if (status === 'live') {
             settle(resolve);
           } else if (status === 'error' && (statusChanged || error !== staleError)) {
@@ -471,6 +467,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
             settle(() => reject(new Error('MoqPublishMedia: publish was cancelled before the session went live.')));
           }
         });
+
         // The effect runs synchronously once — if it already settled,
         // `dispose` was not assigned yet inside `settle`.
         if (settled) dispose();
@@ -516,6 +513,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
             // while the session drains; cleared once it settles.
             if (next === 'live') this.#publishStartedAt = Date.now();
             else if (next === 'idle' || next === 'error') this.#publishStartedAt = Number.NaN;
+
             this.#dispatch('publishstatechange');
           }
         ),
@@ -575,27 +573,33 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
           () => this.#dispatch('publishstatsupdate')
         ),
       ];
+
       return () => {
         for (const dispose of cleanups) dispose();
       };
     }
 
     /**
-     * Watch a fact projection and invoke `onChange` on every change after
-     * the initial run — the construction-time value must not dispatch.
+     * Watch a fact projection and invoke `onChange` on every change after the initial run — the construction-time value
+     * must not dispatch.
      */
     #bridge<T>(read: () => T, onChange: (next: T, prev: T | undefined) => void): () => void {
       let initialized = false;
       let previous: T | undefined;
+
       return effect(() => {
         const value = read();
+
         if (!initialized) {
           initialized = true;
           previous = value;
           return;
         }
+
         if (Object.is(value, previous)) return;
+
         const prev = previous;
+
         previous = value;
         onChange(value, prev);
       });

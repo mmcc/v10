@@ -1,13 +1,11 @@
 /**
- * Publish-direction codec round-trips: the encode↔decode pairs the
- * publish session exercises (the announce-and-serve NAMESPACE entries,
- * the SUBSCRIBE_OK/REQUEST_OK responses, inbound REQUEST_UPDATE, and the
- * legacy PUBLISH/PUBLISH_DONE shapes the codec keeps for symmetric
- * fakes) against the existing decoders as the golden reference — plus
- * byte-exact pins where moq-lite-rs's decoder is stricter than a
- * round-trip can prove.
+ * Publish-direction codec round-trips: the encode↔decode pairs the publish session exercises (the announce-and-serve
+ * NAMESPACE entries, the SUBSCRIBE_OK/REQUEST_OK responses, inbound REQUEST_UPDATE, and the legacy PUBLISH/PUBLISH_DONE
+ * shapes the codec keeps for symmetric fakes) against the existing decoders as the golden reference — plus byte-exact
+ * pins where moq-lite-rs's decoder is stricter than a round-trip can prove.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { utf8Encode } from '../bytes';
 import {
   ControlMessageDeframer,
@@ -25,6 +23,7 @@ import {
 
 function decodeOne(bytes: Uint8Array) {
   const frames = new ControlMessageDeframer().push(bytes);
+
   expect(frames).toHaveLength(1);
   return decodeControlMessage(frames[0]!);
 }
@@ -43,6 +42,7 @@ describe('encodePublish', () => {
         [{ type: 0x02, value: 7 }]
       )
     );
+
     expect(message).toEqual({
       kind: 'publish',
       requestId: 4,
@@ -58,6 +58,7 @@ describe('encodePublish', () => {
 describe('encodePublishDone', () => {
   it('round-trips status, stream count, and reason', () => {
     const message = decodeOne(encodePublishDone(PUBLISH_DONE_STATUS.TRACK_ENDED, 12, 'stopped'));
+
     expect(message).toEqual({
       kind: 'publish-done',
       statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
@@ -70,6 +71,7 @@ describe('encodePublishDone', () => {
 describe('encodeSubscribeOk', () => {
   it('round-trips the publisher answer to an inbound SUBSCRIBE', () => {
     const message = decodeOne(encodeSubscribeOk(5, { expires: 0 }, [{ type: 0x02, value: 1 }]));
+
     expect(message).toEqual({
       kind: 'subscribe-ok',
       trackAlias: 5,
@@ -82,6 +84,7 @@ describe('encodeSubscribeOk', () => {
 describe('encodeRequestOk', () => {
   it('round-trips the PUBLISH_OK-role response with parameters', () => {
     const message = decodeOne(encodeRequestOk({ forward: 1 }));
+
     expect(message).toEqual({ kind: 'request-ok', parameters: { forward: 1 }, trackProperties: [] });
   });
 });
@@ -89,6 +92,7 @@ describe('encodeRequestOk', () => {
 describe('encodeRequestUpdate', () => {
   it('round-trips the update a publisher receives on its request streams', () => {
     const message = decodeOne(encodeRequestUpdate(4, { forward: 0, subscriberPriority: 8 }));
+
     expect(message).toEqual({
       kind: 'request-update',
       requestId: 4,
@@ -100,6 +104,7 @@ describe('encodeRequestUpdate', () => {
 describe('encodeNamespace', () => {
   it('round-trips the announce entry', () => {
     const message = decodeOne(encodeNamespace(['live', 'abc123']));
+
     expect(message).toEqual({ kind: 'namespace', trackNamespaceSuffix: ['live', 'abc123'] });
   });
 
@@ -120,6 +125,7 @@ describe('encodeNamespace', () => {
 describe('encodeNamespaceDone', () => {
   it('round-trips the retraction with the same body shape', () => {
     const message = decodeOne(encodeNamespaceDone(['live', 'abc123']));
+
     expect(message).toEqual({ kind: 'namespace-done', trackNamespaceSuffix: ['live', 'abc123'] });
     expect(encodeNamespaceDone(['abc123'])).toEqual(
       new Uint8Array([0x0e, 0x00, 0x08, 0x01, 0x06, ...utf8Encode('abc123')])
@@ -156,6 +162,7 @@ describe('decodeControlMessage', () => {
       0x02, //   raw byte: descending
     ];
     const message = decodeOne(new Uint8Array([0x03, 0x00, body.length, ...body]));
+
     expect(message).toEqual({
       kind: 'subscribe',
       requestId: 5,
@@ -185,6 +192,7 @@ describe('encodeSubscribeOk (serving shape)', () => {
   it('carries the alias, no parameters, and the microsecond TIMESCALE property', () => {
     const bytes = encodeSubscribeOk(11, {}, [{ type: TRACK_PROPERTY.TIMESCALE, value: 1_000_000 }]);
     const message = decodeOne(bytes);
+
     expect(message).toEqual({
       kind: 'subscribe-ok',
       trackAlias: 11,

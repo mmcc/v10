@@ -15,17 +15,16 @@ import { i18nContext } from '../../i18n/context';
 import { I18nController } from '../../i18n/controller';
 import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/player-controller';
-import { MediaElement } from '../media-element';
+import { UIElement } from '../ui-element';
 
 /**
- * `<media-publish-button>` — selects from the `publish` and `captureSource`
- * features and composes them into the `PublishButtonMediaState` consumed by
- * `PublishButtonCore`.
+ * `<media-publish-button>` — selects from the `publish` and `captureSource` features and composes them into the
+ * `PublishButtonMediaState` consumed by `PublishButtonCore`.
  *
- * Doesn't extend `MediaButtonElement` because that base couples a button to
- * a single feature selector; the PublishButton needs two.
+ * Doesn't extend `MediaButtonElement` because that base couples a button to a single feature selector; the
+ * PublishButton needs two.
  */
-export class PublishButtonElement extends MediaElement {
+export class PublishButtonElement extends UIElement {
   static readonly tagName = 'media-publish-button';
 
   static override properties: PropertyDeclarationMap = {
@@ -51,9 +50,11 @@ export class PublishButtonElement extends MediaElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+
     if (this.destroyed) return;
 
     this.#defaultContent ||= !this.textContent?.trim();
+
     if (this.#defaultContent) {
       this.textContent = translateText(this.core.getLabel(this.core.state.current), this.#i18n.value);
     }
@@ -63,6 +64,7 @@ export class PublishButtonElement extends MediaElement {
     const buttonProps = createButton({
       onActivate: () => {
         const media = this.#getMedia();
+
         // Fire-and-forget: failures surface through the `publish` feature state.
         if (media) void this.core.toggle(media);
       },
@@ -91,7 +93,9 @@ export class PublishButtonElement extends MediaElement {
   getResolvedLabel(): string | undefined {
     const media = this.#getMedia();
     if (!media) return undefined;
+
     const state = this.core.getState();
+
     return translateText(this.core.getLabel(state), this.#i18n.value);
   }
 
@@ -104,7 +108,9 @@ export class PublishButtonElement extends MediaElement {
     super.update(changed);
 
     const media = this.#getMedia();
+
     if (media) this.core.setMedia(media);
+
     const state = media ? this.core.getState() : this.core.state.current;
 
     if (this.#defaultContent) {
@@ -115,6 +121,7 @@ export class PublishButtonElement extends MediaElement {
     if (!media) return;
 
     const attrs = this.core.getAttrs(state);
+
     applyElementProps(this, {
       ...attrs,
       'aria-label': translateText(attrs['aria-label'], this.#i18n.value),
@@ -123,14 +130,14 @@ export class PublishButtonElement extends MediaElement {
   }
 
   /**
-   * Compose the PublishButton media state from the two feature slices.
-   * Returns `null` when either is missing so the button stays disabled until
-   * both features are registered on the player.
+   * Compose the PublishButton media state from the two feature slices. Returns `null` when either is missing so the
+   * button stays disabled until both features are registered on the player.
    */
   #getMedia(): PublishButtonMediaState | null {
     const publish = this.publish.value;
     const captureSource = this.captureSource.value;
     if (!publish || !captureSource) return null;
+
     return {
       publishState: publish.publishState,
       publishStartedAt: publish.publishStartedAt,

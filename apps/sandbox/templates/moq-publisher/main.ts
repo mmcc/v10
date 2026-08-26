@@ -20,7 +20,6 @@ import '@app/styles.css';
 //   ?fake            real capture, fake publish transport (FakePublishMedia)
 //   ?synthetic       stub getUserMedia with canvas+oscillator capture, so the
 //                    demo runs headlessly / without a camera
-
 // Registers video-publisher, publisher-skin, and all publisher UI elements.
 import '@videojs/html/publisher/skin';
 // Registers moq-publish-video for the `?real` path.
@@ -31,6 +30,7 @@ import type { MediaPublishStats } from '@videojs/media';
 import { CustomMediaElement } from '@videojs/media/dom/custom-media-element';
 import type { MoqPublishMediaOptions } from '@videojs/spf/moq-publish';
 import { MoqPublishMedia } from '@videojs/spf/moq-publish-video';
+
 import { FakePublishMedia } from './fake-media';
 import { createPublisherLoopbackRelay, type PublisherLoopbackRelay } from './loopback-relay';
 
@@ -50,6 +50,7 @@ const NS_STORAGE_KEY = 'moq-publisher:ns';
 const LOOPBACK_NAMESPACE = 'loopback';
 
 const params = new URLSearchParams(window.location.search);
+
 type Mode = 'loopback' | 'real' | 'fake';
 const mode: Mode = params.has('real') ? 'real' : params.has('fake') ? 'fake' : 'loopback';
 
@@ -74,6 +75,7 @@ function escapeAttr(value: string): string {
 function installSyntheticCapture(): void {
   navigator.mediaDevices.getUserMedia = async () => {
     const canvas = document.createElement('canvas');
+
     canvas.width = 640;
     canvas.height = 360;
     const ctx = canvas.getContext('2d')!;
@@ -81,6 +83,7 @@ function installSyntheticCapture(): void {
     let frame = 0;
     const interval = setInterval(() => {
       const t = (performance.now() - startedAt) / 1000;
+
       ctx.fillStyle = '#101014';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = `hsl(${Math.round((t * 90) % 360)} 80% 55%)`;
@@ -97,10 +100,13 @@ function installSyntheticCapture(): void {
     const audioContext = new AudioContext();
     const oscillator = audioContext.createOscillator();
     const gain = audioContext.createGain();
+
     gain.gain.value = 0.05;
     const destination = audioContext.createMediaStreamDestination();
+
     oscillator.connect(gain).connect(destination);
     oscillator.start();
+
     for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
 
     // The host stops tracks to release capture — stop the synthesis with it.
@@ -125,11 +131,9 @@ customElements.define('fake-publish-video', FakePublishVideoElement);
 let activeRelay: PublisherLoopbackRelay | undefined;
 
 /**
- * `CustomMediaElement` constructs its host with `new MediaHost()` — no
- * constructor options can flow through the element — so the loopback
- * transport seam is injected by subclassing the host and pre-binding
- * `engineConfig` here. VP8 is preferred over the H.264 default so the
- * loopback player can decode without out-of-band decoder descriptions.
+ * `CustomMediaElement` constructs its host with `new MediaHost()` — no constructor options can flow through the element
+ * — so the loopback transport seam is injected by subclassing the host and pre-binding `engineConfig` here. VP8 is
+ * preferred over the H.264 default so the loopback player can decode without out-of-band decoder descriptions.
  */
 class LoopbackPublishMedia extends MoqPublishMedia {
   constructor() {
@@ -139,10 +143,12 @@ class LoopbackPublishMedia extends MoqPublishMedia {
         screen: { codec: 'vp8' },
         connectTransport: (endpoint) => {
           if (!activeRelay) throw new Error('loopback relay is not running');
+
           return activeRelay.connectPublisher(endpoint);
         },
       },
     };
+
     super(options);
   }
 }
@@ -174,6 +180,7 @@ class LoopbackMoqVideoElement extends SimpleMoqVideoElement {
       engineConfig: {
         createMoqTransport: (connectUrl: string, protocols: string[]) => {
           if (!activeRelay) throw new Error('loopback relay is not running');
+
           return activeRelay.createMoqTransport(connectUrl, protocols);
         },
       },
@@ -204,16 +211,22 @@ const settingsRow = {
   loopback: html`
     <p class="text-xs text-zinc-500">
       In-page loopback: real publish engine → in-memory relay → real MoQ player. Go live to start playback.
-      <a class="underline" href="?real">Real MoQ publish</a> ·
-      <a class="underline" href="?fake">Fake publish</a> ·
+      <a class="underline" href="?real">Real MoQ publish</a> · <a class="underline" href="?fake">Fake publish</a> ·
       <a class="underline" href="?synthetic">Synthetic capture</a>
     </p>
   `,
   real: html`
     <div class="flex flex-wrap items-center gap-2">
-      <label class="flex items-center gap-1">Relay <input id="relay" class="${input}" value="${escapeAttr(relay)}" spellcheck="false" /></label>
-      <label class="flex items-center gap-1">Namespace <input id="ns" class="${input}" value="${escapeAttr(namespace)}" spellcheck="false" /></label>
-      <label class="flex items-center gap-1">Token <input id="token" class="${input}" value="${escapeAttr(authToken)}" spellcheck="false" placeholder="optional" /></label>
+      <label class="flex items-center gap-1"
+        >Relay <input id="relay" class="${input}" value="${escapeAttr(relay)}" spellcheck="false"
+      /></label>
+      <label class="flex items-center gap-1"
+        >Namespace <input id="ns" class="${input}" value="${escapeAttr(namespace)}" spellcheck="false"
+      /></label>
+      <label class="flex items-center gap-1"
+        >Token
+        <input id="token" class="${input}" value="${escapeAttr(authToken)}" spellcheck="false" placeholder="optional"
+      /></label>
       <button id="apply" type="button" class="${button}">Apply</button>
     </div>
     <p class="text-xs text-zinc-500">
@@ -237,7 +250,9 @@ const publisherPane = html`
 `;
 
 document.getElementById('root')!.innerHTML = html`
-  <div class="mx-auto flex w-full ${mode === 'loopback' ? 'max-w-6xl' : 'max-w-3xl'} flex-col gap-3 p-4 font-mono text-sm">
+  <div
+    class="${mode === 'loopback' ? 'max-w-6xl' : 'max-w-3xl'} mx-auto flex w-full flex-col gap-3 p-4 font-mono text-sm"
+  >
     <h1 class="text-lg font-semibold">MoQ Publisher</h1>
     ${settingsRow}
     ${
@@ -258,7 +273,7 @@ document.getElementById('root')!.innerHTML = html`
           `
         : publisherPane
     }
-    <pre id="status" class="whitespace-pre-wrap rounded bg-zinc-100 p-2 text-xs"></pre>
+    <pre id="status" class="rounded bg-zinc-100 p-2 text-xs whitespace-pre-wrap"></pre>
   </div>
 `;
 
@@ -285,8 +300,10 @@ const player = document.getElementById('player') as SimpleMoqVideoElement | null
 
 function formatStats(stats: MediaPublishStats | null): string {
   if (!stats) return '—';
+
   const sent =
     stats.bytesSent >= 1e6 ? `${(stats.bytesSent / 1e6).toFixed(1)} MB` : `${Math.round(stats.bytesSent / 1e3)} KB`;
+
   return [
     `${stats.encodedFps} fps`,
     `${(stats.videoBitrate / 1e6).toFixed(2)} Mbps video`,
@@ -316,19 +333,24 @@ function renderStatus(): void {
     `publish: ${media.publishState}${since}`,
     `stats:   ${formatStats(media.publishStats)}`,
   ];
+
   if (activeRelay) {
     const { publisherState, publishedTracks, subscriptions, objectsReceived, objectsForwarded } = activeRelay.stats;
+
     lines.push(
       `relay:   publisher ${publisherState} · tracks [${publishedTracks.join(', ')}] · ${objectsReceived} objs in · ${objectsForwarded} out`,
       `         player subs [${subscriptions.join(', ')}]`
     );
   }
+
   if (player) {
     lines.push(
       `player:  readyState ${player.readyState} · ${player.videoWidth}×${player.videoHeight} · t=${player.currentTime.toFixed(2)}s · ${player.paused ? 'paused' : 'playing'}`
     );
   }
+
   if (error) lines.push(`error:   ${error}`);
+
   statusEl.textContent = lines.join('\n');
 }
 
@@ -364,10 +386,12 @@ if (mode === 'loopback' && player) {
       // Set on (re-)going live so every publish cycle gets a fresh player
       // session against the relay's latest catalog.
       if (!player.src) player.src = activeRelay!.src;
+
       void player.play().catch((error) => console.warn('player.play() failed:', error));
     } else if (media.publishState === 'idle' || media.publishState === 'error') {
       if (player.src) player.src = '';
     }
+
     renderStatus();
   });
 }
@@ -388,12 +412,15 @@ if (mode === 'real') {
     localStorage.setItem(NS_STORAGE_KEY, nextNs);
 
     const next = new URLSearchParams(window.location.search);
+
     next.set('relay', nextRelay);
     next.set('ns', nextNs);
+
     // The token stays a URL param only (never localStorage) — short-lived
     // credentials shouldn't outlive the tab's address bar.
     if (nextToken) next.set('token', nextToken);
     else next.delete('token');
+
     window.location.search = next.toString();
   });
 }

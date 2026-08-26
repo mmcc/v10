@@ -1,6 +1,7 @@
 import { cameraText, enableDevicesText, microphoneText } from '@videojs/core/i18n/text/publish';
 import { cn } from '@videojs/utils/style';
 import { type ComponentProps, forwardRef, type ReactNode } from 'react';
+
 import { useTranslator } from '@/i18n/context';
 import {
   CameraIcon,
@@ -32,6 +33,7 @@ import { PublishButton } from '@/ui/publish-button';
 import { PublishTimer } from '@/ui/publish-timer';
 import { ScreenShareButton } from '@/ui/screen-share-button';
 import { Tooltip } from '@/ui/tooltip';
+
 import type { BaseSkinProps } from '../types';
 
 export type PublisherSkinProps = BaseSkinProps;
@@ -81,31 +83,32 @@ function DeviceMenu({
       <Menu.Trigger aria-label={label} disabled={disabled} render={<CaretButton />}>
         <ChevronIcon className="media-icon" />
       </Menu.Trigger>
-      <Menu.Content className="media-surface media-popover media-menu">
-        <Menu.RadioGroup className="media-menu__group" value={value} onValueChange={setValue} aria-label={label}>
-          {options.map((option) => (
-            <Menu.RadioItem
-              key={option.value}
-              className="media-menu__item"
-              value={option.value}
-              disabled={option.disabled}
-            >
-              <span>{option.label}</span>
-              <Menu.ItemIndicator checked={option.value === value} forceMount className="media-menu__indicator">
-                <CheckIcon className="media-icon" />
-              </Menu.ItemIndicator>
-            </Menu.RadioItem>
-          ))}
-        </Menu.RadioGroup>
-      </Menu.Content>
+      <Menu.Popup className="media-surface media-popover media-menu">
+        <Menu.Content className="media-menu__content">
+          <Menu.RadioGroup className="media-menu__group" value={value} onValueChange={setValue} aria-label={label}>
+            {options.map((option) => (
+              <Menu.RadioItem
+                key={option.value}
+                className="media-menu__item"
+                value={option.value}
+                disabled={option.disabled}
+              >
+                <span>{option.label}</span>
+                <Menu.ItemIndicator checked={option.value === value} forceMount className="media-menu__indicator">
+                  <CheckIcon className="media-icon" />
+                </Menu.ItemIndicator>
+              </Menu.RadioItem>
+            ))}
+          </Menu.RadioGroup>
+        </Menu.Content>
+      </Menu.Popup>
     </Menu.Root>
   );
 }
 
 /**
- * Camera toggle fused with its source picker into one split control, so the
- * caret plainly belongs to the camera rather than floating between toggles.
- * The toggle keeps its own tooltip and hotkey hint.
+ * Camera toggle fused with its source picker into one split control, so the caret plainly belongs to the camera rather
+ * than floating between toggles. The toggle keeps its own tooltip and hotkey hint.
  */
 function CameraControl(): ReactNode {
   const t = useTranslator();
@@ -179,10 +182,9 @@ function MicControl(): ReactNode {
 }
 
 /**
- * Default publisher skin. Mirrors the HTML `<publisher-skin>` template: a
- * capture placeholder over the preview, a publish status row (badge, timer,
- * connection indicator), an error dialog, and an always-visible controls bar
- * with camera/mic split controls, screen share, and the publish button.
+ * Default publisher skin. Mirrors the HTML `<publisher-skin>` template: a capture placeholder over the preview, a
+ * publish status row (badge, timer, connection indicator), an error dialog, and an always-visible controls bar with
+ * camera/mic split controls, screen share, and the publish button.
  */
 export function PublisherSkin(props: PublisherSkinProps): ReactNode {
   const { children, className, style, ...rest } = props;
@@ -212,64 +214,64 @@ export function PublisherSkin(props: PublisherSkinProps): ReactNode {
       </div>
 
       <ErrorDialog.Root>
-        <ErrorDialog.Popup className="media-error">
-          <div className="media-error__dialog media-surface">
-            <div className="media-error__content">
-              <ErrorDialog.Title className="media-error__title" />
-              <ErrorDialog.Description className="media-error__description" />
-            </div>
-            <div className="media-error__actions">
-              <ErrorDialog.Close className="media-button media-button--primary" />
-            </div>
+        <ErrorDialog.Backdrop className="media-dialog__backdrop" />
+        <ErrorDialog.Popup className="media-dialog__popup media-surface">
+          <div className="media-dialog__content">
+            <ErrorDialog.Title className="media-dialog__title" />
+            <ErrorDialog.Description className="media-dialog__description" />
+          </div>
+          <div className="media-dialog__actions">
+            <ErrorDialog.Close className="media-button media-button--primary" />
           </div>
         </ErrorDialog.Popup>
       </ErrorDialog.Root>
 
-      <Controls.Root className="media-surface media-controls media-controls--root">
-        <Tooltip.Provider>
-          <div className="media-button-group media-button-group--devices">
-            <CameraControl />
-            <MicControl />
+      <Controls.Root>
+        <Controls.Backdrop className="media-controls__backdrop" />
+        <Controls.Content className="media-surface media-controls media-controls--root">
+          <Tooltip.Provider>
+            <div className="media-button-group media-button-group--devices">
+              <CameraControl />
+              <MicControl />
 
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger
-                render={
-                  <ScreenShareButton className="media-button--screen-share" render={<Button />}>
-                    <ScreenShareIcon className="media-icon media-icon--screen-share" />
-                  </ScreenShareButton>
-                }
-              />
-              <Tooltip.Popup className="media-surface media-tooltip">
-                <Tooltip.Label />
-                <Tooltip.Shortcut className="media-tooltip__kbd" />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-          </div>
+              <Tooltip.Root side="top">
+                <Tooltip.Trigger
+                  render={
+                    <ScreenShareButton className="media-button--screen-share" render={<Button />}>
+                      <ScreenShareIcon className="media-icon media-icon--screen-share" />
+                    </ScreenShareButton>
+                  }
+                />
+                <Tooltip.Popup className="media-surface media-tooltip">
+                  <Tooltip.Label />
+                  <Tooltip.Shortcut className="media-tooltip__kbd" />
+                </Tooltip.Popup>
+              </Tooltip.Root>
+            </div>
 
-          <div className="media-controls__spacer" aria-hidden="true" />
+            <div className="media-controls__spacer" aria-hidden="true" />
 
-          <div className="media-button-group">
-            <PublishButton className="media-button media-button--publish" />
+            <div className="media-button-group">
+              <PublishButton className="media-button media-button--publish" />
 
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger
-                render={
-                  <FullscreenButton className="media-button--fullscreen" render={<Button />}>
-                    <FullscreenEnterIcon className="media-icon media-icon--fullscreen-enter" />
-                    <FullscreenExitIcon className="media-icon media-icon--fullscreen-exit" />
-                  </FullscreenButton>
-                }
-              />
-              <Tooltip.Popup className="media-surface media-tooltip">
-                <Tooltip.Label />
-                <Tooltip.Shortcut className="media-tooltip__kbd" />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-          </div>
-        </Tooltip.Provider>
+              <Tooltip.Root side="top">
+                <Tooltip.Trigger
+                  render={
+                    <FullscreenButton className="media-button--fullscreen" render={<Button />}>
+                      <FullscreenEnterIcon className="media-icon media-icon--fullscreen-enter" />
+                      <FullscreenExitIcon className="media-icon media-icon--fullscreen-exit" />
+                    </FullscreenButton>
+                  }
+                />
+                <Tooltip.Popup className="media-surface media-tooltip">
+                  <Tooltip.Label />
+                  <Tooltip.Shortcut className="media-tooltip__kbd" />
+                </Tooltip.Popup>
+              </Tooltip.Root>
+            </div>
+          </Tooltip.Provider>
+        </Controls.Content>
       </Controls.Root>
-
-      <div className="media-overlay" />
 
       {/* Hotkeys */}
       <Hotkey keys="m" action="toggleMicMuted" />

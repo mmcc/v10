@@ -1,5 +1,6 @@
 import type { MediaCaptureDevicesState } from '@videojs/media';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { MicRadioGroupState } from '../mic-radio-group-core';
 import { MicRadioGroupCore } from '../mic-radio-group-core';
 
@@ -36,6 +37,7 @@ describe('MicRadioGroupCore', () => {
   describe('getState', () => {
     it('projects microphones', () => {
       const core = new MicRadioGroupCore();
+
       core.setMedia(createMediaState());
 
       const state = core.getState();
@@ -49,6 +51,7 @@ describe('MicRadioGroupCore', () => {
 
     it('falls back to numbered labels when device labels are empty', () => {
       const core = new MicRadioGroupCore();
+
       core.setMedia(
         createMediaState({
           microphones: [
@@ -66,6 +69,7 @@ describe('MicRadioGroupCore', () => {
 
     it('marks availability unavailable with one microphone', () => {
       const core = new MicRadioGroupCore();
+
       core.setMedia(createMediaState({ microphones: [{ deviceId: 'mic-1', kind: 'audioinput', label: 'Built-in' }] }));
 
       expect(core.getState().availability).toBe('unavailable');
@@ -76,11 +80,13 @@ describe('MicRadioGroupCore', () => {
   describe('getLabel', () => {
     it('returns the default label', () => {
       const core = new MicRadioGroupCore();
+
       expect(core.getLabel(createState())).toMatchObject({ key: 'publish.microphone', text: 'Microphone' });
     });
 
     it('returns a custom string label', () => {
       const core = new MicRadioGroupCore({ label: 'Audio source' });
+
       expect(core.getLabel(createState())).toBe('Audio source');
     });
   });

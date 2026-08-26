@@ -2,6 +2,7 @@ import type { MediaCaptureSourceState, MediaCaptureState } from '@videojs/media'
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { enableDevicesText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
@@ -23,9 +24,8 @@ export interface EnableDevicesButtonState extends ButtonState {
 }
 
 /**
- * Core state machine for an "Enable camera and microphone" button. Activating
- * it selects the camera capture source, which prompts for device permission
- * as needed.
+ * Core state machine for an "Enable camera and microphone" button. Activating it selects the camera capture source,
+ * which prompts for device permission as needed.
  */
 export class EnableDevicesButtonCore {
   static readonly defaultProps: NonNullableObject<EnableDevicesButtonProps> = {
@@ -86,7 +86,9 @@ export class EnableDevicesButtonCore {
 
   activate(media: MediaCaptureSourceState): void {
     if (this.#props.disabled) return;
+
     if (media.cameraState === 'acquiring') return;
+
     // Safe because the acquire behavior consumes the intent on
     // `denied`/`ended`: cameraActive can only read true while acquisition
     // is genuinely being served, so this never blocks a retry.

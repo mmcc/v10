@@ -1,6 +1,7 @@
 import type { MediaConnectionQuality, MediaPublishStats, MediaPublishStatsState } from '@videojs/media';
 import { isMediaPublishStatsCapable } from '@videojs/media';
 import { listen } from '@videojs/utils/dom';
+
 import { definePlayerFeature } from '../../feature';
 
 /** Encoded FPS below this reads as a struggling encoder or capture pipeline. */
@@ -9,10 +10,8 @@ const LOW_ENCODED_FPS = 15;
 /**
  * Bucket publish stats into a coarse connection quality.
  *
- * `unknown` until stats exist and report a real bitrate; `poor` when frames
- * were dropped this sample while the encoder is also below
- * {@link LOW_ENCODED_FPS}; `fair` when only one of those holds; `good`
- * otherwise.
+ * `unknown` until stats exist and report a real bitrate; `poor` when frames were dropped this sample while the encoder
+ * is also below {@link LOW_ENCODED_FPS}; `fair` when only one of those holds; `good` otherwise.
  */
 export function deriveConnectionQuality(
   stats: MediaPublishStats | null,
@@ -22,9 +21,10 @@ export function deriveConnectionQuality(
 
   const droppedFramesGrew = stats.droppedFrames > previousDroppedFrames;
   const lowEncodedFps = stats.encodedFps < LOW_ENCODED_FPS;
-
   if (droppedFramesGrew && lowEncodedFps) return 'poor';
+
   if (droppedFramesGrew || lowEncodedFps) return 'fair';
+
   return 'good';
 }
 
@@ -37,7 +37,6 @@ export const publishStatsFeature = definePlayerFeature({
 
   attach({ target, signal, set }) {
     const { media } = target;
-
     if (!isMediaPublishStatsCapable(media)) return;
 
     // Seed from any pre-existing sample so a mid-session (re-)attach doesn't

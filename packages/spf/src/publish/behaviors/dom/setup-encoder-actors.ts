@@ -1,51 +1,36 @@
 /**
- * **Own the encoder actor for each active encoding.** Three independent
- * clusters-of-one — camera, screen, mic — each running while its own
- * `state.activeEncodings.{camera,screen,audio}` names a config and the
- * matching capture stream (`context.{cameraStream,screenStream,micStream}`)
- * is live: creates the per-kind encoder actor (`createVideoEncoderActor`
- * for camera/screen, `createAudioEncoderActor` for mic), configures it,
- * and publishes the `cameraEncoderActor` / `screenEncoderActor` /
- * `audioEncoderActor` context slot. On stream release, encoding change,
- * or teardown that kind's actor is destroyed and its slot cleared —
- * independently of the other two, so a screen share starting or ending
- * mid-session never touches the camera or mic encoder. Independence rests
- * on the per-kind narrowing below: `activeEncodings` is one merged object,
- * so tracking it whole would make every kind's write everyone's rebuild.
+ * **Own the encoder actor for each active encoding.** Three independent clusters-of-one — camera, screen, mic — each
+ * running while its own `state.activeEncodings.{camera,screen,audio}` names a config and the matching capture stream
+ * (`context.{cameraStream,screenStream,micStream}`) is live: creates the per-kind encoder actor
+ * (`createVideoEncoderActor` for camera/screen, `createAudioEncoderActor` for mic), configures it, and publishes the
+ * `cameraEncoderActor` / `screenEncoderActor` / `audioEncoderActor` context slot. On stream release, encoding change,
+ * or teardown that kind's actor is destroyed and its slot cleared — independently of the other two, so a screen share
+ * starting or ending mid-session never touches the camera or mic encoder. Independence rests on the per-kind narrowing
+ * below: `activeEncodings` is one merged object, so tracking it whole would make every kind's write everyone's
+ * rebuild.
  *
- * Because this behavior owns the rebuilds, it also owns each kind's
- * published-timeline continuity across them: one `TrackTimeline` per kind
- * outlives every actor rebuilt below, so a replacement actor continues
- * the track's clock domain — advanced by the real acquisition gap —
- * instead of opening a fresh wallclock anchor that would step the track's
- * published timestamps against the surviving tracks (the on-wire cause of
- * "audio jumps and A/V drifts after switching mics"; see the
- * `TrackTimeline` doc in `encoder-actor.ts`).
+ * Because this behavior owns the rebuilds, it also owns each kind's published-timeline continuity across them: one
+ * `TrackTimeline` per kind outlives every actor rebuilt below, so a replacement actor continues the track's clock
+ * domain — advanced by the real acquisition gap — instead of opening a fresh wallclock anchor that would step the
+ * track's published timestamps against the surviving tracks (the on-wire cause of "audio jumps and A/V drifts after
+ * switching mics"; see the `TrackTimeline` doc in `encoder-actor.ts`).
  *
- * Per-type setup-actor convention: downstream behaviors (`pumpMediaFrames`
- * dispatches frames, `trackPublishStats` samples counters) only read the
- * slots — they never create the actors. Unlike `setupTrackPublishers`
- * (whose publishers must survive an encoding disappearing, since
- * destroying one ends the MOQT track for every subscriber), an encoder
- * actor has no such downstream cost — it is destroyed and recreated
- * freely as its kind's source comes and goes.
+ * Per-type setup-actor convention: downstream behaviors (`pumpMediaFrames` dispatches frames, `trackPublishStats`
+ * samples counters) only read the slots — they never create the actors. Unlike `setupTrackPublishers` (whose publishers
+ * must survive an encoding disappearing, since destroying one ends the MOQT track for every subscriber), an encoder
+ * actor has no such downstream cost — it is destroyed and recreated freely as its kind's source comes and goes.
  *
  * Packaged output routes through `config.chunkSink` (default: no-op).
  *
- * Also the sole writer of `state.encoderInitData`: the decoder
- * description (codec extradata, e.g. avcC for `avc`-format H.264) each
- * live encoder reported, per kind. The description only exists in the
- * codec's output metadata — encoder *configs* carry none — so the actor
- * owner is the one place it can be lifted into a fact `deriveCatalog`
- * can publish as the MSF catalog's `initDataList`. Written from the
- * actor's `onDecoderConfig` callback and cleared with the actor, using
- * the same partitioned-by-kind multi-writer-slot pattern as
- * `probe-encoder-support.ts`'s facts: each cluster writes only its own
- * key, and the last kind leaving restores the absent state.
+ * Also the sole writer of `state.encoderInitData`: the decoder description (codec extradata, e.g. avcC for `avc`-format
+ * H.264) each live encoder reported, per kind. The description only exists in the codec's output metadata — encoder
+ * _configs_ carry none — so the actor owner is the one place it can be lifted into a fact `deriveCatalog` can publish
+ * as the MSF catalog's `initDataList`. Written from the actor's `onDecoderConfig` callback and cleared with the actor,
+ * using the same partitioned-by-kind multi-writer-slot pattern as `probe-encoder-support.ts`'s facts: each cluster
+ * writes only its own key, and the last kind leaving restores the absent state.
  *
- * Sole writer of the three encoder-actor context slots and of
- * `state.encoderInitData`; co-writer of `state.publishError` (encoder
- * failures only).
+ * Sole writer of the three encoder-actor context slots and of `state.encoderInitData`; co-writer of
+ * `state.publishError` (encoder failures only).
  */
 import { defineBehavior } from '../../../core/composition/create-composition';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
@@ -61,9 +46,8 @@ import type { PublishErrorFacts } from './acquire-capture-source';
 import type { ActiveEncodingsFacts } from './probe-encoder-support';
 
 /**
- * Decoder init data per kind — the `decoderConfig.description` the kind's
- * live encoder most recently reported. Absent for codecs that carry no
- * extradata (VP8, Opus) and until the kind's first encoded output.
+ * Decoder init data per kind — the `decoderConfig.description` the kind's live encoder most recently reported. Absent
+ * for codecs that carry no extradata (VP8, Opus) and until the kind's first encoded output.
  */
 export interface EncoderInitDataFacts {
   camera?: Uint8Array;
@@ -130,14 +114,11 @@ function setupEncoderActorsSetup({
   };
 
   /**
-   * Narrow the dependency to one kind's entry. `state.activeEncodings` is a
-   * merged multi-writer object whose every per-kind write is a FRESH object
-   * (`probe-encoder-support.ts`), so a cluster tracking the whole signal
-   * would re-run — cleanup first, i.e. destroy a live codec — whenever an
-   * unrelated kind resolved or was released: starting a screen share would
-   * cut the camera and the mic mid-stream. Those merges spread the previous
-   * object, leaving the other kinds' configs reference-identical, so the
-   * computed's `Object.is` dedupe stops the notification here.
+   * Narrow the dependency to one kind's entry. `state.activeEncodings` is a merged multi-writer object whose every
+   * per-kind write is a FRESH object (`probe-encoder-support.ts`), so a cluster tracking the whole signal would re-run
+   * — cleanup first, i.e. destroy a live codec — whenever an unrelated kind resolved or was released: starting a screen
+   * share would cut the camera and the mic mid-stream. Those merges spread the previous object, leaving the other
+   * kinds' configs reference-identical, so the computed's `Object.is` dedupe stops the notification here.
    */
   const encodingFor = <Kind extends keyof ActiveEncodingsFacts>(kind: Kind) =>
     computed(() => state.activeEncodings.get()?.[kind]);
@@ -152,6 +133,7 @@ function setupEncoderActorsSetup({
   };
   const clearInitData = (kind: keyof EncoderInitDataFacts): void => {
     const remaining = Object.entries(peek(state.encoderInitData) ?? {}).filter(([key]) => key !== kind);
+
     state.encoderInitData.set(remaining.length === 0 ? undefined : Object.fromEntries(remaining));
   };
 
@@ -164,6 +146,7 @@ function setupEncoderActorsSetup({
     // Outlives the actors rebuilt in the effects below — the kind's
     // published timeline stays one clock domain across rebuilds.
     const timeline = createTrackTimeline();
+
     return createMachineReactor<SetupEncoderActorsFsmState>({
       initial: 'preconditions-unmet',
       monitor: () => (stream.get() && encoding.get() ? 'encoder-ready' : 'preconditions-unmet'),
@@ -179,6 +162,7 @@ function setupEncoderActorsSetup({
           // A fresh actor restarts that cadence, whose first frame is key.
           effects: () => {
             const videoConfig = encoding.get()!;
+
             stream.get();
             const actor = createVideoEncoderActor(sink, {
               ...errorOptions,
@@ -186,6 +170,7 @@ function setupEncoderActorsSetup({
               timeline,
               onDecoderConfig: (description) => setInitData(encodingKey, description),
             });
+
             actor.send({ type: 'configure', config: videoConfig });
             actorSlot.set(actor);
             return () => {
@@ -216,12 +201,14 @@ function setupEncoderActorsSetup({
       'encoder-ready': {
         effects: () => {
           const audioConfig = audioEncoding.get()!;
+
           context.micStream.get();
           const actor = createAudioEncoderActor(sink, {
             ...errorOptions,
             timeline: audioTimeline,
             onDecoderConfig: (description) => setInitData('audio', description),
           });
+
           actor.send({ type: 'configure', config: audioConfig });
           context.audioEncoderActor.set(actor);
           return () => {

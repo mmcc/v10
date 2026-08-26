@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../../core/signals/primitives';
 import type { AudioContextLike, AudioRendererActor } from '../../../actors/dom/audio-renderer';
 import { createAudioRendererActor } from '../../../actors/dom/audio-renderer';
@@ -70,6 +71,7 @@ describe('setupAudioRenderer', () => {
       videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
     };
     const reactor = setupAudioRenderer.setup({ state, context, config });
+
     return { state, context, reactor };
   }
 
@@ -135,6 +137,7 @@ describe('setupAudioRenderer', () => {
 
     // Video is already presenting past that point: clamp forward to it.
     let videoClockUs = 11_000_000;
+
     context.videoRendererActor.set({
       snapshot: signal({ context: {} }),
       getClockTimeUs: () => videoClockUs,
@@ -288,6 +291,7 @@ describe('trackPlayoutTime', () => {
       videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
     };
     const cleanup = trackPlayoutTime.setup({ state, context });
+
     return { state, context, cleanup };
   }
 
@@ -298,6 +302,7 @@ describe('trackPlayoutTime', () => {
   // controller never gets a setpoint.
   it('publishes the video renderer timestamp when there is no audio clock', async () => {
     const { state, context, cleanup } = setupTrackPlayoutTime();
+
     expect(state.currentTime.get()).toBeUndefined();
 
     context.videoRendererActor.set({
@@ -341,9 +346,11 @@ describe('trackPlayoutTime', () => {
   // timebases for the whole of the join window.
   it('names the clock the position came from, and follows the handover', async () => {
     const { state, context, cleanup } = setupTrackPlayoutTime();
+
     expect(state.playoutClockOwner.get()).toBeUndefined();
 
     let audioClockUs: number | undefined;
+
     context.audioRendererActor.set({
       snapshot: signal({ context: {} }),
       setTrack: vi.fn(),
@@ -383,6 +390,7 @@ describe('trackPlayoutTime', () => {
     const { state, context, cleanup } = setupTrackPlayoutTime();
 
     let audioClockUs: number | undefined = 9_000_000;
+
     context.audioRendererActor.set({
       snapshot: signal({ context: {} }),
       setTrack: vi.fn(),
@@ -419,6 +427,7 @@ describe('trackPlayoutTime', () => {
     const { state, context, cleanup } = setupTrackPlayoutTime();
 
     let presentedUs: number | undefined = 5_000_000;
+
     context.videoRendererActor.set({
       get snapshot() {
         return signal({ context: { lastPresentedTimestampUs: presentedUs } });
@@ -469,6 +478,7 @@ describe('trackPlayoutTime', () => {
   it('stops publishing after cleanup', async () => {
     const { state, context, cleanup } = setupTrackPlayoutTime();
     let presentedUs = 1_000_000;
+
     context.videoRendererActor.set({
       get snapshot() {
         return signal({ context: { lastPresentedTimestampUs: presentedUs } });
@@ -502,6 +512,7 @@ describe('setupVideoRenderer', () => {
       videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
     };
     const reactor = setupVideoRenderer.setup({ state, context, config });
+
     return { state, context, reactor };
   }
 
@@ -646,6 +657,7 @@ describe('trackPlayoutHealth', () => {
       videoRendererActor: signal<VideoRendererActor | undefined>(undefined),
     };
     const cleanup = trackPlayoutHealth.setup({ state, context });
+
     return { state, context, cleanup };
   }
 
@@ -689,6 +701,7 @@ describe('trackPlayoutHealth', () => {
   it('stops publishing after cleanup', async () => {
     const { state, context, cleanup } = setupTrackPlayoutHealth();
     let framesDropped = 1;
+
     context.videoRendererActor.set({
       get snapshot() {
         return signal({ context: { framesDropped } });

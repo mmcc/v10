@@ -1,23 +1,19 @@
 /**
- * **Keep `state.captureDevices` synced with the platform's capture
- * inputs.** On setup (when `navigator.mediaDevices` exists) enumerates
- * `videoinput`/`audioinput` devices into the slot, then re-enumerates on
- * the platform `devicechange` event and whenever any capture pipeline's
- * status becomes `'active'` — device labels stay redacted until a capture
- * grant, so the post-grant refresh is what surfaces human-readable names
- * (a camera grant reveals video-input labels, a mic grant reveals
- * audio-input ones; screen share never gates an input-device permission,
- * so it's excluded).
+ * **Keep `state.captureDevices` synced with the platform's capture inputs.** On setup (when `navigator.mediaDevices`
+ * exists) enumerates `videoinput`/`audioinput` devices into the slot, then re-enumerates on the platform `devicechange`
+ * event and whenever any capture pipeline's status becomes `'active'` — device labels stay redacted until a capture
+ * grant, so the post-grant refresh is what surfaces human-readable names (a camera grant reveals video-input labels, a
+ * mic grant reveals audio-input ones; screen share never gates an input-device permission, so it's excluded).
  *
- * Simple behavior: one platform listener plus one effect watching both
- * capture statuses. Each refresh writes a fresh array (a new enumeration
- * snapshot), even when the contents are unchanged. In-flight enumerations
- * that resolve after cleanup — or after a newer refresh started — are
- * discarded, so a slow older snapshot can never overwrite a newer one.
+ * Simple behavior: one platform listener plus one effect watching both capture statuses. Each refresh writes a fresh
+ * array (a new enumeration snapshot), even when the contents are unchanged. In-flight enumerations that resolve after
+ * cleanup — or after a newer refresh started — are discarded, so a slow older snapshot can never overwrite a newer
+ * one.
  *
  * Sole writer of `state.captureDevices`.
  */
 import { listen } from '@videojs/utils/dom';
+
 import { defineBehavior } from '../../../core/composition/create-composition';
 import { effect } from '../../../core/signals/effect';
 import type { ReadonlySignal, Signal } from '../../../core/signals/primitives';
@@ -31,9 +27,7 @@ export interface CaptureDeviceFacts {
   label: string;
 }
 
-/**
- * State shape for capture-device enumeration.
- */
+/** State shape for capture-device enumeration. */
 export interface EnumerateCaptureDevicesState {
   captureDevices?: CaptureDeviceFacts[];
   cameraState?: CaptureStatus;
@@ -63,11 +57,15 @@ function enumerateCaptureDevicesSetup({
     // newest enumeration may commit, whatever order the platform resolves.
     const ticket = ++generation;
     const devices = await mediaDevices.enumerateDevices();
+
     if (disposed || ticket !== generation) return;
+
     const inputs: CaptureDeviceFacts[] = [];
+
     for (const { deviceId, kind, label } of devices) {
       if (isCaptureInputKind(kind)) inputs.push({ deviceId, kind, label });
     }
+
     state.captureDevices.set(inputs);
   };
 
@@ -83,6 +81,7 @@ function enumerateCaptureDevicesSetup({
     const cameraGranted = state.cameraState.get() === 'active';
     const micGranted = state.micState.get() === 'active';
     if (!cameraGranted && !micGranted) return;
+
     void refresh();
   });
 

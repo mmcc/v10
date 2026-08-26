@@ -1,11 +1,9 @@
 /**
- * Raw peer-initiated request streams for publish-side tests — the relay's
- * half of the announce-and-serve flow, which the existing subscribe
- * driver does not initiate. `openRawRequest` writes one request message
- * and then records every control frame the publisher sends back, plus
- * whether the publisher FINed its side; `solicitNamespace` and
- * `rawSubscribe` wrap it with the two messages moq-lite-rs sends
- * (SUBSCRIBE_NAMESPACE right after SETUP, SUBSCRIBE per pulled track).
+ * Raw peer-initiated request streams for publish-side tests — the relay's half of the announce-and-serve flow, which
+ * the existing subscribe driver does not initiate. `openRawRequest` writes one request message and then records every
+ * control frame the publisher sends back, plus whether the publisher FINed its side; `solicitNamespace` and
+ * `rawSubscribe` wrap it with the two messages moq-lite-rs sends (SUBSCRIBE_NAMESPACE right after SETUP, SUBSCRIBE per
+ * pulled track).
  */
 import {
   type ControlMessage,
@@ -23,17 +21,15 @@ export interface RawRequest {
   /** True once the publisher FINed (or reset) its side. */
   ended: () => boolean;
   /**
-   * The decode/stream error that ended the read loop, if any — the
-   * helper exists for byte-precise assertions, so a malformed frame must
-   * surface here instead of masquerading as a clean FIN.
+   * The decode/stream error that ended the read loop, if any — the helper exists for byte-precise assertions, so a
+   * malformed frame must surface here instead of masquerading as a clean FIN.
    */
   failure: () => unknown;
   /** Write a follow-up frame on the request stream (e.g. a GOAWAY). */
   send: (bytes: Uint8Array) => Promise<void>;
   /**
-   * Reset only the response direction (stop reading) while keeping the
-   * request half open — the half-broken peer a response-side write
-   * failure test needs.
+   * Reset only the response direction (stop reading) while keeping the request half open — the half-broken peer a
+   * response-side write failure test needs.
    */
   abandonReads: () => Promise<void>;
   /** FIN the peer's side — half-closure, NOT a withdrawal (§3.3.2). */
@@ -45,16 +41,20 @@ export interface RawRequest {
 export async function openRawRequest(server: MoqtTransport, message: Uint8Array): Promise<RawRequest> {
   const stream = await server.createBidirectionalStream();
   const writer = stream.writable.getWriter();
+
   await writer.write(message);
   const received: ControlMessage[] = [];
   let ended = false;
   let failure: unknown;
   const reader = stream.readable.getReader();
+
   void (async () => {
     const deframer = new ControlMessageDeframer();
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+
       for (const frame of deframer.push(value)) received.push(decodeControlMessage(frame));
     }
   })().then(

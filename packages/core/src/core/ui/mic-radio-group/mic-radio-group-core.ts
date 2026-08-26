@@ -2,6 +2,7 @@ import type { MediaCaptureDeviceInfo, MediaCaptureDevicesState } from '@videojs/
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { microphoneText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
@@ -31,6 +32,7 @@ export interface MicRadioGroupState extends ButtonState {
 /** Device labels are empty until capture permission is granted — fall back to "Microphone n". */
 function formatDeviceLabel(device: MediaCaptureDeviceInfo, index: number): Text | string {
   if (device.label) return device.label;
+
   return `${resolveText(microphoneText)} ${index + 1}`;
 }
 

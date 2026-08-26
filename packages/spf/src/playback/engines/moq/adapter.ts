@@ -1,20 +1,17 @@
 /**
  * Canvas + facade adapter — §6 prototype (1) of the MoQ engine plan.
  *
- * With no `HTMLMediaElement` driving playback, the integration surface
- * synthesizes the parts of the media-element contract the player shell
- * needs: `src`, `preload`, `currentTime`, `duration` (∞ while live),
- * `paused`, `play()`/`pause()`. Rendering happens on a canvas the host
- * attaches; audio through an `AudioContext` the adapter owns (created on
- * `attach` and aligned with the paused flag there, resumed on `play()` —
- * the user-gesture-bound resume is the autoplay-policy gate the engine's
- * capability check calls out).
+ * With no `HTMLMediaElement` driving playback, the integration surface synthesizes the parts of the media-element
+ * contract the player shell needs: `src`, `preload`, `currentTime`, `duration` (∞ while live), `paused`,
+ * `play()`/`pause()`. Rendering happens on a canvas the host attaches; audio through an `AudioContext` the adapter owns
+ * (created on `attach` and aligned with the paused flag there, resumed on `play()` — the user-gesture-bound resume is
+ * the autoplay-policy gate the engine's capability check calls out).
  *
- * The MediaStreamTrackGenerator bridge (§6 option 2) is the Chromium-only
- * alternative to evaluate against this in the Phase 4 prototype
- * comparison; this facade is the cross-browser default.
+ * The MediaStreamTrackGenerator bridge (§6 option 2) is the Chromium-only alternative to evaluate against this in the
+ * Phase 4 prototype comparison; this facade is the cross-browser default.
  */
 import type { Constructor, MixinReturn } from '@videojs/utils/types';
+
 import type { Composition } from '../../../core/composition/create-composition';
 import type { AudioContextLike } from '../../actors/dom/audio-renderer';
 import {
@@ -26,10 +23,9 @@ import {
 } from './engine';
 
 /**
- * The `AudioContextLike` render seam plus the lifecycle surface the
- * adapter drives (`resume`/`suspend` on play/pause, `close` on destroy)
- * and the `createGain` factory backing the facade's `volume`/`muted`.
- * `AudioContext` satisfies it structurally.
+ * The `AudioContextLike` render seam plus the lifecycle surface the adapter drives (`resume`/`suspend` on play/pause,
+ * `close` on destroy) and the `createGain` factory backing the facade's `volume`/`muted`. `AudioContext` satisfies it
+ * structurally.
  */
 export interface MoqAudioContext extends AudioContextLike {
   readonly state: AudioContextState;
@@ -39,21 +35,16 @@ export interface MoqAudioContext extends AudioContextLike {
   close(): Promise<void>;
 }
 
-/**
- * Constructor options for {@link MoqMediaMixin} classes, read from the
- * first constructor argument.
- */
+/** Constructor options for {@link MoqMediaMixin} classes, read from the first constructor argument. */
 export interface MoqMediaOptions {
   /**
-   * AudioContext factory seam — injectable like the engine's
-   * `createMoqTransport`, so tests can observe resume/suspend alignment
-   * without a live audio device. Defaults to `new AudioContext()`.
+   * AudioContext factory seam — injectable like the engine's `createMoqTransport`, so tests can observe resume/suspend
+   * alignment without a live audio device. Defaults to `new AudioContext()`.
    */
   createAudioContext?: () => MoqAudioContext;
   /**
-   * Engine config forwarded to `createMoqEngine` — reaches the transport
-   * factory (`createMoqTransport`) and the ABR/latency tuning seams from
-   * outside the element, which a relay-less harness needs. The adapter owns
+   * Engine config forwarded to `createMoqEngine` — reaches the transport factory (`createMoqTransport`) and the
+   * ABR/latency tuning seams from outside the element, which a relay-less harness needs. The adapter owns
    * `onSignalsReady`, so it is not overridable.
    */
   engineConfig?: Omit<MoqEngineConfig, 'onSignalsReady'>;
@@ -65,24 +56,19 @@ export interface MoqMediaProps {
   /** Target latency in seconds. */
   targetLatency: number | undefined;
   /**
-   * Let the engine choose the target latency from observed delivery
-   * instead of holding a fixed one. An explicit `targetLatency` still
-   * wins — this only fills in where the consumer stated nothing.
+   * Let the engine choose the target latency from observed delivery instead of holding a fixed one. An explicit
+   * `targetLatency` still wins — this only fills in where the consumer stated nothing.
    *
-   * Tri-state, the same shape `targetLatency` has: `undefined` is not
-   * "off", it is *unstated*, and it defers to
-   * `engineConfig.adaptiveLatency.enabled` (itself off by default).
-   * Reading it back reports the override rather than the effective state,
-   * so a host that enabled adaptation through config sees `undefined`
-   * here and a proposal in `adaptiveTargetLatency`.
+   * Tri-state, the same shape `targetLatency` has: `undefined` is not "off", it is _unstated_, and it defers to
+   * `engineConfig.adaptiveLatency.enabled` (itself off by default). Reading it back reports the override rather than
+   * the effective state, so a host that enabled adaptation through config sees `undefined` here and a proposal in
+   * `adaptiveTargetLatency`.
    */
   adaptiveLatency: boolean | undefined;
   /**
-   * Begin playback as soon as a source is set, without waiting for
-   * `play()`. Autoplay policy still gates the audio clock: outside a user
-   * gesture the AudioContext cannot resume, so video starts on the
-   * renderer self-clock with the audio subscription deferred
-   * (`state.audioSuspended`) until the first resume() settles.
+   * Begin playback as soon as a source is set, without waiting for `play()`. Autoplay policy still gates the audio
+   * clock: outside a user gesture the AudioContext cannot resume, so video starts on the renderer self-clock with the
+   * audio subscription deferred (`state.audioSuspended`) until the first resume() settles.
    */
   autoplay: boolean;
 }
@@ -113,10 +99,8 @@ export interface MoqMediaAPI extends MoqMediaProps {
   readonly duration: number;
   readonly measuredLatency: number | undefined;
   /**
-   * The target the latency controller is actually holding, in seconds,
-   * after consumer → adaptive → catalog → default resolution. Pair it
-   * with `measuredLatency` to read the controller: they are the setpoint
-   * and the process variable.
+   * The target the latency controller is actually holding, in seconds, after consumer → adaptive → catalog → default
+   * resolution. Pair it with `measuredLatency` to read the controller: they are the setpoint and the process variable.
    */
   readonly effectiveTargetLatency: number | undefined;
   /** The adaptive controller's proposal, or `undefined` when it has none. */
@@ -124,17 +108,16 @@ export interface MoqMediaAPI extends MoqMediaProps {
 }
 
 /**
- * Mixin that adds MoQ playback-engine behavior to any base class,
- * mirroring `SimpleHlsMediaMixin`'s shape. A single engine instance is
- * created at construction and recycled across src changes.
+ * Mixin that adds MoQ playback-engine behavior to any base class, mirroring `SimpleHlsMediaMixin`'s shape. A single
+ * engine instance is created at construction and recycled across src changes.
  *
  * @example
- * class MoqMedia extends MoqMediaMixin(class {}) {}
+ *   class MoqMedia extends MoqMediaMixin(class {}) {}
  *
- * const media = new MoqMedia();
- * media.attach(document.querySelector('canvas')!);
- * media.src = 'moqt://relay.example.com/live#msf:live--catalog';
- * await media.play();
+ *   const media = new MoqMedia();
+ *   media.attach(document.querySelector('canvas')!);
+ *   media.src = 'moqt://relay.example.com/live#msf:live--catalog';
+ *   await media.play();
  */
 export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base): MixinReturn<Base, MoqMediaAPI> {
   class MoqMediaImpl extends BaseClass implements MoqMediaAPI {
@@ -144,21 +127,17 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     #preload: MoqMediaProps['preload'] = moqMediaDefaultProps.preload;
     #autoplay = moqMediaDefaultProps.autoplay;
     /**
-     * The spec's can-autoplay flag, inverted: one autoplay attempt per
-     * load cycle, and none once playback was ever started or paused
-     * explicitly — a later `autoplay = true` must not restart playback.
+     * The spec's can-autoplay flag, inverted: one autoplay attempt per load cycle, and none once playback was ever
+     * started or paused explicitly — a later `autoplay = true` must not restart playback.
      */
     #autoplayAttempted = false;
     readonly #createAudioContext: () => MoqAudioContext;
     #audioContext: MoqAudioContext | undefined;
     /**
-     * The most recent fire-and-forget `suspend()` still in flight.
-     * `state` only reports 'suspended' once the control thread
-     * acknowledges, so a play()/autoplay issued right after a src-change
-     * or pause() suspend would read a stale 'running', skip its resume,
-     * and let the late suspend silence a facade that reports playing.
-     * Resume paths treat a pending suspend as suspended and chain behind
-     * it (`#resumeAudio`).
+     * The most recent fire-and-forget `suspend()` still in flight. `state` only reports 'suspended' once the control
+     * thread acknowledges, so a play()/autoplay issued right after a src-change or pause() suspend would read a stale
+     * 'running', skip its resume, and let the late suspend silence a facade that reports playing. Resume paths treat a
+     * pending suspend as suspended and chain behind it (`#resumeAudio`).
      */
     #pendingSuspend: Promise<void> | undefined;
     #volume = 1;
@@ -169,6 +148,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     constructor(...args: any[]) {
       super(...args);
       const { createAudioContext, engineConfig } = (args?.[0] ?? {}) as MoqMediaOptions;
+
       this.#createAudioContext = createAudioContext ?? (() => new AudioContext());
       const config: MoqEngineConfig = {
         ...engineConfig,
@@ -176,6 +156,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
           this.#signals = refs;
         },
       };
+
       this.#engine = createMoqEngine(config);
     }
 
@@ -189,6 +170,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     set src(value: string) {
       if (value === this.#src) return;
+
       this.#src = value;
       this.#signals.state.paused.set(true);
       // Close the load gate with it. Nothing else writes this slot false
@@ -196,16 +178,19 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // this a single earlier play() would make every later src change
       // bypass `preload` and open a session + subscriptions immediately.
       this.#signals.state.loadActivated.set(false);
+
       // The other half of `pause()`: the audio renderer has no rate-0 gate —
       // suspending the context *is* the pause — so without this the old
       // source's already-scheduled audio keeps playing audibly while
       // `paused` reports true.
       if (this.#audioContext) this.#suspendAudio(this.#audioContext);
+
       // A new load cycle re-arms autoplay (the spec's load algorithm resets
       // the can-autoplay flag) and clears the old source's audio deferral.
       this.#autoplayAttempted = false;
       this.#signals.state.audioSuspended.set(undefined);
       this.#signals.state.presentation.set(value ? { url: value } : undefined);
+
       if (this.#autoplay) this.#attemptAutoplay();
     }
 
@@ -244,31 +229,35 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     set autoplay(value: boolean) {
       this.#autoplay = value;
+
       if (value) this.#attemptAutoplay();
     }
 
     /**
-     * The autoplay procedure: begin playback without a user gesture.
-     * Playback intent applies in full (`paused` false + load gate open) so
-     * video renders on the self-clock immediately, but a suspended
-     * AudioContext cannot resume outside a gesture — mark audio deferred
-     * (`audioSuspended`) so the audio subscription waits, and let whichever
-     * resume() settles first clear it (`play()`, attach() alignment, or the
-     * queued resume below).
+     * The autoplay procedure: begin playback without a user gesture. Playback intent applies in full (`paused` false +
+     * load gate open) so video renders on the self-clock immediately, but a suspended AudioContext cannot resume
+     * outside a gesture — mark audio deferred (`audioSuspended`) so the audio subscription waits, and let whichever
+     * resume() settles first clear it (`play()`, attach() alignment, or the queued resume below).
      */
     #attemptAutoplay(): void {
       if (!this.#src || this.#autoplayAttempted) return;
+
       this.#autoplayAttempted = true;
+
       if (!this.paused) return;
+
       this.#signals.state.paused.set(false);
       this.#signals.state.loadActivated.set(true);
       const audioContext = this.#audioContext;
+
       if (!audioContext) {
         // No context until attach(); its alignment resume owns the unlock.
         this.#signals.state.audioSuspended.set(true);
         return;
       }
+
       if (!this.#audioContextSuspended(audioContext)) return;
+
       this.#signals.state.audioSuspended.set(true);
       // Chromium queues a pre-gesture resume() and settles it on the first
       // user activation, so this is both an immediate start attempt and an
@@ -279,15 +268,13 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
         .catch(() => {});
     }
 
-    /**
-     * Suspend, recording the in-flight promise so resume paths can
-     * serialize behind it — see {@link #pendingSuspend}.
-     */
+    /** Suspend, recording the in-flight promise so resume paths can serialize behind it — see {@link #pendingSuspend}. */
     #suspendAudio(audioContext: MoqAudioContext): void {
       const clear = (): void => {
         if (this.#pendingSuspend === pending) this.#pendingSuspend = undefined;
       };
       const pending: Promise<void> = audioContext.suspend().then(clear, clear);
+
       this.#pendingSuspend = pending;
     }
 
@@ -297,17 +284,19 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
     }
 
     /**
-     * Resume serialized behind any in-flight suspend, so a suspend acked
-     * after the resume decision cannot silence a playing facade.
+     * Resume serialized behind any in-flight suspend, so a suspend acked after the resume decision cannot silence a
+     * playing facade.
      */
     #resumeAudio(audioContext: MoqAudioContext): Promise<void> {
       const pending = this.#pendingSuspend;
+
       return pending ? pending.then(() => audioContext.resume()) : audioContext.resume();
     }
 
     attach(surface: HTMLCanvasElement): void {
       this.#signals.context.renderSurface.set(surface);
       const audioContext = (this.#audioContext ??= this.#createAudioContext());
+
       // Align the context with the paused flag: a context created here —
       // outside a user gesture — starts 'suspended' (so a play() that ran
       // before attach() would otherwise stay permanently silent), while
@@ -322,19 +311,21 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
         // A running context can always render audio — an autoplay deferral
         // recorded before the context existed is already settled.
         this.#signals.state.audioSuspended.set(undefined);
+
         if (this.paused) this.#suspendAudio(audioContext);
       }
+
       this.#signals.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
     }
 
     /**
-     * Renderer-facing view of the audio context whose `destination` is a
-     * GainNode implementing `volume`/`muted` — the renderer connects its
-     * sources to `destination`, so routing that through the gain gives
-     * the facade volume control without a renderer seam.
+     * Renderer-facing view of the audio context whose `destination` is a GainNode implementing `volume`/`muted` — the
+     * renderer connects its sources to `destination`, so routing that through the gain gives the facade volume control
+     * without a renderer seam.
      */
     #createRenderContext(audioContext: MoqAudioContext): AudioContextLike {
       const gain = (this.#gain = audioContext.createGain());
+
       gain.connect(audioContext.destination);
       gain.gain.value = this.#muted ? 0 : this.#volume;
       return {
@@ -366,6 +357,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // whether the audio device comes up, and a rejection must not leave
       // the engine unable to load at all.
       this.#signals.state.loadActivated.set(true);
+
       // The autoplay-policy gate: resuming inside the user gesture that
       // triggered play() is what unlocks the audio clock. A rejection —
       // Safari outside a gesture, or an already-closed context — means
@@ -379,6 +371,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
           throw error;
         }
       }
+
       // Reached with the context running (resumed above or never blocked):
       // any standing autoplay deferral of the audio subscription is over.
       // Pre-attach (no context yet) the deferral must survive — attach()'s
@@ -391,6 +384,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // toggling `autoplay` on later must not restart a paused player.
       this.#autoplayAttempted = true;
       this.#signals.state.paused.set(true);
+
       if (this.#audioContext) this.#suspendAudio(this.#audioContext);
     }
 
@@ -409,6 +403,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       // rejects a non-finite gain value with a TypeError once attached —
       // drop the write instead, keeping the documented [0, 1] invariant.
       if (Number.isNaN(value)) return;
+
       this.#volume = Math.min(1, Math.max(0, value));
       this.#applyGain();
     }
@@ -449,6 +444,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
 
     destroy(): void {
       const audioContext = this.#audioContext;
+
       this.#audioContext = undefined;
       this.#gain = undefined;
       this.#renderContext = undefined;
@@ -460,6 +456,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(BaseClass: Base)
       const closeAudio = () => {
         audioContext?.close().catch(() => {});
       };
+
       this.#engine.destroy().then(closeAudio, closeAudio);
     }
   }

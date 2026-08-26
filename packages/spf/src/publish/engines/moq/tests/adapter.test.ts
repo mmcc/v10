@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { MoqtTransport } from '../../../../network/moqt/session';
 import { createMoqtSession } from '../../../../network/moqt/session';
 import { solicitNamespace } from '../../../../network/moqt/tests/helpers/raw-peer';
@@ -7,9 +8,8 @@ import type { ConnectPublishTransport } from '../../../session/publish-session';
 import { MoqPublishMediaMixin, type MoqPublishMediaOptions } from '../adapter';
 
 /**
- * EventTarget base so the adapter's event bridge has a `dispatchEvent` to
- * land on — the same seam a real media host (e.g. `HTMLVideoElementHost`)
- * provides.
+ * EventTarget base so the adapter's event bridge has a `dispatchEvent` to land on — the same seam a real media host
+ * (e.g. `HTMLVideoElementHost`) provides.
  */
 class TestPublishMedia extends MoqPublishMediaMixin(EventTarget) {}
 
@@ -17,6 +17,7 @@ const disposals: (() => void)[] = [];
 
 function makeMedia(options?: MoqPublishMediaOptions): TestPublishMedia {
   const media = new TestPublishMedia(options);
+
   disposals.push(() => media.destroy());
   return media;
 }
@@ -30,6 +31,7 @@ const pendingConnect: ConnectPublishTransport = () => ({
 /** Media with publish() preconditions met and the transport seam injected. */
 function makePublishableMedia(connectTransport: ConnectPublishTransport = pendingConnect): TestPublishMedia {
   const media = makeMedia({ engineConfig: { connectTransport } });
+
   media.publishEndpoint = 'https://relay.example.com/moq';
   media.publishNamespace = 'live/abc123';
   media.engine.state.cameraState.set('active');
@@ -39,23 +41,25 @@ function makePublishableMedia(connectTransport: ConnectPublishTransport = pendin
 /** A subscribe-side peer completing SETUP, so sessions can come up. */
 function makePeer(pair: TransportPair) {
   const peer = createMoqtSession(pair.server, {});
+
   disposals.push(() => peer.destroy());
   return peer;
 }
 
 /**
- * Drive the engine's real session to `live` by registering a servable
- * track (normally `setupTrackPublishers`' job, gated on encodings these
- * tests do not produce) and soliciting the namespace from the peer side
- * — announce-and-serve's liveness trigger.
+ * Drive the engine's real session to `live` by registering a servable track (normally `setupTrackPublishers`' job,
+ * gated on encodings these tests do not produce) and soliciting the namespace from the peer side — announce-and-serve's
+ * liveness trigger.
  */
 async function driveLive(media: TestPublishMedia, pair: TransportPair): Promise<void> {
   const session = await vi.waitFor(() => {
     const actor = media.engine.context.publishSessionActor.get();
     const current = actor?.snapshot.get().context.session;
+
     expect(current).toBeDefined();
     return current!;
   });
+
   session.registerTrack({ trackNamespace: ['live', 'abc123'], trackName: 'catalog' });
   void solicitNamespace(pair.server, []);
   await vi.waitFor(() => {
@@ -115,10 +119,9 @@ function makeFakeAudioStream(deviceId = 'mic-1') {
 }
 
 /**
- * Camera and mic both call `getUserMedia`, distinguished only by which of
- * `video`/`audio` is truthy in the constraints — dispatch on that so each
- * pipeline gets its own stream instead of sharing one (which would make
- * releasing the camera also stop the mic's track).
+ * Camera and mic both call `getUserMedia`, distinguished only by which of `video`/`audio` is truthy in the constraints
+ * — dispatch on that so each pipeline gets its own stream instead of sharing one (which would make releasing the camera
+ * also stop the mic's track).
  */
 function mockGetUserMedia(
   videoStream: FakeMediaStream = makeFakeVideoStream(),
@@ -126,6 +129,7 @@ function mockGetUserMedia(
 ) {
   return vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
     if (constraints?.audio) return asStream(audioStream);
+
     return asStream(videoStream);
   });
 }
@@ -133,6 +137,7 @@ function mockGetUserMedia(
 /** A real `MediaStream` (canvas capture) so DOM sinks like `srcObject` accept it. */
 function makeRealCameraStream(): MediaStream {
   const canvas = document.createElement('canvas');
+
   canvas.width = 320;
   canvas.height = 240;
   canvas.getContext('2d')!.fillRect(0, 0, 10, 10);
@@ -142,6 +147,7 @@ function makeRealCameraStream(): MediaStream {
 describe('MoqPublishMediaMixin', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
     vi.restoreAllMocks();
   });
 
@@ -188,6 +194,7 @@ describe('MoqPublishMediaMixin', () => {
       { deviceId: 'speaker-1', kind: 'audiooutput', label: 'Fake speaker', groupId: 'g1' } as MediaDeviceInfo,
     ]);
     const stream = makeFakeVideoStream();
+
     mockGetUserMedia(stream);
     const media = makeMedia();
 
@@ -198,6 +205,7 @@ describe('MoqPublishMediaMixin', () => {
         events[type] = (events[type] ?? 0) + 1;
       });
     };
+
     count('capturesourcechange');
     count('capturestatechange');
     count('capturestreamchange');
@@ -253,6 +261,7 @@ describe('MoqPublishMediaMixin', () => {
     const cameraCallsSoFar = getUserMedia.mock.calls.filter((call) => !call[0]?.audio).length;
 
     const devicesChanged = vi.fn();
+
     media.addEventListener('capturedeviceschange', devicesChanged);
     media.videoInputDeviceId = 'cam-2';
 
@@ -271,11 +280,13 @@ describe('MoqPublishMediaMixin', () => {
 
   it('exposes the mic lifecycle and fires capturestatechange when it moves', async () => {
     const audioStream = makeFakeAudioStream();
+
     mockGetUserMedia(makeFakeVideoStream(), audioStream);
     const media = makeMedia();
 
     expect(media.micState).toBe('idle');
     const stateChanged = vi.fn();
+
     media.addEventListener('capturestatechange', stateChanged);
 
     media.cameraActive = true;
@@ -287,6 +298,7 @@ describe('MoqPublishMediaMixin', () => {
     // only way a UI can say why a live broadcast has no sound. The camera
     // keeps capturing, so only the mic third of the bridge key moves.
     const callsBefore = stateChanged.mock.calls.length;
+
     audioStream.getTracks()[0]!.dispatchEvent(new Event('ended'));
     await vi.waitFor(() => {
       expect(media.micState).toBe('ended');
@@ -299,6 +311,7 @@ describe('MoqPublishMediaMixin', () => {
     const getUserMedia = mockGetUserMedia();
     const media = makeMedia();
     const sourceChanged = vi.fn();
+
     media.addEventListener('capturesourcechange', sourceChanged);
 
     expect(media.micActive).toBe(false);
@@ -324,6 +337,7 @@ describe('MoqPublishMediaMixin', () => {
   it('publish() accepts an active microphone as its capture precondition — audio-only publish', async () => {
     mockGetUserMedia();
     const media = makeMedia({ engineConfig: { connectTransport: pendingConnect } });
+
     media.publishEndpoint = 'https://relay.example.com/moq';
     media.publishNamespace = 'live/abc123';
 
@@ -333,6 +347,7 @@ describe('MoqPublishMediaMixin', () => {
     });
 
     const pending = media.publish();
+
     expect(media.engine.state.publishActivated.get()).toBe(true);
     await vi.waitFor(() => {
       expect(media.publishState).toBe('connecting');
@@ -343,11 +358,13 @@ describe('MoqPublishMediaMixin', () => {
 
   it('drives the screen-share surface: intent, stream, preview source, and events', async () => {
     const screenStream = new FakeMediaStream([new FakeMediaStreamTrack('video', { width: 1920 })]);
+
     vi.spyOn(navigator.mediaDevices, 'getDisplayMedia').mockResolvedValue(asStream(screenStream));
     mockGetUserMedia();
     const media = makeMedia();
 
     const sourceChanged = vi.fn();
+
     media.addEventListener('capturesourcechange', sourceChanged);
 
     media.screenShareActive = true;
@@ -376,12 +393,15 @@ describe('MoqPublishMediaMixin', () => {
     const first = makeFakeVideoStream('cam-1');
     const second = makeFakeVideoStream('cam-2');
     let currentVideo = first;
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(async (constraints) => {
       if (constraints?.audio) return asStream(makeFakeAudioStream());
+
       return asStream(currentVideo);
     });
     const media = makeMedia();
     const streamChanged = vi.fn();
+
     media.addEventListener('capturestreamchange', streamChanged);
 
     media.cameraActive = true;
@@ -418,6 +438,7 @@ describe('MoqPublishMediaMixin', () => {
 
     const cameraCalls = () => getUserMedia.mock.calls.filter((call) => call[0]?.video).length;
     const callsAfterDenial = cameraCalls();
+
     media.cameraActive = true;
     await vi.waitFor(() => {
       expect(cameraCalls()).toBe(callsAfterDenial + 1);
@@ -426,9 +447,11 @@ describe('MoqPublishMediaMixin', () => {
 
   it('mirrors the capture stream into an attached preview element', async () => {
     const realStream = makeRealCameraStream();
+
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(realStream);
     const media = makeMedia();
     const preview = document.createElement('video');
+
     vi.spyOn(preview, 'play').mockResolvedValue(undefined);
 
     media.attach(preview);
@@ -455,6 +478,7 @@ describe('MoqPublishMediaMixin', () => {
 
     expect(media.publishState).toBe('idle');
     const pending = media.publish();
+
     expect(media.engine.state.publishActivated.get()).toBe(true);
     expect(media.publishStartedAt).toBeNaN();
 
@@ -470,6 +494,7 @@ describe('MoqPublishMediaMixin', () => {
     const media = makePublishableMedia();
 
     const pending = media.publish();
+
     await vi.waitFor(() => {
       expect(media.publishState).toBe('connecting');
     });
@@ -483,6 +508,7 @@ describe('MoqPublishMediaMixin', () => {
     const media = makePublishableMedia();
 
     const pending = media.publish();
+
     media.unpublish();
     expect(media.engine.state.publishActivated.get()).toBe(false);
     await expect(pending).rejects.toThrow(/cancelled/);
@@ -504,6 +530,7 @@ describe('MoqPublishMediaMixin', () => {
     // Once capture is active, the same call proceeds to a session attempt.
     media.engine.state.cameraState.set('active');
     const pending = media.publish();
+
     expect(media.engine.state.publishActivated.get()).toBe(true);
     await vi.waitFor(() => {
       expect(media.publishState).toBe('connecting');
@@ -514,11 +541,14 @@ describe('MoqPublishMediaMixin', () => {
 
   it('publish() after a session error reconnects and settles on the new outcome', async () => {
     const pair = createTransportPair();
+
     makePeer(pair);
     let attempts = 0;
     const media = makePublishableMedia(() => {
       attempts += 1;
+
       if (attempts === 1) throw new Error('connect refused');
+
       return { transport: pair.client, ready: Promise.resolve() };
     });
 
@@ -529,6 +559,7 @@ describe('MoqPublishMediaMixin', () => {
     // reject with the stale error — it cycles the gate, reconnects, and
     // settles on the second attempt's outcome.
     const retry = media.publish();
+
     await driveLive(media, pair);
     await expect(retry).resolves.toBeUndefined();
     expect(attempts).toBe(2);
@@ -537,11 +568,14 @@ describe('MoqPublishMediaMixin', () => {
 
   it('unpublish() then publish() after a session error starts a fresh session', async () => {
     const pair = createTransportPair();
+
     makePeer(pair);
     let attempts = 0;
     const media = makePublishableMedia(() => {
       attempts += 1;
+
       if (attempts === 1) throw new Error('connect refused');
+
       return { transport: pair.client, ready: Promise.resolve() };
     });
 
@@ -550,6 +584,7 @@ describe('MoqPublishMediaMixin', () => {
 
     // The stale sticky 'error' must not settle the new attempt.
     const retry = media.publish();
+
     await driveLive(media, pair);
     await expect(retry).resolves.toBeUndefined();
     expect(attempts).toBe(2);
@@ -558,6 +593,7 @@ describe('MoqPublishMediaMixin', () => {
   it('maps engine session status onto the media publish state and fires publishstatechange', async () => {
     const media = makeMedia();
     const publishStateChanges: string[] = [];
+
     media.addEventListener('publishstatechange', () => {
       publishStateChanges.push(media.publishState);
     });
@@ -595,12 +631,14 @@ describe('MoqPublishMediaMixin', () => {
 
   it('fires publishstatechange when an error lands while the session stays live', async () => {
     const media = makeMedia();
+
     media.engine.state.sessionStatus.set('live');
     await vi.waitFor(() => {
       expect(media.publishState).toBe('live');
     });
 
     const seen: (typeof media.publishError)[] = [];
+
     media.addEventListener('publishstatechange', () => {
       seen.push(media.publishError);
     });
@@ -618,6 +656,7 @@ describe('MoqPublishMediaMixin', () => {
   it('does not dispatch publishstatechange for errors while idle', async () => {
     const media = makeMedia();
     const events: string[] = [];
+
     media.addEventListener('publishstatechange', () => events.push(media.publishState));
 
     // Capture/probe failures land before any publish attempt: they reject
@@ -629,12 +668,14 @@ describe('MoqPublishMediaMixin', () => {
 
   it('dispatches once when a failure moves the session and sets the error together', async () => {
     const media = makeMedia();
+
     media.engine.state.sessionStatus.set('live');
     await vi.waitFor(() => {
       expect(media.publishState).toBe('live');
     });
 
     const events: string[] = [];
+
     media.addEventListener('publishstatechange', () => events.push(media.publishState));
 
     // open-publish-session writes both signals in one flush on a transport
@@ -652,6 +693,7 @@ describe('MoqPublishMediaMixin', () => {
   it('fires publishstatsupdate on every stats transition, including the reset to undefined', async () => {
     const media = makeMedia();
     const seen: (number | null)[] = [];
+
     media.addEventListener('publishstatsupdate', () => {
       seen.push(media.publishStats?.bytesSent ?? null);
     });

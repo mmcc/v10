@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import type { TrackPublisherActor, TrackPublisherMessage } from '../../actors/track-publisher';
 import { type DeriveCatalogContext, type DeriveCatalogState, deriveCatalog } from '../derive-catalog';
@@ -16,6 +17,7 @@ function makePublisherStub() {
     send: (message: TrackPublisherMessage) => sent.push(message),
     destroy: () => undefined,
   } as unknown as TrackPublisherActor;
+
   return { publisher, sent };
 }
 
@@ -40,6 +42,7 @@ function setupBehavior(buildCatalog?: (input: unknown) => string, dataTracks?: {
       ...(dataTracks ? { dataTracks } : {}),
     },
   });
+
   disposals.push(() => reactor.destroy());
   return { state, context };
 }
@@ -51,7 +54,9 @@ async function settle(): Promise<void> {
 
 function trackNames(message: TrackPublisherMessage): string[] {
   if (message.type !== 'frame') return [];
+
   const catalog = JSON.parse(new TextDecoder().decode(message.payload));
+
   return catalog.tracks.map((track: { name: string }) => track.name);
 }
 
@@ -72,12 +77,16 @@ describe('deriveCatalog', () => {
       expect(sent).toHaveLength(1);
     });
     const message = sent[0]!;
+
     expect(message.type).toBe('frame');
+
     if (message.type !== 'frame') return;
+
     expect(message.keyframe).toBe(true);
     expect(message.properties).toEqual([]);
 
     const catalog = JSON.parse(new TextDecoder().decode(message.payload));
+
     expect(catalog.version).toBe('draft-01');
     expect(catalog.tracks).toEqual([
       {
@@ -123,7 +132,9 @@ describe('deriveCatalog', () => {
     });
     const second = sent[1]!;
     if (second.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(second.payload));
+
     expect(catalog.tracks.map((track: { name: string }) => track.name)).toEqual(['video', 'audio']);
   });
 
@@ -145,9 +156,13 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+
     if (sent[0]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+
     expect(catalog.tracks.map((track: { name: string }) => track.name)).toEqual(['video', 'screen', 'audio']);
+
     for (const track of catalog.tracks) {
       expect(track.renderGroup).toBe(1);
       expect(track.altGroup).toBeUndefined();
@@ -253,14 +268,18 @@ describe('deriveCatalog', () => {
 
     // The new device probed to mono where the old one was stereo.
     const MONO = { ...AUDIO_CONFIG, numberOfChannels: 1 } as AudioEncoderConfig;
+
     state.activeEncodings.set({ camera: VIDEO_CONFIG, audio: MONO });
     state.micState.set('active');
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
+
     if (sent[1]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
     const audio = catalog.tracks.find((track: { name: string }) => track.name === 'audio');
+
     expect(audio.channelConfig).toBe('1');
   });
 
@@ -373,7 +392,9 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(second.sent).toHaveLength(1);
     });
+
     if (first.sent[0]!.type !== 'frame' || second.sent[0]!.type !== 'frame') return;
+
     expect(new TextDecoder().decode(second.sent[0]!.payload)).toBe(new TextDecoder().decode(first.sent[0]!.payload));
   });
 
@@ -388,22 +409,29 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+
     // Before the first encoded output reports the avcC, an AVCC track is
     // an undecodable declaration — it must not be advertised yet.
     if (sent[0]!.type !== 'frame') return;
+
     const initial = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+
     expect(initial.tracks).toEqual([]);
     expect(initial.initDataList).toBeUndefined();
 
     // The camera encoder reports its avcC on the first encoded output —
     // the track and its init data appear as one complete pair.
     const avcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x1e, 0xff]);
+
     state.encoderInitData.set({ camera: avcC });
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
+
     if (sent[1]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+
     expect(catalog.tracks[0].name).toBe('video');
     expect(catalog.tracks[0].initRef).toBe('video-init');
     expect(catalog.initDataList).toEqual([{ id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x1e\xff') }]);
@@ -429,8 +457,11 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
+
     if (sent[1]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+
     expect(catalog.tracks[0].codec).toBe('avc1.42C01E');
   });
 
@@ -453,8 +484,11 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+
     if (sent[0]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+
     expect(catalog.tracks[0].codec).toBe('avc3.42E01F');
     expect(catalog.tracks[0].initRef).toBeUndefined();
   });
@@ -473,7 +507,9 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+
     if (sent[0]!.type !== 'frame') return;
+
     expect(JSON.parse(new TextDecoder().decode(sent[0]!.payload)).tracks).toEqual([]);
 
     // Once the avcC lands, the declared string is re-derived from it —
@@ -482,8 +518,11 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
+
     if (sent[1]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+
     expect(catalog.tracks[0].codec).toBe('avc1.42C01E');
     expect(catalog.tracks[0].initRef).toBe('video-init');
   });
@@ -501,8 +540,11 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+
     if (sent[0]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+
     expect(catalog.tracks[0].samplerate).toBe(48_000);
   });
 
@@ -520,8 +562,11 @@ describe('deriveCatalog', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+
     if (sent[0]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
+
     expect(catalog.tracks[0].samplerate).toBe(44_100);
   });
 
@@ -606,12 +651,16 @@ describe('deriveCatalog', () => {
     // The new codec reports the new config's extradata — the pair
     // advances atomically: new dimensions and new initRef together.
     const nextAvcC = Uint8Array.from([0x01, 0x42, 0xc0, 0x0d]);
+
     state.encoderInitData.set({ camera: nextAvcC });
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
+
     if (sent[1]!.type !== 'frame') return;
+
     const next = JSON.parse(new TextDecoder().decode(sent[1]!.payload));
+
     expect(next.tracks[0].width).toBe(640);
     expect(next.tracks[0].initRef).toBe('video-init');
     expect(next.initDataList).toEqual([{ id: 'video-init', type: 'inline', data: btoa('\x01\x42\xc0\x0d') }]);
@@ -632,12 +681,15 @@ describe('deriveCatalog', () => {
     expect(buildCatalog).toHaveBeenCalledWith(
       expect.objectContaining({ namespace: ENDPOINT.namespace, audio: expect.objectContaining({ codec: 'opus' }) })
     );
+
     if (sent[0]!.type !== 'frame') return;
+
     expect(new TextDecoder().decode(sent[0]!.payload)).toBe('{"version":"draft-01","tracks":[]}');
   });
 
   it('advertises configured data tracks on every catalog, filtered like the serve registry', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
     disposals.push(() => warn.mockRestore());
     const { publisher, sent } = makePublisherStub();
     // `catalog` collides with a reserved name and must not be advertised;
@@ -657,9 +709,12 @@ describe('deriveCatalog', () => {
       expect(sent).toHaveLength(1);
     });
     expect(trackNames(sent[0]!)).toEqual(['video', 'audio', 'overlay', 'ticker']);
+
     if (sent[0]!.type !== 'frame') return;
+
     const catalog = JSON.parse(new TextDecoder().decode(sent[0]!.payload));
     const overlay = catalog.tracks.find((track: { name: string }) => track.name === 'overlay');
+
     expect(overlay).toEqual({
       namespace: 'live/abc123',
       packaging: 'loc',
@@ -668,6 +723,7 @@ describe('deriveCatalog', () => {
       role: 'data',
     });
     const ticker = catalog.tracks.find((track: { name: string }) => track.name === 'ticker');
+
     expect(ticker).not.toHaveProperty('role');
     // The drop warnings belong to the serve registry (`setupTrackPublishers`);
     // catalog derivation resolves the same configs silently.

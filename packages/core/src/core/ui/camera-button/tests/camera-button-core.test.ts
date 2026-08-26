@@ -1,5 +1,6 @@
 import type { MediaCaptureTracksState } from '@videojs/media';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { CameraButtonState } from '../camera-button-core';
 import { CameraButtonCore } from '../camera-button-core';
 
@@ -27,12 +28,14 @@ describe('CameraButtonCore', () => {
   describe('getState', () => {
     it('projects cameraMuted', () => {
       const core = new CameraButtonCore();
+
       core.setMedia(createMediaState({ cameraMuted: false }));
       expect(core.getState().cameraMuted).toBe(false);
     });
 
     it('projects cameraMuted when muted', () => {
       const core = new CameraButtonCore();
+
       core.setMedia(createMediaState({ cameraMuted: true }));
       expect(core.getState().cameraMuted).toBe(true);
     });
@@ -41,6 +44,7 @@ describe('CameraButtonCore', () => {
   describe('getLabel', () => {
     it('returns turn camera off when unmuted', () => {
       const core = new CameraButtonCore();
+
       expect(core.getLabel(createState({ cameraMuted: false }))).toMatchObject({
         key: 'publish.cameraOff',
         text: 'Turn camera off',
@@ -49,6 +53,7 @@ describe('CameraButtonCore', () => {
 
     it('returns turn camera on when muted', () => {
       const core = new CameraButtonCore();
+
       expect(core.getLabel(createState({ cameraMuted: true }))).toMatchObject({
         key: 'publish.cameraOn',
         text: 'Turn camera on',
@@ -57,6 +62,7 @@ describe('CameraButtonCore', () => {
 
     it('returns custom string label', () => {
       const core = new CameraButtonCore({ label: 'Toggle camera' });
+
       expect(core.getLabel(createState())).toBe('Toggle camera');
     });
   });
@@ -65,12 +71,14 @@ describe('CameraButtonCore', () => {
     it('returns aria-label', () => {
       const core = new CameraButtonCore();
       const attrs = core.getAttrs(createState({ cameraMuted: false }));
+
       expect(attrs['aria-label']).toMatchObject({ key: 'publish.cameraOff', text: 'Turn camera off' });
     });
 
     it('sets aria-disabled when disabled', () => {
       const core = new CameraButtonCore({ disabled: true });
       const attrs = core.getAttrs(createState());
+
       expect(attrs['aria-disabled']).toBe('true');
     });
   });
@@ -79,6 +87,7 @@ describe('CameraButtonCore', () => {
     it('calls toggleCameraMuted', () => {
       const core = new CameraButtonCore();
       const media = createMediaState();
+
       core.toggle(media);
       expect(media.toggleCameraMuted).toHaveBeenCalled();
     });
@@ -86,6 +95,7 @@ describe('CameraButtonCore', () => {
     it('does nothing when disabled', () => {
       const core = new CameraButtonCore({ disabled: true });
       const media = createMediaState();
+
       core.toggle(media);
       expect(media.toggleCameraMuted).not.toHaveBeenCalled();
     });

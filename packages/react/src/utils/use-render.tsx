@@ -1,9 +1,9 @@
-'use client';
-
 import { getStateDataAttrs, type StateAttrMap } from '@videojs/core/dom';
 import { isFunction } from '@videojs/utils/predicate';
+import { resolveClassName } from '@videojs/utils/style';
 import type { CSSProperties, ReactElement, Ref } from 'react';
 import { cloneElement, createElement, isValidElement } from 'react';
+
 import { mergeProps } from './merge-props';
 import type { HTMLProps, RenderProp } from './types';
 import { composeRefs } from './use-composed-refs';
@@ -28,13 +28,6 @@ export interface UseRenderParameters<State, RenderedElementType extends Element>
   stateAttrMap?: StateAttrMap<State> | undefined;
 }
 
-function resolveClassName<State>(
-  className: string | ((state: State) => string | undefined) | undefined,
-  state: State
-): string | undefined {
-  return isFunction(className) ? className(state) : className;
-}
-
 function resolveStyle<State>(
   style: CSSProperties | ((state: State) => CSSProperties | undefined) | undefined,
   state: State
@@ -46,28 +39,26 @@ function getElementRef(element: ReactElement): Ref<unknown> | undefined {
   // React 19+ uses element.props.ref, older versions use element.ref
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const elementAny = element as any;
+
   return elementAny.ref ?? elementAny.props?.ref;
 }
 
 /**
  * Render a UI component element.
  *
- * Handles:
- * - Default tag rendering
- * - Render prop (element or function)
- * - Props merging (event handlers chained, className concatenated, style merged)
- * - Ref composition
- * - className/style as functions of state
+ * Handles: - Default tag rendering - Render prop (element or function) - Props merging (event handlers chained,
+ * className concatenated, style merged) - Ref composition - className/style as functions of state
+ *
+ * @example
+ *   ```tsx
+ *   return renderElement('button', componentProps, {
+ *     state,
+ *     ref: [forwardedRef, buttonRef],
+ *     props: [{ type: 'button' }, elementProps, getButtonProps],
+ *   });
+ *   ```;
  *
  * @public
- * @example
- * ```tsx
- * return renderElement('button', componentProps, {
- *   state,
- *   ref: [forwardedRef, buttonRef],
- *   props: [{ type: 'button' }, elementProps, getButtonProps],
- * });
- * ```
  */
 export function renderElement<
   State extends object,
@@ -105,6 +96,7 @@ export function renderElement<
   if (isFunction(render)) {
     // Render function: call with props and state
     const mergedRef = composeRefs(ref, mergedProps.ref);
+
     return render({ ...mergedProps, ref: mergedRef } as HTMLProps, state);
   }
 
@@ -114,6 +106,7 @@ export function renderElement<
     const mergedRef = composeRefs(ref, mergedProps.ref, elementRef);
 
     const elementProps = mergeProps(mergedProps, render.props as Record<string, unknown>);
+
     elementProps.ref = mergedRef;
 
     return cloneElement(render, elementProps);
@@ -121,6 +114,7 @@ export function renderElement<
 
   // Default tag
   const mergedRef = composeRefs(ref, mergedProps.ref);
+
   mergedProps.ref = mergedRef;
 
   return createElement(element, mergedProps);

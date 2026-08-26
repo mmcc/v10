@@ -2,6 +2,7 @@ import type { MediaCaptureSourceState } from '@videojs/media';
 import { isMediaCaptureSourceCapable } from '@videojs/media';
 import { listen } from '@videojs/utils/dom';
 import { isFunction } from '@videojs/utils/predicate';
+
 import { definePlayerFeature } from '../../feature';
 
 export const captureSourceFeature = definePlayerFeature({
@@ -19,7 +20,9 @@ export const captureSourceFeature = definePlayerFeature({
     toggleCamera() {
       const { media } = target();
       if (!isMediaCaptureSourceCapable(media)) return false;
+
       const next = !media.cameraActive;
+
       media.cameraActive = next;
       return next;
     },
@@ -27,7 +30,9 @@ export const captureSourceFeature = definePlayerFeature({
     toggleScreenShare() {
       const { media } = target();
       if (!isMediaCaptureSourceCapable(media)) return false;
+
       const next = !media.screenShareActive;
+
       media.screenShareActive = next;
       return next;
     },
@@ -39,7 +44,9 @@ export const captureSourceFeature = definePlayerFeature({
       // would create an inert expando that sync() reads back as real
       // intent.
       if (!isMediaCaptureSourceCapable(media) || !('micActive' in media)) return false;
+
       const next = !media.micActive;
+
       media.micActive = next;
       return next;
     },
@@ -47,7 +54,6 @@ export const captureSourceFeature = definePlayerFeature({
 
   attach({ target, signal, set }) {
     const { media } = target;
-
     if (!isMediaCaptureSourceCapable(media)) return;
 
     set({
@@ -71,8 +77,10 @@ export const captureSourceFeature = definePlayerFeature({
     const sync = () => {
       const micActive = media.micActive ?? false;
       const micState = media.micState ?? 'idle';
+
       if (micActive) micExplicit = true;
       else if (micState !== 'denied' && micState !== 'ended') micExplicit = false;
+
       set({
         cameraActive: media.cameraActive ?? false,
         screenShareActive: media.screenShareActive ?? false,

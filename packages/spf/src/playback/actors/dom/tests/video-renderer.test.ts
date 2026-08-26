@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { JitterFrame } from '../../track-subscriber';
 import { createVideoRendererActor, type VideoFrameSource } from '../video-renderer';
 
@@ -12,6 +13,7 @@ async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
   const encoder = new VideoEncoder({
     output: (chunk) => {
       const payload = new Uint8Array(chunk.byteLength);
+
       chunk.copyTo(payload);
       frames.push({
         groupId: 0,
@@ -25,26 +27,29 @@ async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
       throw error;
     },
   });
+
   encoder.configure({ codec: 'vp8', width: WIDTH, height: HEIGHT, bitrate: 200_000 });
 
   const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
   const context = canvas.getContext('2d')!;
+
   for (let i = 0; i < count; i++) {
     context.fillStyle = `rgb(${(i * 40) % 255}, 80, 160)`;
     context.fillRect(0, 0, WIDTH, HEIGHT);
     const frame = new VideoFrame(canvas, { timestamp: i * FRAME_DURATION_US });
+
     encoder.encode(frame, { keyFrame: i === 0 });
     frame.close();
   }
+
   await encoder.flush();
   encoder.close();
   return frames;
 }
 
 /**
- * Encode an H.264 sequence in `avc` bitstream format: parameter sets ship
- * out-of-band as `decoderConfig.description` metadata, which is attached
- * to keyframes as LOC Video Config instead of the catalog config.
+ * Encode an H.264 sequence in `avc` bitstream format: parameter sets ship out-of-band as `decoderConfig.description`
+ * metadata, which is attached to keyframes as LOC Video Config instead of the catalog config.
  */
 async function encodeAvcTestFrames(count: number): Promise<JitterFrame[]> {
   const frames: JitterFrame[] = [];
@@ -52,12 +57,15 @@ async function encodeAvcTestFrames(count: number): Promise<JitterFrame[]> {
   const encoder = new VideoEncoder({
     output: (chunk, metadata) => {
       const configDescription = metadata?.decoderConfig?.description;
+
       if (configDescription !== undefined && description === undefined) {
         description = ArrayBuffer.isView(configDescription)
           ? new Uint8Array(configDescription.buffer, configDescription.byteOffset, configDescription.byteLength)
           : new Uint8Array(configDescription);
       }
+
       const payload = new Uint8Array(chunk.byteLength);
+
       chunk.copyTo(payload);
       frames.push({
         groupId: 0,
@@ -71,6 +79,7 @@ async function encodeAvcTestFrames(count: number): Promise<JitterFrame[]> {
       throw error;
     },
   });
+
   encoder.configure({
     codec: 'avc1.42001f',
     width: WIDTH,
@@ -81,24 +90,29 @@ async function encodeAvcTestFrames(count: number): Promise<JitterFrame[]> {
 
   const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
   const context = canvas.getContext('2d')!;
+
   for (let i = 0; i < count; i++) {
     context.fillStyle = `rgb(${(i * 40) % 255}, 80, 160)`;
     context.fillRect(0, 0, WIDTH, HEIGHT);
     const frame = new VideoFrame(canvas, { timestamp: i * FRAME_DURATION_US });
+
     encoder.encode(frame, { keyFrame: i === 0 });
     frame.close();
   }
+
   await encoder.flush();
   encoder.close();
 
   for (const frame of frames) {
     if (frame.isKey) frame.videoConfig = description;
   }
+
   return frames;
 }
 
 function arraySource(frames: JitterFrame[]): VideoFrameSource {
   const queue = [...frames];
+
   return {
     peek: () => queue[0],
     dequeue: () => queue.shift(),
@@ -118,6 +132,7 @@ function fabricatedFrames(count: number): JitterFrame[] {
 describe('createVideoRendererActor', () => {
   it('decodes pulled frames and presents them against the injected clock', async () => {
     const frames = await encodeTestFrames(5);
+
     expect(frames[0]!.isKey).toBe(true);
 
     const canvas = document.createElement('canvas');
@@ -138,12 +153,14 @@ describe('createVideoRendererActor', () => {
     clockUs = FRAME_DURATION_US + 1;
     await vi.waitFor(() => {
       const { lastPresentedTimestampUs } = renderer.snapshot.get().context;
+
       expect(lastPresentedTimestampUs).toBe(FRAME_DURATION_US);
     });
 
     // The canvas took the video's dimensions and has pixels drawn.
     expect(canvas.width).toBe(WIDTH);
     const pixel = canvas.getContext('2d')!.getImageData(1, 1, 1, 1).data;
+
     expect(pixel[3]).toBe(255);
 
     renderer.destroy();
@@ -157,6 +174,7 @@ describe('createVideoRendererActor', () => {
 
     const canvas = document.createElement('canvas');
     const renderer = createVideoRendererActor({ canvas, getClockTimeUs: () => 0 });
+
     renderer.setTrack(arraySource(deltasFirst), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
 
     // Only the keyframe (1 frame) decodes; the leading deltas are skipped.
@@ -168,6 +186,7 @@ describe('createVideoRendererActor', () => {
 
   it('applies per-keyframe LOC video config as the decoder description', async () => {
     const frames = await encodeAvcTestFrames(5);
+
     expect(frames[0]!.videoConfig).toBeDefined();
 
     const canvas = document.createElement('canvas');
@@ -196,6 +215,7 @@ describe('createVideoRendererActor', () => {
   it('clearing the track returns to idle', async () => {
     const canvas = document.createElement('canvas');
     const renderer = createVideoRendererActor({ canvas });
+
     renderer.setTrack(null, null);
     expect(renderer.snapshot.get().context.status).toBe('idle');
     renderer.destroy();
@@ -228,6 +248,7 @@ describe('createVideoRendererActor', () => {
       // The replacement is subscribed but has nothing decodable yet — a
       // live-edge rejoin waits for the next group's keyframe.
       const queue: JitterFrame[] = [];
+
       renderer.setTrack(
         { peek: () => queue[0], dequeue: () => queue.shift() },
         { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT }
@@ -243,7 +264,9 @@ describe('createVideoRendererActor', () => {
 
       // A position appears again when the replacement presents — its own.
       const REPLACEMENT_BASE_US = 10_000_000;
+
       for (const frame of frames) queue.push({ ...frame, timestampUs: REPLACEMENT_BASE_US + frame.timestampUs });
+
       clockUs = REPLACEMENT_BASE_US;
       await vi.waitFor(() => expect(presented()).toBe(REPLACEMENT_BASE_US), { timeout: 5000 });
     } finally {
@@ -281,6 +304,7 @@ describe('createVideoRendererActor', () => {
 
     await vi.waitFor(() => expect(renderer.snapshot.get().context.status).toBe('error'), { timeout: 5000 });
     const remaining = queue.length;
+
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(queue).toHaveLength(remaining);
 
@@ -337,7 +361,9 @@ describe('createVideoRendererActor', () => {
       peek: () => queue[0],
       dequeue: () => {
         const frame = queue.shift();
+
         if (frame) fedUs.push(frame.timestampUs);
+
         return frame;
       },
     };
@@ -377,7 +403,9 @@ describe('createVideoRendererActor', () => {
       peek: () => queue[0],
       dequeue: () => {
         const frame = queue.shift();
+
         if (frame) fedUs.push(frame.timestampUs);
+
         return frame;
       },
     };
@@ -421,6 +449,7 @@ describe('createVideoRendererActor', () => {
     await vi.waitFor(
       () => {
         const { lastPresentedTimestampUs } = renderer.snapshot.get().context;
+
         expect(lastPresentedTimestampUs).toBeDefined();
         expect(lastPresentedTimestampUs!).toBeGreaterThanOrEqual(EDGE_US - TARGET_BACK_US - FRAME_DURATION_US);
       },
@@ -535,6 +564,7 @@ describe('createVideoRendererActor', () => {
       // Sampling repeatedly must not multiply the correction: the budget is
       // per unit of real time, not per read.
       for (let i = 0; i < 20; i++) renderer.getClockTimeUs();
+
       expect(renderer.getClockTimeUs()).toBeCloseTo(4_200_000, -4);
 
       // …and it keeps closing, rather than settling at a fixed offset.
@@ -618,11 +648,14 @@ describe('createVideoRendererActor', () => {
       // anchor-once clock that offset was permanent. The slew now reclaims
       // it at 50ms/s, so ~10s of real time closes it.
       playbackRate = 1;
+
       for (let i = 0; i < 200; i++) {
         now += 100;
         renderer.getClockTimeUs();
       }
+
       const edgeUs = (now - startWallMs) * 1000;
+
       expect(edgeUs - renderer.getClockTimeUs()!).toBeLessThanOrEqual(50_000);
     } finally {
       nowSpy.mockRestore();
@@ -658,6 +691,7 @@ describe('createVideoRendererActor', () => {
       // The first self-clock read after the handover corrects by nothing —
       // 10s of budget would have been a half-second lurch.
       const clock = renderer.getClockTimeUs()!;
+
       now += 100;
       expect(renderer.getClockTimeUs()! - clock).toBeCloseTo(95_000, -4);
     } finally {
@@ -680,9 +714,11 @@ describe('createVideoRendererActor', () => {
       await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
 
       let previous = renderer.getClockTimeUs()!;
+
       for (let i = 0; i < 20; i++) {
         now += 100;
         const clock = renderer.getClockTimeUs()!;
+
         // Bounded by a *fraction* of elapsed real time, so the correction
         // can only slow the clock down, never reverse it.
         expect(clock).toBeGreaterThan(previous);
@@ -711,14 +747,17 @@ describe('createVideoRendererActor', () => {
       // The edge stops moving while playout continues, so the error goes
       // negative and the slew pulls the clock back for as long as it runs.
       const renderer = createVideoRendererActor({ canvas, getTargetClockUs: () => 0, clockSlewRate });
+
       try {
         renderer.setTrack(arraySource(frames), { codec: 'vp8', codedWidth: WIDTH, codedHeight: HEIGHT });
         await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBe(0), { timeout: 5000 });
         const readings: number[] = [];
+
         for (let i = 0; i < 10; i++) {
           now += 100;
           readings.push(renderer.getClockTimeUs()!);
         }
+
         return readings;
       } finally {
         nowSpy.mockRestore();
@@ -729,11 +768,13 @@ describe('createVideoRendererActor', () => {
     for (const rate of [2, 1, Number.NaN, -0.5, Number.POSITIVE_INFINITY]) {
       const readings = await runStalledEdge(rate);
       let previous = 0;
+
       for (const clock of readings) {
         expect(Number.isFinite(clock)).toBe(true);
         expect(clock).toBeGreaterThan(previous);
         previous = clock;
       }
+
       // A negative rate inverts the correction: without the clamp the clock
       // is driven *further* from a stalled edge than real time allows.
       expect(readings[readings.length - 1]).toBeLessThanOrEqual(1_000_000);

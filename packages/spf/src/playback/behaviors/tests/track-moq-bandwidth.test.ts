@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
 import type { BandwidthState } from '../../../network/bandwidth-estimator';
@@ -39,6 +40,7 @@ function fakeSubscriber() {
     });
   };
   const reemit = () => snapshot.set({ ...snapshot.get() });
+
   return { subscriber, emitSample, reemit };
 }
 
@@ -62,6 +64,7 @@ describe('trackMoqBandwidth', () => {
     emitSample(50_000, 100);
     await vi.waitFor(() => {
       const state = deps.state.bandwidthState.get()!;
+
       expect(state.bytesSampled).toBe(50_000);
       expect(state.fastEstimate).toBeGreaterThan(0);
     });

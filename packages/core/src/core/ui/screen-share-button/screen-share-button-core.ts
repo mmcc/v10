@@ -2,6 +2,7 @@ import type { MediaCaptureSourceState, MediaFeatureAvailability } from '@videojs
 import { createState } from '@videojs/store';
 import { defaults } from '@videojs/utils/object';
 import type { NonNullableObject } from '@videojs/utils/types';
+
 import { resolveText, type Text } from '../../i18n';
 import { shareScreenText, stopSharingText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
@@ -76,6 +77,7 @@ export class ScreenShareButtonCore {
 
   toggle(media: MediaCaptureSourceState): void {
     if (this.#props.disabled) return;
+
     if (media.screenShareAvailability !== 'available') return;
 
     media.toggleScreenShare();

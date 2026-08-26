@@ -1,5 +1,5 @@
+import { safeDefine } from '../../registration/safe-define';
 import { ScreenShareButtonElement } from '../../ui/screen-share-button/screen-share-button-element';
-import { safeDefine } from '../safe-define';
 
 safeDefine(ScreenShareButtonElement);
 

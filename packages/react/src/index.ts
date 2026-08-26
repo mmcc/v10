@@ -46,6 +46,8 @@ export {
   type Locale,
   onI18nRegistryChange,
   registerI18n,
+  Text,
+  type TextProps,
   type TranslationParams,
   type Translations,
   type Translator,
@@ -53,10 +55,7 @@ export {
   useTranslator,
 } from './i18n';
 // Media primitives
-export {
-  Container,
-  type ContainerProps,
-} from './player/container';
+export { Container, type ContainerProps } from './player/container';
 export {
   type PlayerContextValue,
   useContainer,
@@ -77,7 +76,7 @@ export {
 } from './player/create-player';
 // UI
 export { AirPlayButton, type AirPlayButtonProps } from './ui/airplay-button/airplay-button';
-export { AlertDialog, type AlertDialogContextValue, useAlertDialogContext } from './ui/alert-dialog';
+export { AlertDialog } from './ui/alert-dialog';
 export {
   type AudioTrackOption,
   type AudioTrackOptionsProps,
@@ -113,8 +112,10 @@ export { CapturePlaceholder, type CapturePlaceholderProps } from './ui/capture-p
 export { CastButton, type CastButtonProps } from './ui/cast-button/cast-button';
 export { ConnectionIndicator, type ConnectionIndicatorProps } from './ui/connection-indicator/connection-indicator';
 export { Controls } from './ui/controls';
+export type { ControlsContentProps } from './ui/controls/controls-content';
 export type { ControlsGroupProps } from './ui/controls/controls-group';
 export type { ControlsRootProps } from './ui/controls/controls-root';
+export { Dialog, type DialogContextValue, useDialogContext } from './ui/dialog';
 export { EnableDevicesButton, type EnableDevicesButtonProps } from './ui/enable-devices-button/enable-devices-button';
 export { ErrorDialog, type ErrorDialogContextValue, useErrorDialogContext } from './ui/error-dialog';
 export { FullscreenButton, type FullscreenButtonProps } from './ui/fullscreen-button/fullscreen-button';
@@ -197,11 +198,13 @@ export type {
   TimeSliderChaptersProps,
   TimeSliderChaptersState,
 } from './ui/time-slider/time-slider-chapters/time-slider-chapters';
+export { Title, type TitleProps } from './ui/title/title';
 export { Tooltip, type TooltipContent, type TooltipContextValue, useTooltipContext } from './ui/tooltip';
 export { VolumeIndicator } from './ui/volume-indicator';
 export type { VolumeIndicatorFillProps } from './ui/volume-indicator/volume-indicator-fill';
 export type { VolumeIndicatorRootProps } from './ui/volume-indicator/volume-indicator-root';
 export type { VolumeIndicatorValueProps } from './ui/volume-indicator/volume-indicator-value';
+export { VolumePopover } from './ui/volume-popover';
 export { VolumeSlider } from './ui/volume-slider';
 // Utilities
 export { mergeProps } from './utils/merge-props';

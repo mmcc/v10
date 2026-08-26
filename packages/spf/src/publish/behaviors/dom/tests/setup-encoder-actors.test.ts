@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../../core/signals/primitives';
 import type { EncodedChunkSink, EncodedChunkSinkMeta } from '../../../actors/dom/encoder-actor';
 import {
@@ -33,11 +34,13 @@ function setup(config: SetupEncoderActorsConfig = {}) {
     audioEncoderActor: signal<SetupEncoderActorsContext['audioEncoderActor']>(undefined),
   };
   const cleanup = setupEncoderActors.setup({ state, context, config });
+
   return { state, context, cleanup };
 }
 
 function makeCanvasStream(): { stream: MediaStream; canvas: HTMLCanvasElement } {
   const canvas = document.createElement('canvas');
+
   canvas.width = 320;
   canvas.height = 240;
   canvas.getContext('2d')!.fillRect(0, 0, 10, 10);
@@ -63,6 +66,7 @@ describe('setupEncoderActors', () => {
     });
     const cameraActor = context.cameraEncoderActor.get()!;
     const audioActor = context.audioEncoderActor.get()!;
+
     // Configured at creation — ready to encode.
     expect(cameraActor.snapshot.get().value).toBe('encoding');
     expect(audioActor.snapshot.get().value).toBe('encoding');
@@ -81,6 +85,7 @@ describe('setupEncoderActors', () => {
 
   it('creates only the actors the active encodings name', async () => {
     const { state, context, cleanup } = setup();
+
     context.cameraStream.set(makeCanvasStream().stream);
     state.activeEncodings.set({ camera: VP8_CONFIG });
 
@@ -97,6 +102,7 @@ describe('setupEncoderActors', () => {
     const { state, context, cleanup } = setup();
     const cameraStream = makeCanvasStream().stream;
     const screenStream = makeCanvasStream().stream;
+
     context.cameraStream.set(cameraStream);
     context.screenStream.set(screenStream);
     state.activeEncodings.set({ camera: VP8_CONFIG, screen: SCREEN_VP8_CONFIG });
@@ -121,6 +127,7 @@ describe('setupEncoderActors', () => {
 
   it('keeps the live camera and mic actors across a screen encoding coming and going', async () => {
     const { state, context, cleanup } = setup();
+
     context.cameraStream.set(makeCanvasStream().stream);
     context.micStream.set(makeCanvasStream().stream);
     state.activeEncodings.set({ camera: VP8_CONFIG, audio: OPUS_CONFIG });
@@ -149,6 +156,7 @@ describe('setupEncoderActors', () => {
 
     // Ending the share is the same write in reverse.
     const withoutScreen = { ...state.activeEncodings.get() };
+
     delete withoutScreen.screen;
     context.screenStream.set(undefined);
     state.activeEncodings.set(withoutScreen);
@@ -165,6 +173,7 @@ describe('setupEncoderActors', () => {
 
   it('rebuilds only the kind whose own config changed, with the new config', async () => {
     const { state, context, cleanup } = setup();
+
     context.cameraStream.set(makeCanvasStream().stream);
     context.micStream.set(makeCanvasStream().stream);
     state.activeEncodings.set({ camera: VP8_CONFIG, audio: OPUS_CONFIG });
@@ -178,6 +187,7 @@ describe('setupEncoderActors', () => {
 
     const configure = vi.spyOn(VideoEncoder.prototype, 'configure');
     const nextCamera: VideoEncoderConfig = { ...VP8_CONFIG, bitrate: 250_000 };
+
     state.activeEncodings.set({ ...state.activeEncodings.get(), camera: nextCamera });
 
     await vi.waitFor(() => {
@@ -195,6 +205,7 @@ describe('setupEncoderActors', () => {
 
   it("rebuilds a kind's actor when its active encoding changes identity", async () => {
     const { state, context, cleanup } = setup();
+
     context.cameraStream.set(makeCanvasStream().stream);
     state.activeEncodings.set({ camera: VP8_CONFIG });
 
@@ -218,6 +229,7 @@ describe('setupEncoderActors', () => {
     const chunkSink: EncodedChunkSink = (_packaged, meta) => sunk.push(meta);
     const { state, context, cleanup } = setup({ chunkSink });
     const first = makeCanvasStream();
+
     context.cameraStream.set(first.stream);
     state.activeEncodings.set({ camera: VP8_CONFIG });
 
@@ -225,6 +237,7 @@ describe('setupEncoderActors', () => {
       expect(context.cameraEncoderActor.get()).toBeDefined();
     });
     const firstActor = context.cameraEncoderActor.get()!;
+
     firstActor.send({ type: 'encode', frame: new VideoFrame(first.canvas, { timestamp: 0 }), keyFrame: true });
     firstActor.send({ type: 'flush' });
     await vi.waitFor(() => {
@@ -236,17 +249,20 @@ describe('setupEncoderActors', () => {
     // opening a FRESH wallclock anchor would publish the switched source an
     // hour behind the surviving tracks.
     const realNow = Date.now.bind(Date);
+
     vi.spyOn(Date, 'now').mockImplementation(() => realNow() - 3_600_000);
 
     // A capture-source switch: new stream identity, same kind — the rebuild
     // this behavior owns.
     const second = makeCanvasStream();
+
     context.cameraStream.set(second.stream);
     await vi.waitFor(() => {
       expect(context.cameraEncoderActor.get()).toBeDefined();
       expect(context.cameraEncoderActor.get()).not.toBe(firstActor);
     });
     const secondActor = context.cameraEncoderActor.get()!;
+
     // A new source stamps on its own capture base too.
     secondActor.send({
       type: 'encode',
@@ -280,6 +296,7 @@ describe('setupEncoderActors', () => {
       framerate: 30,
       avc: { format: 'avc' },
     };
+
     context.cameraStream.set(stream);
     state.activeEncodings.set({ camera: H264_CONFIG });
 
@@ -287,6 +304,7 @@ describe('setupEncoderActors', () => {
       expect(context.cameraEncoderActor.get()).toBeDefined();
     });
     const actor = context.cameraEncoderActor.get()!;
+
     actor.send({ type: 'encode', frame: new VideoFrame(canvas, { timestamp: 0 }), keyFrame: true });
     actor.send({ type: 'flush' });
 
@@ -312,6 +330,7 @@ describe('setupEncoderActors', () => {
     const chunkSink: EncodedChunkSink = (_packaged, meta) => sunk.push(meta);
     const { state, context, cleanup } = setup({ chunkSink });
     const { stream, canvas } = makeCanvasStream();
+
     context.cameraStream.set(stream);
     state.activeEncodings.set({ camera: VP8_CONFIG });
 
@@ -320,6 +339,7 @@ describe('setupEncoderActors', () => {
     });
     const actor = context.cameraEncoderActor.get()!;
     const beforeUs = Date.now() * 1000;
+
     actor.send({ type: 'encode', frame: new VideoFrame(canvas, { timestamp: 0 }), keyFrame: true });
     actor.send({ type: 'flush' });
 

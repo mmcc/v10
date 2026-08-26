@@ -1,6 +1,7 @@
 import type { ErrorLike, MediaPublishSessionState } from '@videojs/media';
 import { createStore } from '@videojs/store';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { publishFeature } from '../publish';
@@ -15,6 +16,7 @@ interface PublishCapableMedia extends EventTarget {
 
 function createPublishMedia(initial: Partial<PublishCapableMedia> = {}): PublishCapableMedia {
   const media = new EventTarget() as PublishCapableMedia;
+
   media.publishState = initial.publishState ?? 'idle';
   media.publishStartedAt = initial.publishStartedAt ?? Number.NaN;
   media.publishError = initial.publishError ?? null;
@@ -29,6 +31,7 @@ describe('publishFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.publishState).toBe('idle');
@@ -40,6 +43,7 @@ describe('publishFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: video, container: null });
 
       await expect(store.publish()).rejects.toThrow('not publish capable');
@@ -49,6 +53,7 @@ describe('publishFeature', () => {
       const video = createMockVideo();
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: video, container: null });
 
       expect(() => store.unpublish()).not.toThrow();
@@ -60,6 +65,7 @@ describe('publishFeature', () => {
       const media = createPublishMedia({ publishState: 'live', publishStartedAt: 1234 });
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.publishState).toBe('live');
@@ -70,6 +76,7 @@ describe('publishFeature', () => {
       const media = createPublishMedia();
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       media.publishState = 'connecting';
@@ -88,9 +95,11 @@ describe('publishFeature', () => {
       const media = createPublishMedia();
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       const error: ErrorLike = { code: 3, message: 'relay unreachable' };
+
       media.publishState = 'error';
       media.publishError = error;
       media.dispatchEvent(new Event('publishstatechange'));
@@ -111,6 +120,7 @@ describe('publishFeature', () => {
       const media = createPublishMedia({ publishState: 'error', publishError: error });
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       expect(store.state.publishError).toBe(error);
@@ -120,6 +130,7 @@ describe('publishFeature', () => {
       const media = createPublishMedia();
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       await store.publish();
@@ -131,6 +142,7 @@ describe('publishFeature', () => {
       const media = createPublishMedia({ publishState: 'live' });
 
       const store = createStore<PlayerTarget>()(publishFeature);
+
       store.attach({ media: media as unknown as PlayerTarget['media'], container: null });
 
       store.unpublish();

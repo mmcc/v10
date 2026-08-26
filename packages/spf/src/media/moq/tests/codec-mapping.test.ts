@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { toAudioDecoderConfig, toVideoDecoderConfig } from '../codec-mapping';
 import type { MoqAudioTrack, MoqVideoTrack } from '../parse-catalog';
 
@@ -47,8 +48,10 @@ describe('toVideoDecoderConfig', () => {
 
   it('carries catalog init data as description', () => {
     const track = videoTrack();
+
     track.moq.initData = new Uint8Array([1, 2, 3]);
     const config = toVideoDecoderConfig(track)!;
+
     expect(new Uint8Array(config.description as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 3]));
   });
 
@@ -79,6 +82,7 @@ describe('toAudioDecoderConfig', () => {
       sampleRate: 48_000,
       moq: { namespace: ['ns'], name: 'audio', packaging: 'loc', isLive: true, samplerate: 44_100 },
     });
+
     expect(toAudioDecoderConfig(track)).toMatchObject({ sampleRate: 44_100 });
   });
 
@@ -100,6 +104,7 @@ describe('toAudioDecoderConfig', () => {
         codecs: ['mp4a.40.2'],
         moq: { namespace: ['ns'], name: 'audio', packaging: 'loc', isLive: true, samplerate },
       });
+
       expect(toAudioDecoderConfig(track)).toBeNull();
     }
   );
@@ -109,6 +114,7 @@ describe('toAudioDecoderConfig', () => {
       channels: 2, // projection substitute — must not be trusted over channelConfig
       moq: { namespace: ['ns'], name: 'audio', packaging: 'loc', isLive: true, channelConfig: '5.1' },
     });
+
     expect(toAudioDecoderConfig(track)).toMatchObject({ numberOfChannels: 6 });
   });
 
@@ -124,6 +130,7 @@ describe('toAudioDecoderConfig', () => {
       channels: 2,
       moq: { namespace: ['ns'], name: 'audio', packaging: 'loc', isLive: true, channelConfig: 'JOC' },
     });
+
     expect(toAudioDecoderConfig(track)).toBeNull();
   });
 });

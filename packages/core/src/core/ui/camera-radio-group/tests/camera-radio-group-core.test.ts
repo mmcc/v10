@@ -1,5 +1,6 @@
 import type { MediaCaptureDevicesState } from '@videojs/media';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { CameraRadioGroupState } from '../camera-radio-group-core';
 import { CameraRadioGroupCore } from '../camera-radio-group-core';
 
@@ -36,6 +37,7 @@ describe('CameraRadioGroupCore', () => {
   describe('getState', () => {
     it('projects cameras', () => {
       const core = new CameraRadioGroupCore();
+
       core.setMedia(createMediaState());
 
       const state = core.getState();
@@ -49,6 +51,7 @@ describe('CameraRadioGroupCore', () => {
 
     it('falls back to numbered labels when device labels are empty', () => {
       const core = new CameraRadioGroupCore();
+
       core.setMedia(
         createMediaState({
           cameras: [
@@ -66,6 +69,7 @@ describe('CameraRadioGroupCore', () => {
 
     it('marks availability unavailable with one camera', () => {
       const core = new CameraRadioGroupCore();
+
       core.setMedia(createMediaState({ cameras: [{ deviceId: 'cam-1', kind: 'videoinput', label: 'Built-in' }] }));
 
       expect(core.getState().availability).toBe('unavailable');
@@ -76,11 +80,13 @@ describe('CameraRadioGroupCore', () => {
   describe('getLabel', () => {
     it('returns the default label', () => {
       const core = new CameraRadioGroupCore();
+
       expect(core.getLabel(createState())).toMatchObject({ key: 'publish.camera', text: 'Camera' });
     });
 
     it('returns a custom string label', () => {
       const core = new CameraRadioGroupCore({ label: 'Video source' });
+
       expect(core.getLabel(createState())).toBe('Video source');
     });
   });

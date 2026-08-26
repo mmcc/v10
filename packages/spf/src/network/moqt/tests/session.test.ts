@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import { ByteWriter, StreamReader, utf8Encode } from '../bytes';
 import {
   type ControlMessage,
@@ -34,6 +35,7 @@ function pushChannel<T>(): PushChannel<T> {
       controller = c;
     },
   });
+
   return {
     stream,
     push: (value) => controller.enqueue(value),
@@ -69,6 +71,7 @@ function createFakeTransport() {
     incomingBidirectionalStreams: incomingBidi.stream,
     async createUnidirectionalStream() {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
+
       clientUniStreams.push(pipe.readable);
       return pipe.writable;
     },
@@ -82,17 +85,22 @@ function createFakeTransport() {
       const firstMessage = new Promise<ControlMessage>((resolve) => {
         resolveFirst = resolve;
       });
+
       // Server-side read pump for the client's messages.
       void (async () => {
         const reader = clientToServer.readable.getReader();
         const deframer = new ControlMessageDeframer();
+
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+
             for (const frame of deframer.push(value)) {
               const message = decodeControlMessage(frame);
+
               messages.push(message);
+
               if (messages.length === 1) resolveFirst(message);
             }
           }
@@ -110,6 +118,7 @@ function createFakeTransport() {
           writer.abort(reason).catch(() => {});
         },
       };
+
       requestStreams.push(serverStream);
       requestWaiters.shift()?.(serverStream);
       return { readable: serverToClient.readable, writable: clientToServer.writable };
@@ -134,12 +143,14 @@ function createFakeTransport() {
     nextRequestStream(): Promise<ServerRequestStream> {
       const existing = requestStreams.shift();
       if (existing) return Promise.resolve(existing);
+
       return new Promise((resolve) => requestWaiters.push(resolve));
     },
     /** Open the server's control stream and send its SETUP. */
     sendServerSetup(): void {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
       const writer = pipe.writable.getWriter();
+
       void writer.write(encodeSetup([]));
       incomingUni.push(pipe.readable);
     },
@@ -147,6 +158,7 @@ function createFakeTransport() {
     openDataStream(bytes: Uint8Array): void {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
       const writer = pipe.writable.getWriter();
+
       void writer.write(bytes).then(() => writer.close());
       incomingUni.push(pipe.readable);
     },
@@ -154,6 +166,7 @@ function createFakeTransport() {
     openControlledDataStream(): { write(bytes: Uint8Array): Promise<void>; reset(error: unknown): void } {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
       const writer = pipe.writable.getWriter();
+
       incomingUni.push(pipe.readable);
       return {
         write: (bytes) => writer.write(bytes),
@@ -166,18 +179,23 @@ function createFakeTransport() {
       const serverToClient = new TransformStream<Uint8Array, Uint8Array>();
       const clientToServer = new TransformStream<Uint8Array, Uint8Array>();
       const writer = serverToClient.writable.getWriter();
+
       void writer.write(bytes).then(() => writer.close());
       incomingBidi.push({ readable: serverToClient.readable, writable: clientToServer.writable });
       const responses = (async () => {
         const chunks: Uint8Array[] = [];
         const reader = clientToServer.readable.getReader();
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+
           chunks.push(value);
         }
+
         return chunks;
       })();
+
       return { responses };
     },
     getCloseInfo: () => closeInfo,
@@ -189,6 +207,7 @@ function createFakeTransport() {
 /** Encode a one-object subgroup stream for `trackAlias` (type 0x38: subgroup 0, default priority, end-of-group). */
 function encodeSubgroup(trackAlias: number, groupId: number, payload: Uint8Array, objectId = 0): Uint8Array {
   const writer = new ByteWriter();
+
   writer.writeVarint(0x38);
   writer.writeVarint(trackAlias);
   writer.writeVarint(groupId);
@@ -201,6 +220,7 @@ function encodeSubgroup(trackAlias: number, groupId: number, payload: Uint8Array
 function createSessionHarness(callbacks?: MoqtSessionCallbacks) {
   const fake = createFakeTransport();
   const session = createMoqtSession(fake.transport, { callbacks, unknownAliasTimeoutMs: 200 });
+
   return { ...fake, session };
 }
 
@@ -209,11 +229,13 @@ describe('createMoqtSession', () => {
     const harness = createSessionHarness();
     const control = await harness.clientControlStream();
     const type = await control.readVarint();
+
     expect(type).toBe(0x2f00);
     const high = await control.readUint8();
     const low = await control.readUint8();
     const body = await control.readBytes(high * 256 + low);
     const setup = decodeControlMessage({ type, body });
+
     expect(setup.kind).toBe('setup');
     harness.session.destroy();
   });
@@ -221,6 +243,7 @@ describe('createMoqtSession', () => {
   it('resolves ready and reports server options once the server SETUP arrives', async () => {
     const onReady = vi.fn();
     const harness = createSessionHarness({ onReady });
+
     harness.sendServerSetup();
     await harness.session.ready;
     expect(onReady).toHaveBeenCalledWith([]);
@@ -229,11 +252,13 @@ describe('createMoqtSession', () => {
 
   it('subscribes on a new request stream and routes objects by track alias', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onOk = vi.fn();
     const objects: MoqtObject[] = [];
     const subgroupEnds: unknown[] = [];
+
     harness.session.subscribe(
       { trackNamespace: ['live', 'stream1'], trackName: 'video' },
       {
@@ -245,6 +270,7 @@ describe('createMoqtSession', () => {
 
     const request = await harness.nextRequestStream();
     const message = await request.firstMessage;
+
     expect(message).toMatchObject({
       kind: 'subscribe',
       requestId: 0,
@@ -267,14 +293,17 @@ describe('createMoqtSession', () => {
 
   it('buffers a data stream that arrives before SUBSCRIBE_OK registers the alias', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const objects: MoqtObject[] = [];
+
     harness.session.subscribe(
       { trackNamespace: ['live'], trackName: 'audio' },
       { onObject: (object) => objects.push(object) }
     );
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
 
     // Objects outrace the SUBSCRIBE_OK.
@@ -291,6 +320,7 @@ describe('createMoqtSession', () => {
 
   it('drops a data stream whose alias never registers (timeout)', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
     // No subscription at all — stream must be cancelled after the timeout,
     // and the session must survive.
@@ -302,11 +332,14 @@ describe('createMoqtSession', () => {
 
   it('surfaces REQUEST_ERROR to the subscription handlers', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onError = vi.fn();
+
     harness.session.subscribe({ trackNamespace: ['live'], trackName: 'nope' }, { onError });
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
     await request.send(encodeRequestError(REQUEST_ERROR_CODE.DOES_NOT_EXIST, 'no such track'));
 
@@ -322,11 +355,14 @@ describe('createMoqtSession', () => {
   // subscription sits pending forever with neither response nor error.
   it('fails a subscription when the peer FINs before SUBSCRIBE_OK', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onError = vi.fn();
+
     harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError });
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
     await request.fin();
 
@@ -339,11 +375,14 @@ describe('createMoqtSession', () => {
 
   it('fails a subscription when the request stream is reset before SUBSCRIBE_OK', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onError = vi.fn();
+
     harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError });
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
     request.reset(new Error('stream reset'));
 
@@ -353,12 +392,15 @@ describe('createMoqtSession', () => {
 
   it('does not fail a subscription when the FIN follows SUBSCRIBE_OK', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onOk = vi.fn();
     const onError = vi.fn();
+
     harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onOk, onError });
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
     await request.send(encodeSubscribeOk(7));
     await vi.waitFor(() => expect(onOk).toHaveBeenCalled());
@@ -372,11 +414,14 @@ describe('createMoqtSession', () => {
   it('fails a subscription that gets no response before the request timeout', async () => {
     const fake = createFakeTransport();
     const session = createMoqtSession(fake.transport, { requestTimeoutMs: 10 });
+
     fake.sendServerSetup();
 
     const onError = vi.fn();
+
     session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError });
     const request = await fake.nextRequestStream();
+
     await request.firstMessage;
 
     await vi.waitFor(() => expect(onError).toHaveBeenCalled());
@@ -387,16 +432,19 @@ describe('createMoqtSession', () => {
   it('ignores a response that arrives after the request timeout', async () => {
     const fake = createFakeTransport();
     const session = createMoqtSession(fake.transport, { requestTimeoutMs: 10, unknownAliasTimeoutMs: 50 });
+
     fake.sendServerSetup();
 
     const onOk = vi.fn();
     const onError = vi.fn();
     const objects: MoqtObject[] = [];
+
     session.subscribe(
       { trackNamespace: ['live'], trackName: 'video' },
       { onOk, onError, onObject: (object) => objects.push(object) }
     );
     const request = await fake.nextRequestStream();
+
     await request.firstMessage;
     await vi.waitFor(() => expect(onError).toHaveBeenCalled());
 
@@ -412,11 +460,15 @@ describe('createMoqtSession', () => {
 
   it('fails a pending trackStatus when the transport drops', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onError = vi.fn();
+
     harness.session.trackStatus({ trackNamespace: ['live'], trackName: 'video' }, { onError });
-    await (await harness.nextRequestStream()).firstMessage;
+    await (
+      await harness.nextRequestStream()
+    ).firstMessage;
     harness.dropTransport();
 
     await vi.waitFor(() => expect(onError).toHaveBeenCalled());
@@ -427,18 +479,26 @@ describe('createMoqtSession', () => {
 
   it('fails pending requests when the transport drops, but not on a local close()', async () => {
     const dropped = createSessionHarness();
+
     dropped.sendServerSetup();
     const onDropError = vi.fn();
+
     dropped.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError: onDropError });
-    await (await dropped.nextRequestStream()).firstMessage;
+    await (
+      await dropped.nextRequestStream()
+    ).firstMessage;
     dropped.dropTransport();
     await vi.waitFor(() => expect(onDropError).toHaveBeenCalled());
 
     const closed = createSessionHarness();
+
     closed.sendServerSetup();
     const onCloseError = vi.fn();
+
     closed.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onError: onCloseError });
-    await (await closed.nextRequestStream()).firstMessage;
+    await (
+      await closed.nextRequestStream()
+    ).firstMessage;
     closed.session.close();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(onCloseError).not.toHaveBeenCalled();
@@ -446,6 +506,7 @@ describe('createMoqtSession', () => {
 
   it('surfaces PUBLISH_DONE and keeps late subgroups flowing until cancel', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const onDone = vi.fn();
@@ -455,6 +516,7 @@ describe('createMoqtSession', () => {
       { onDone, onObject: (object) => objects.push(object) }
     );
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
     await request.send(encodeSubscribeOk(7));
     await request.send(encodePublishDone(PUBLISH_DONE_STATUS.TRACK_ENDED, 1, 'ended'));
@@ -472,9 +534,11 @@ describe('createMoqtSession', () => {
 
   it('allocates even request IDs starting at 0', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
     const first = harness.session.subscribe({ trackNamespace: ['a'], trackName: 'x' });
     const second = harness.session.subscribe({ trackNamespace: ['a'], trackName: 'y' });
+
     expect(first.requestId).toBe(0);
     expect(second.requestId).toBe(2);
     harness.session.destroy();
@@ -482,20 +546,24 @@ describe('createMoqtSession', () => {
 
   it('routes fetch streams by request id (catalog joining-fetch shape)', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
     const subscribeStream = await harness.nextRequestStream();
+
     await subscribeStream.firstMessage;
 
     const entries: unknown[] = [];
     const onEnd = vi.fn();
+
     harness.session.fetch(
       { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
       { onEntry: (entry) => entries.push(entry), onEnd }
     );
     const fetchStream = await harness.nextRequestStream();
     const fetchMessage = await fetchStream.firstMessage;
+
     expect(fetchMessage).toMatchObject({
       kind: 'fetch',
       request: { type: 'relative-joining', requestId: 2, joiningRequestId: 0, joiningStart: 0 },
@@ -503,6 +571,7 @@ describe('createMoqtSession', () => {
 
     // Fetch data stream: FETCH_HEADER + one object.
     const writer = new ByteWriter();
+
     writer.writeVarint(0x05);
     writer.writeVarint(2); // fetch request id
     writer.writeVarint(0x1c); // group delta + object delta + priority present
@@ -510,6 +579,7 @@ describe('createMoqtSession', () => {
     writer.writeVarint(0); // object (absolute)
     writer.writeUint8(128);
     const payload = utf8Encode('{"version":"1"}');
+
     writer.writeVarint(payload.length);
     writer.writeBytes(payload);
     harness.openDataStream(writer.toBytes());
@@ -524,24 +594,29 @@ describe('createMoqtSession', () => {
   it('tolerates REQUEST_OK in place of FETCH_OK on a fetch stream (relay deviation)', async () => {
     const onClosed = vi.fn();
     const harness = createSessionHarness({ onClosed });
+
     harness.sendServerSetup();
 
     const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+
     await harness.nextRequestStream();
 
     const entries: unknown[] = [];
     const onEnd = vi.fn();
+
     harness.session.fetch(
       { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
       { onEntry: (entry) => entries.push(entry), onEnd }
     );
     const fetchStream = await harness.nextRequestStream();
+
     await fetchStream.firstMessage;
     await fetchStream.send(encodeRequestOk());
 
     // The data stream still delivers normally — REQUEST_OK on the bidi
     // stream has no bearing on the separate unidirectional data stream.
     const writer = new ByteWriter();
+
     writer.writeVarint(0x05);
     writer.writeVarint(2); // fetch request id
     writer.writeVarint(0x1c); // group delta + object delta + priority present
@@ -549,6 +624,7 @@ describe('createMoqtSession', () => {
     writer.writeVarint(0); // object (absolute)
     writer.writeUint8(128);
     const payload = utf8Encode('{"version":"1"}');
+
     writer.writeVarint(payload.length);
     writer.writeBytes(payload);
     harness.openDataStream(writer.toBytes());
@@ -569,18 +645,22 @@ describe('createMoqtSession', () => {
     // 25ms: below the 30ms wait (an un-disarmed timer would still fire in
     // time to be observed) with headroom for the REQUEST_OK on slow CI.
     const session = createMoqtSession(fake.transport, { requestTimeoutMs: 25, unknownAliasTimeoutMs: 200 });
+
     fake.sendServerSetup();
 
     const subscription = session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+
     await fake.nextRequestStream();
 
     const onError = vi.fn();
     const entries: unknown[] = [];
+
     session.fetch(
       { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
       { onEntry: (entry) => entries.push(entry), onError }
     );
     const fetchStream = await fake.nextRequestStream();
+
     await fetchStream.firstMessage;
     await fetchStream.send(encodeRequestOk());
 
@@ -589,6 +669,7 @@ describe('createMoqtSession', () => {
 
     // The data stream arrives after the deadline would have passed.
     const writer = new ByteWriter();
+
     writer.writeVarint(0x05);
     writer.writeVarint(2); // fetch request id
     writer.writeVarint(0x1c); // group delta + object delta + priority present
@@ -596,6 +677,7 @@ describe('createMoqtSession', () => {
     writer.writeVarint(0); // object (absolute)
     writer.writeUint8(128);
     const payload = utf8Encode('{"version":"1"}');
+
     writer.writeVarint(payload.length);
     writer.writeBytes(payload);
     fake.openDataStream(writer.toBytes());
@@ -606,6 +688,7 @@ describe('createMoqtSession', () => {
 
   it('rejects ready when the session closes before the server SETUP', async () => {
     const harness = createSessionHarness();
+
     harness.session.close();
     await expect(harness.session.ready).rejects.toThrow('session closed before server SETUP');
   });
@@ -613,6 +696,7 @@ describe('createMoqtSession', () => {
   it('reports a transport drop before the server SETUP as an error close', async () => {
     const onClosed = vi.fn();
     const harness = createSessionHarness({ onClosed });
+
     harness.dropTransport();
 
     // Callback-only consumers must observe the failure too — a clean
@@ -627,6 +711,7 @@ describe('createMoqtSession', () => {
   it('reports a local close() before the server SETUP as a clean close', async () => {
     const onClosed = vi.fn();
     const harness = createSessionHarness({ onClosed });
+
     harness.session.close();
 
     await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
@@ -635,24 +720,29 @@ describe('createMoqtSession', () => {
 
   it('reports a reset fetch stream as onReset, not a clean onEnd', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
     const subscribeStream = await harness.nextRequestStream();
+
     await subscribeStream.firstMessage;
 
     const entries: unknown[] = [];
     const onEnd = vi.fn();
     const onReset = vi.fn();
+
     harness.session.fetch(
       { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
       { onEntry: (entry) => entries.push(entry), onEnd, onReset }
     );
     const fetchStream = await harness.nextRequestStream();
+
     await fetchStream.firstMessage;
 
     // Fetch data stream: header + one full entry, then a reset mid-replay.
     const writer = new ByteWriter();
+
     writer.writeVarint(0x05);
     writer.writeVarint(2); // fetch request id
     writer.writeVarint(0x1c); // group delta + object delta + priority present
@@ -660,9 +750,11 @@ describe('createMoqtSession', () => {
     writer.writeVarint(0);
     writer.writeUint8(128);
     const payload = utf8Encode('{"version":"1"}');
+
     writer.writeVarint(payload.length);
     writer.writeBytes(payload);
     const dataStream = harness.openControlledDataStream();
+
     await dataStream.write(writer.toBytes());
     await vi.waitFor(() => expect(entries).toHaveLength(1));
     dataStream.reset(new Error('reset mid-replay'));
@@ -676,15 +768,18 @@ describe('createMoqtSession', () => {
   it('treats a truncated response frame on a request stream as a protocol error', async () => {
     const onClosed = vi.fn();
     const harness = createSessionHarness({ onClosed });
+
     harness.sendServerSetup();
     await harness.session.ready;
 
     harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' });
     const request = await harness.nextRequestStream();
+
     await request.firstMessage;
 
     // A frame header promising a 100-byte body, then FIN with none of it.
     const partial = new ByteWriter();
+
     partial.writeVarint(0x04);
     partial.writeUint16(100);
     await request.send(partial.toBytes());
@@ -700,14 +795,17 @@ describe('createMoqtSession', () => {
     // Server control stream with SETUP then GOAWAY.
     const writer = new ByteWriter();
     const setup = encodeSetup([]);
+
     writer.writeBytes(setup);
     // GOAWAY with a migration URI.
     const goawayBody = new ByteWriter();
     const uri = utf8Encode('https://relay2.example.com/moq');
+
     goawayBody.writeVarint(uri.length);
     goawayBody.writeBytes(uri);
     goawayBody.writeVarint(1000);
     const goawayFrame = new ByteWriter();
+
     goawayFrame.writeVarint(0x10);
     goawayFrame.writeUint16(goawayBody.length);
     goawayFrame.writeBytes(goawayBody.toBytes());
@@ -723,21 +821,26 @@ describe('createMoqtSession', () => {
 
   it('rejects incoming PUBLISH with UNINTERESTED by default', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     // Server-initiated PUBLISH request stream.
     const publishBody = new ByteWriter();
+
     publishBody.writeVarint(1); // server request id (odd)
     publishBody.writeVarint(1); // namespace field count
     const field = utf8Encode('live');
+
     publishBody.writeVarint(field.length);
     publishBody.writeBytes(field);
     const name = utf8Encode('unwanted');
+
     publishBody.writeVarint(name.length);
     publishBody.writeBytes(name);
     publishBody.writeVarint(9); // track alias
     publishBody.writeVarint(0); // parameter count
     const publishFrame = new ByteWriter();
+
     publishFrame.writeVarint(0x1d);
     publishFrame.writeUint16(publishBody.length);
     publishFrame.writeBytes(publishBody.toBytes());
@@ -746,6 +849,7 @@ describe('createMoqtSession', () => {
     const chunks = await responses;
     const deframer = new ControlMessageDeframer();
     const messages = chunks.flatMap((chunk) => deframer.push(chunk)).map(decodeControlMessage);
+
     expect(messages[0]).toMatchObject({ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.UNINTERESTED });
 
     harness.session.destroy();
@@ -753,6 +857,7 @@ describe('createMoqtSession', () => {
 
   it('rejects incoming PUBLISH_NAMESPACE with NOT_SUPPORTED by default', async () => {
     const harness = createSessionHarness();
+
     harness.sendServerSetup();
 
     // Server-initiated PUBLISH_NAMESPACE request stream — relays commonly
@@ -761,6 +866,7 @@ describe('createMoqtSession', () => {
     const chunks = await responses;
     const deframer = new ControlMessageDeframer();
     const messages = chunks.flatMap((chunk) => deframer.push(chunk)).map(decodeControlMessage);
+
     expect(messages[0]).toMatchObject({ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED });
 
     harness.session.destroy();
@@ -769,12 +875,14 @@ describe('createMoqtSession', () => {
   it('closes the session when an incoming request frame has a truncated body', async () => {
     const onClosed = vi.fn();
     const harness = createSessionHarness({ onClosed });
+
     harness.sendServerSetup();
 
     // A PUBLISH_NAMESPACE frame whose declared body length cuts the
     // namespace off — decoding must terminate the session, not vanish as
     // an unhandled RangeError in the accept loop.
     const frame = new ByteWriter();
+
     frame.writeVarint(0x06); // PUBLISH_NAMESPACE
     frame.writeUint16(1);
     frame.writeVarint(1); // request id, then no namespace at all
@@ -787,9 +895,11 @@ describe('createMoqtSession', () => {
   it('closes the session with PROTOCOL_VIOLATION on an unknown data stream type', async () => {
     const onClosed = vi.fn();
     const harness = createSessionHarness({ onClosed });
+
     harness.sendServerSetup();
 
     const writer = new ByteWriter();
+
     writer.writeVarint(0x0f); // not a valid unidirectional stream type
     harness.openDataStream(writer.toBytes());
 

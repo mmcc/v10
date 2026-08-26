@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { createComposition } from '../../../core/composition/create-composition';
 import { signal } from '../../../core/signals/primitives';
 import { createMoqtSession } from '../../../network/moqt/session';
@@ -23,6 +24,7 @@ function makePeer(pair: TransportPair) {
       onClosed: (info) => closes.push(info),
     },
   });
+
   disposals.push(() => peer.destroy());
   return { peer, closes };
 }
@@ -42,6 +44,7 @@ function setupBehavior(connectTransport: ConnectPublishTransport) {
     publishSessionActor: signal<OpenPublishSessionContext['publishSessionActor']>(undefined),
   };
   const reactor = openPublishSession.setup({ state, context, config: { connectTransport } });
+
   disposals.push(() => reactor.destroy());
   return { state, context, reactor };
 }
@@ -71,6 +74,7 @@ describe('openPublishSession', () => {
 
   it('opens the session on an active microphone alone — audio-only publish', async () => {
     const pair = createTransportPair();
+
     makePeer(pair);
     const { state } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
 
@@ -103,6 +107,7 @@ describe('openPublishSession', () => {
 
   it('rides out a mic device switch in a mic-only session — acquiring holds the open session', async () => {
     const pair = createTransportPair();
+
     makePeer(pair);
     const { state, context } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
 
@@ -126,6 +131,7 @@ describe('openPublishSession', () => {
 
   it('opens the session and mirrors the actor lifecycle into sessionStatus', async () => {
     const pair = createTransportPair();
+
     makePeer(pair);
     const { state, context } = setupBehavior(() => ({ transport: pair.client, ready: Promise.resolve() }));
 
@@ -138,6 +144,7 @@ describe('openPublishSession', () => {
     // engine) and the peer solicits the namespace; the announce lands
     // and the session is live.
     const actor = context.publishSessionActor.get()!;
+
     actor.snapshot.get().context.session!.registerTrack({ trackNamespace: ENDPOINT.namespace, trackName: 'catalog' });
     void solicitNamespace(pair.server, []);
     await vi.waitFor(() => {
@@ -193,6 +200,7 @@ describe('openPublishSession', () => {
       config: { connectTransport: () => ({ transport: pair.client, ready: Promise.resolve() }) },
       initialState: { publishActivated: false, cameraState: 'idle', screenShareState: 'idle', sessionStatus: 'idle' },
     });
+
     disposals.push(() => void composition.destroy());
     makePeer(pair);
 
@@ -215,9 +223,11 @@ describe('openPublishSession', () => {
       subscriptions.video = await rawSubscribe(pair.server, ENDPOINT.namespace, 'video', 13);
       await vi.waitFor(() => {
         const actor = composition.context.publishSessionActor.get()!;
+
         expect(actor.snapshot.get().context.subscriberCount).toBe(2);
       });
       const video = composition.context.videoTrackPublisher.get()!;
+
       video.send({ type: 'frame', payload: new Uint8Array([1, 2, 3]), properties: [], keyframe: true, timestampUs: 0 });
       await vi.waitFor(() => {
         expect(video.snapshot.get().context.openedGroups).toBe(1);
@@ -230,6 +240,7 @@ describe('openPublishSession', () => {
   it('FINs every track subscription cleanly when the composition is destroyed', async () => {
     const pair = createTransportPair();
     const { composition, subscriptions, goLive } = makeTransportStage(pair);
+
     await goLive();
 
     // The production teardown path — no manual draining beforehand.
@@ -248,6 +259,7 @@ describe('openPublishSession', () => {
   it('FINs every track subscription when unpublish collapses the gate', async () => {
     const pair = createTransportPair();
     const { composition, subscriptions, goLive } = makeTransportStage(pair);
+
     await goLive();
 
     composition.state.publishActivated.set(false);
@@ -268,10 +280,13 @@ describe('openPublishSession', () => {
   it('clears a prior session error on the next attempt', async () => {
     let attempts = 0;
     const pair = createTransportPair();
+
     makePeer(pair);
     const { state } = setupBehavior(() => {
       attempts += 1;
+
       if (attempts === 1) throw new Error('connect refused');
+
       return { transport: pair.client, ready: Promise.resolve() };
     });
 

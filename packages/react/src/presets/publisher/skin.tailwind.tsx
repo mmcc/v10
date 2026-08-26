@@ -7,11 +7,11 @@ import {
   controls,
   deviceControl,
   deviceGroup,
-  error,
+  dialog,
   icon,
   iconState,
   menu,
-  overlay,
+  controlsBackdrop,
   popup,
   publishBadge,
   publishStatus,
@@ -21,6 +21,7 @@ import {
 } from '@videojs/skins/default/tailwind/publisher.tailwind';
 import { cn } from '@videojs/utils/style';
 import { type ComponentProps, forwardRef, type ReactNode } from 'react';
+
 import { useTranslator } from '@/i18n/context';
 import {
   CameraIcon,
@@ -52,6 +53,7 @@ import { PublishButton } from '@/ui/publish-button';
 import { PublishTimer } from '@/ui/publish-timer';
 import { ScreenShareButton } from '@/ui/screen-share-button';
 import { Tooltip } from '@/ui/tooltip';
+
 import type { PublisherSkinProps } from './skin';
 
 const Button = forwardRef<HTMLButtonElement, ComponentProps<'button'>>(function Button({ className, ...props }, ref) {
@@ -94,26 +96,27 @@ function DeviceMenu({
       <Menu.Trigger aria-label={label} disabled={disabled} render={<CaretButton />}>
         <ChevronIcon className={cn(icon, deviceControl.caretIcon)} />
       </Menu.Trigger>
-      <Menu.Content className={cn(popup.popover, menu.root)}>
-        <Menu.RadioGroup className={menu.group} value={value} onValueChange={setValue} aria-label={label}>
-          {options.map((option) => (
-            <Menu.RadioItem key={option.value} className={menu.item} value={option.value} disabled={option.disabled}>
-              <span>{option.label}</span>
-              <Menu.ItemIndicator checked={option.value === value} forceMount className={menu.indicator}>
-                <CheckIcon className={cn(icon, menu.icon)} />
-              </Menu.ItemIndicator>
-            </Menu.RadioItem>
-          ))}
-        </Menu.RadioGroup>
-      </Menu.Content>
+      <Menu.Popup className={cn(popup.popover, menu.root)}>
+        <Menu.Content className={menu.content}>
+          <Menu.RadioGroup className={menu.group} value={value} onValueChange={setValue} aria-label={label}>
+            {options.map((option) => (
+              <Menu.RadioItem key={option.value} className={menu.item} value={option.value} disabled={option.disabled}>
+                <span>{option.label}</span>
+                <Menu.ItemIndicator checked={option.value === value} forceMount className={menu.indicator}>
+                  <CheckIcon className={cn(icon, menu.icon)} />
+                </Menu.ItemIndicator>
+              </Menu.RadioItem>
+            ))}
+          </Menu.RadioGroup>
+        </Menu.Content>
+      </Menu.Popup>
     </Menu.Root>
   );
 }
 
 /**
- * Camera toggle fused with its source picker into one split control, so the
- * caret plainly belongs to the camera rather than floating between toggles.
- * The toggle keeps its own tooltip and hotkey hint.
+ * Camera toggle fused with its source picker into one split control, so the caret plainly belongs to the camera rather
+ * than floating between toggles. The toggle keeps its own tooltip and hotkey hint.
  */
 function CameraControl(): ReactNode {
   const t = useTranslator();
@@ -187,8 +190,8 @@ function MicControl(): ReactNode {
 }
 
 /**
- * Tailwind twin of {@link PublisherSkin} — the same structure styled with the
- * publisher Tailwind vocabulary instead of the stylesheet class contract.
+ * Tailwind twin of {@link PublisherSkin} — the same structure styled with the publisher Tailwind vocabulary instead of
+ * the stylesheet class contract.
  */
 export function PublisherSkinTailwind(props: PublisherSkinProps): ReactNode {
   const { children, className, style, ...rest } = props;
@@ -218,64 +221,64 @@ export function PublisherSkinTailwind(props: PublisherSkinProps): ReactNode {
       </div>
 
       <ErrorDialog.Root>
-        <ErrorDialog.Popup className={error.root}>
-          <div className={error.dialog}>
-            <div className={error.content}>
-              <ErrorDialog.Title className={error.title} />
-              <ErrorDialog.Description className={error.description} />
-            </div>
-            <div className={error.actions}>
-              <ErrorDialog.Close className={cn(button.base, button.primary)} />
-            </div>
+        <ErrorDialog.Backdrop className={dialog.backdrop} />
+        <ErrorDialog.Popup className={dialog.popup}>
+          <div className={dialog.content}>
+            <ErrorDialog.Title className={dialog.title} />
+            <ErrorDialog.Description className={dialog.description} />
+          </div>
+          <div className={dialog.actions}>
+            <ErrorDialog.Close className={cn(button.base, button.primary)} />
           </div>
         </ErrorDialog.Popup>
       </ErrorDialog.Root>
 
-      <Controls.Root className={controls}>
-        <Tooltip.Provider>
-          <div className={deviceGroup}>
-            <CameraControl />
-            <MicControl />
+      <Controls.Root>
+        <Controls.Backdrop className={controlsBackdrop} />
+        <Controls.Content className={controls}>
+          <Tooltip.Provider>
+            <div className={deviceGroup}>
+              <CameraControl />
+              <MicControl />
 
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger
-                render={
-                  <ScreenShareButton className={button.screenShare} render={<Button />}>
-                    <ScreenShareIcon className={icon} />
-                  </ScreenShareButton>
-                }
-              />
-              <Tooltip.Popup className={cn(popup.tooltip)}>
-                <Tooltip.Label />
-                <Tooltip.Shortcut className={popup.tooltipShortcut} />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-          </div>
+              <Tooltip.Root side="top">
+                <Tooltip.Trigger
+                  render={
+                    <ScreenShareButton className={button.screenShare} render={<Button />}>
+                      <ScreenShareIcon className={icon} />
+                    </ScreenShareButton>
+                  }
+                />
+                <Tooltip.Popup className={cn(popup.tooltip)}>
+                  <Tooltip.Label />
+                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                </Tooltip.Popup>
+              </Tooltip.Root>
+            </div>
 
-          <div className={spacer} aria-hidden="true" />
+            <div className={spacer} aria-hidden="true" />
 
-          <div className={buttonGroup}>
-            <PublishButton className={cn(button.base, button.publish)} />
+            <div className={buttonGroup}>
+              <PublishButton className={cn(button.base, button.publish)} />
 
-            <Tooltip.Root side="top">
-              <Tooltip.Trigger
-                render={
-                  <FullscreenButton className={iconState.fullscreen.button} render={<Button />}>
-                    <FullscreenEnterIcon className={cn(icon, iconState.fullscreen.enter)} />
-                    <FullscreenExitIcon className={cn(icon, iconState.fullscreen.exit)} />
-                  </FullscreenButton>
-                }
-              />
-              <Tooltip.Popup className={cn(popup.tooltip)}>
-                <Tooltip.Label />
-                <Tooltip.Shortcut className={popup.tooltipShortcut} />
-              </Tooltip.Popup>
-            </Tooltip.Root>
-          </div>
-        </Tooltip.Provider>
+              <Tooltip.Root side="top">
+                <Tooltip.Trigger
+                  render={
+                    <FullscreenButton className={iconState.fullscreen.button} render={<Button />}>
+                      <FullscreenEnterIcon className={cn(icon, iconState.fullscreen.enter)} />
+                      <FullscreenExitIcon className={cn(icon, iconState.fullscreen.exit)} />
+                    </FullscreenButton>
+                  }
+                />
+                <Tooltip.Popup className={cn(popup.tooltip)}>
+                  <Tooltip.Label />
+                  <Tooltip.Shortcut className={popup.tooltipShortcut} />
+                </Tooltip.Popup>
+              </Tooltip.Root>
+            </div>
+          </Tooltip.Provider>
+        </Controls.Content>
       </Controls.Root>
-
-      <div className={overlay} />
 
       {/* Hotkeys */}
       <Hotkey keys="m" action="toggleMicMuted" />

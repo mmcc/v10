@@ -14,21 +14,19 @@ import { renderElement } from '../../utils/use-render';
 const DISPLAY_NAME = 'PublishTimer';
 
 export interface PublishTimerProps
-  extends Omit<UIComponentProps<'div', PublishTimerCore.State>, 'children'>,
-    Omit<PublishTimerCore.Props, 'now'> {}
+  extends Omit<UIComponentProps<'div', PublishTimerCore.State>, 'children'>, Omit<PublishTimerCore.Props, 'now'> {}
 
 /**
- * Displays the elapsed time since the publish session went live, formatted
- * `M:SS` / `H:MM:SS` (`0:00` before the session first goes live).
+ * Displays the elapsed time since the publish session went live, formatted `M:SS` / `H:MM:SS` (`0:00` before the
+ * session first goes live).
  *
- * `PublishTimerCore` is tick-less: this component owns a one-second interval
- * that runs only while the session is `live`, passing a fresh `now` to the
- * core on every tick.
+ * `PublishTimerCore` is tick-less: this component owns a one-second interval that runs only while the session is
+ * `live`, passing a fresh `now` to the core on every tick.
  *
  * @example
- * ```tsx
- * <PublishTimer />
- * ```
+ *   ```tsx
+ *   <PublishTimer />;
+ *   ```;
  */
 export const PublishTimer = forwardRef(function PublishTimer(
   componentProps: PublishTimerProps,
@@ -40,19 +38,23 @@ export const PublishTimer = forwardRef(function PublishTimer(
   const translator = useTranslator();
   const [core] = useState(() => new PublishTimerCore());
   const [now, setNow] = useState(() => Date.now());
+
   core.setProps({ label, now });
 
   const live = !!publish && publish.publishState === 'live';
 
   useEffect(() => {
     if (!live) return;
+
     setNow(Date.now());
     const interval = setInterval(() => setNow(Date.now()), 1000);
+
     return () => clearInterval(interval);
   }, [live]);
 
   if (!publish) {
     if (__DEV__) logMissingFeature(DISPLAY_NAME, selectPublish.displayName ?? 'publish');
+
     return null;
   }
 

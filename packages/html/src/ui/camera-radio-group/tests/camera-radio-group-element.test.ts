@@ -2,14 +2,14 @@ import type { AnyPlayerStore } from '@videojs/core/dom';
 import { ContextProvider } from '@videojs/element/context';
 import type { MediaCaptureDevicesState } from '@videojs/media';
 import { createStore } from '@videojs/store';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { playerContext } from '../../../player/context';
-import { MediaElement } from '../../media-element';
 import { MenuElement } from '../../menu/menu-element';
 import { MenuItemIndicatorElement } from '../../menu/menu-item-indicator-element';
 import { MenuRadioGroupElement } from '../../menu/menu-radio-group-element';
 import { MenuRadioItemElement } from '../../menu/menu-radio-item-element';
+import { UIElement } from '../../ui-element';
 import { CameraRadioGroupElement } from '../camera-radio-group-element';
 
 let tagCounter = 0;
@@ -20,6 +20,7 @@ function uniqueTag(base: string): string {
 
 function createElement<Element extends HTMLElement>(Base: abstract new () => Element): Element {
   const tag = uniqueTag('test-el');
+
   customElements.define(tag, class extends (Base as unknown as typeof HTMLElement) {});
   return document.createElement(tag) as Element;
 }
@@ -75,7 +76,7 @@ function createCaptureDevicesStore({
   }) as unknown as AnyPlayerStore;
 }
 
-class TestPlayerProviderElement extends MediaElement {
+class TestPlayerProviderElement extends UIElement {
   store: AnyPlayerStore = createCaptureDevicesStore();
 
   readonly #provider = new ContextProvider(this, { context: playerContext });
@@ -117,6 +118,7 @@ async function waitForMenu(menu: MenuElement, options: CameraRadioGroupElement):
   await options.updateComplete;
 
   const items = [...menu.querySelectorAll<MenuRadioItemElement>(MenuRadioItemElement.tagName)];
+
   await Promise.all(items.map((item) => item.updateComplete));
 }
 
@@ -153,6 +155,7 @@ describe('CameraRadioGroupElement', () => {
     await waitForMenu(menu, options);
 
     const items = [...menu.querySelectorAll<MenuRadioItemElement>(MenuRadioItemElement.tagName)];
+
     expect(items.map((item) => item.textContent)).toEqual(['Camera 1', 'Camera 2']);
   });
 

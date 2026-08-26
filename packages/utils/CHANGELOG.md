@@ -1,5 +1,68 @@
 # Changelog
 
+## [10.0.0-beta.32](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.31...@videojs/utils@10.0.0-beta.32) (2026-08-26)
+
+
+### Features
+
+* **packages:** add dialog component ([#2379](https://github.com/videojs/v10/issues/2379)) ([108b8fd](https://github.com/videojs/v10/commit/108b8fda826a870bf29453289a0081ebd7df890c))
+
+## [10.0.0-beta.31](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.30...@videojs/utils@10.0.0-beta.31) (2026-08-21)
+
+
+### Features
+
+* **packages:** add right-to-left player support ([#2281](https://github.com/videojs/v10/issues/2281)) ([caf179b](https://github.com/videojs/v10/commit/caf179b83260a242a7ff284d1d474f97a91988a9))
+
+## [10.0.0-beta.30](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.29...@videojs/utils@10.0.0-beta.30) (2026-08-20)
+
+
+### Features
+
+* **spf:** Cap Rendition to Player Size ([#2242](https://github.com/videojs/v10/issues/2242)) ([357c3a4](https://github.com/videojs/v10/commit/357c3a4ba71155809e34db9f2d78694712283fe5))
+
+
+### Bug Fixes
+
+* **skin:** stabilize menu sizing and motion ([#2283](https://github.com/videojs/v10/issues/2283)) ([191538e](https://github.com/videojs/v10/commit/191538e99935ffdced88e77fef55405410558562))
+
+## [10.0.0-beta.29](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.28...@videojs/utils@10.0.0-beta.29) (2026-08-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** name the resolved title `title`, and take it from config only ([#2176](https://github.com/videojs/v10/issues/2176))
+
+### Features
+
+* **packages:** name the resolved title `title`, and take it from config only ([#2176](https://github.com/videojs/v10/issues/2176)) ([969cf56](https://github.com/videojs/v10/commit/969cf567b3125e437d8f68982f655ee4255409ae))
+
+## [10.0.0-beta.28](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.27...@videojs/utils@10.0.0-beta.28) (2026-08-19)
+
+
+### Miscellaneous Chores
+
+* **@videojs/utils:** Synchronize videojs versions
+
+## [10.0.0-beta.27](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.26...@videojs/utils@10.0.0-beta.27) (2026-08-17)
+
+
+### Features
+
+* **packages:** add chaptered time sliders ([#2043](https://github.com/videojs/v10/issues/2043)) ([6490051](https://github.com/videojs/v10/commit/6490051ac8b991f8c9c47e2cb424b9ffb676230c))
+* **packages:** add youtube media with html and react components ([#1853](https://github.com/videojs/v10/issues/1853)) ([f7571e3](https://github.com/videojs/v10/commit/f7571e3d1fbfbcabf8cba319fb498bb052afb376))
+* **spf:** live hls playback on the presentation-timeline model ([#1884](https://github.com/videojs/v10/issues/1884)) ([0ebb073](https://github.com/videojs/v10/commit/0ebb073b87cbceb5459b7a32dc09ed5026647d37))
+* **utils:** extract getAnchorNames and addAnchorName ([#1935](https://github.com/videojs/v10/issues/1935)) ([d5f0cb6](https://github.com/videojs/v10/commit/d5f0cb6b92bfeeec828095a7d970e0b9610eb29d))
+
+
+### Bug Fixes
+
+* **i18n:** improve locale translations ([#1914](https://github.com/videojs/v10/issues/1914)) ([12cc939](https://github.com/videojs/v10/commit/12cc939f58f4ad2db7218374d96c5aa690ca49e5))
+* **i18n:** improve time inversion labels ([#2028](https://github.com/videojs/v10/issues/2028)) ([eeb216a](https://github.com/videojs/v10/commit/eeb216ad2f7dbfe83ec214cb49fc7fb990ff1a7f))
+* **media:** announce a cleared source on every embed host ([#2217](https://github.com/videojs/v10/issues/2217)) ([c3cbc13](https://github.com/videojs/v10/commit/c3cbc132257c2344aee032eec72970d1f8bd770f))
+* **media:** hook the media's actual playback engine in mux data ([#2040](https://github.com/videojs/v10/issues/2040)) ([501af91](https://github.com/videojs/v10/commit/501af9168c92a3ef757ff6de010c86a495df11f4))
+* **utils:** stop enumerating input objects in defaults ([#2140](https://github.com/videojs/v10/issues/2140)) ([edc1dee](https://github.com/videojs/v10/commit/edc1dee347943e72c7222c8ffd43f8b75d169246))
+
 ## [10.0.0-beta.26](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-beta.25...@videojs/utils@10.0.0-beta.26) (2026-08-02)
 
 

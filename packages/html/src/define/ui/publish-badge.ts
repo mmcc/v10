@@ -1,5 +1,5 @@
+import { safeDefine } from '../../registration/safe-define';
 import { PublishBadgeElement } from '../../ui/publish-badge/publish-badge-element';
-import { safeDefine } from '../safe-define';
 
 safeDefine(PublishBadgeElement);
 

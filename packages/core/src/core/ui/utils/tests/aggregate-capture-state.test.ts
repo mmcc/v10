@@ -1,5 +1,5 @@
 import type { MediaCaptureState } from '@videojs/media';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 
 import type { AggregatableCaptureSource } from '../aggregate-capture-state';
 import { aggregateCaptureState } from '../aggregate-capture-state';
@@ -75,6 +75,7 @@ describe('aggregateCaptureState', () => {
     for (const status of PRECEDENCE) {
       expect(aggregateCaptureState(source({ micState: status }))).toBe('idle');
     }
+
     expect(aggregateCaptureState(source({ cameraState: 'ended', micState: 'active' }))).toBe('ended');
     expect(aggregateCaptureState(source({ cameraState: 'acquiring', micState: 'denied' }))).toBe('acquiring');
   });
