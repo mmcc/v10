@@ -26,8 +26,10 @@ video.muted = muteToggle.checked;
 
 function log(msg: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') {
   const timestamp = new Date().toLocaleTimeString();
+
   console.log(`[moq] ${msg}`);
   const div = document.createElement('div');
+
   div.className = type;
   div.textContent = `[${timestamp}] ${msg}`;
   logsDiv.appendChild(div);
@@ -38,11 +40,13 @@ function log(msg: string, type: 'info' | 'success' | 'error' | 'warning' = 'info
 // only console.error'd — see the <simple-moq-video> mount warning), so
 // mirror console output into the panel rather than requiring devtools.
 const originalConsoleError = console.error.bind(console);
+
 console.error = (...args: unknown[]) => {
   originalConsoleError(...args);
   log(`console.error: ${args.map(String).join(' ')}`, 'error');
 };
 const originalConsoleWarn = console.warn.bind(console);
+
 console.warn = (...args: unknown[]) => {
   originalConsoleWarn(...args);
   log(`console.warn: ${args.map(String).join(' ')}`, 'warning');
@@ -68,6 +72,7 @@ const MEDIA_EVENTS = [
 for (const type of MEDIA_EVENTS) {
   video.addEventListener(type, () => log(`event: ${type}`));
 }
+
 video.addEventListener('error', () => log(`event: error — ${JSON.stringify(video.error)}`, 'error'));
 
 function loadSrc(src: string) {
@@ -117,11 +122,14 @@ effect(() => {
 });
 
 let lastStatus: string | undefined;
+
 effect(() => {
   const snapshot = video.engine.context.moqSessionActor.get()?.snapshot.get();
   const status = snapshot?.context.status;
   if (status === lastStatus) return;
+
   lastStatus = status;
+
   if (status === 'ready') log('MOQT session ready', 'success');
   else if (status === 'failed') log(`MOQT session failed: ${snapshot?.context.error}`, 'error');
   else if (status === 'closed') log('MOQT session closed', 'warning');

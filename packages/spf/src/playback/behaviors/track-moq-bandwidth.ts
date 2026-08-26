@@ -1,21 +1,16 @@
 /**
- * **Feed MoQ object-arrival timing into `bandwidthState`.** Samples come
- * from push-delivery arrival gaps (each subscriber records its last
- * object's payload size and inter-arrival time) instead of HTTP chunk
- * timing — everything downstream, including `track-switching`'s
- * `rankByBandwidth` ABR, works unchanged.
+ * **Feed MoQ object-arrival timing into `bandwidthState`.** Samples come from push-delivery arrival gaps (each
+ * subscriber records its last object's payload size and inter-arrival time) instead of HTTP chunk timing — everything
+ * downstream, including `track-switching`'s `rankByBandwidth` ABR, works unchanged.
  *
- * Push samples are much smaller than segment downloads, so the default
- * filter thresholds are MoQ-tuned (`DEFAULT_MOQ_BANDWIDTH_CONFIG`): a
- * video frame is a few KB arriving every few tens of milliseconds, which
- * the segment-tuned `minBytes`/`minDuration` defaults would discard
- * entirely. The EWMA smoothing absorbs the extra per-sample noise.
+ * Push samples are much smaller than segment downloads, so the default filter thresholds are MoQ-tuned
+ * (`DEFAULT_MOQ_BANDWIDTH_CONFIG`): a video frame is a few KB arriving every few tens of milliseconds, which the
+ * segment-tuned `minBytes`/`minDuration` defaults would discard entirely. The EWMA smoothing absorbs the extra
+ * per-sample noise.
  *
- * Reads both per-type subscriber slots. Effects are microtask-batched, so
- * burst arrivals collapse into one run — the subscriber therefore exposes
- * *cumulative* totals, and each run feeds the delta since the totals it
- * last consumed as one aggregate sample (the duration-weighted EWMA
- * handles aggregates), losing no bytes to batching.
+ * Reads both per-type subscriber slots. Effects are microtask-batched, so burst arrivals collapse into one run — the
+ * subscriber therefore exposes _cumulative_ totals, and each run feeds the delta since the totals it last consumed as
+ * one aggregate sample (the duration-weighted EWMA handles aggregates), losing no bytes to batching.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import { effect } from '../../core/signals/effect';
@@ -72,16 +67,21 @@ function setupTrackMoqBandwidth({
 
   const sampleFrom = (subscriber: TrackSubscriberActor | undefined): void => {
     if (!subscriber) return;
+
     const arrivals = subscriber.snapshot.get().context.arrivals;
     if (!arrivals) return;
+
     const previous = consumed.get(subscriber);
     if (previous?.seq === arrivals.seq) return;
+
     consumed.set(subscriber, arrivals);
     const bytes = arrivals.totalBytes - (previous?.totalBytes ?? 0);
     const durationMs = arrivals.totalDurationMs - (previous?.totalDurationMs ?? 0);
     if (durationMs <= 0) return;
+
     const current = peek(state.bandwidthState);
     if (!current) return;
+
     state.bandwidthState.set(sampleBandwidth(current, durationMs, bytes, bandwidthConfig));
   };
 

@@ -1,9 +1,10 @@
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
-import { metadataFeature, type PlayerStore } from '@videojs/core/dom';
+import { features, metadataFeature, type PlayerStore } from '@videojs/core/dom';
 import { defineSlice } from '@videojs/store';
 import { Component, type ErrorInfo, type ReactNode, StrictMode, useState } from 'react';
 import { renderToString } from 'react-dom/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { I18nProvider, useLocale } from '../../i18n';
 import { Container } from '../../index';
 import { useContainer, usePlayerContext } from '../context';
@@ -65,6 +66,7 @@ describe('createPlayer', () => {
       );
 
       const destroySpy = vi.spyOn(store, 'destroy');
+
       unmount();
       vi.runAllTimers();
 
@@ -84,6 +86,7 @@ describe('createPlayer', () => {
       function TestComponent() {
         store = usePlayer();
         const { setMedia } = usePlayerContext();
+
         setMediaFn = setMedia;
         return null;
       }
@@ -95,6 +98,7 @@ describe('createPlayer', () => {
       );
 
       const originalStore = store;
+
       expect(originalStore.destroyed).toBe(false);
 
       // Simulate the Activity gap: the deferred timeout fires before React gets
@@ -126,18 +130,19 @@ describe('createPlayer', () => {
       }
 
       render(
-        <Player contentTitle="Replacement title">
+        <Player title="Replacement title">
           <Consumer />
         </Player>
       );
 
       const destroyedStore = store;
+
       destroyedStore.destroy();
 
       act(() => setMedia(document.createElement('video')));
 
       expect(store).not.toBe(destroyedStore);
-      expect(store.contentTitle).toBe('Replacement title');
+      expect(store.title).toBe('Replacement title');
     });
 
     it('survives React StrictMode without StoreError', () => {
@@ -227,49 +232,76 @@ describe('createPlayer', () => {
 
       function Consumer() {
         store = usePlayer();
-        return <span>{store.contentTitle}</span>;
+        return <span>{store.title}</span>;
       }
 
       const { rerender } = render(
-        <Player contentTitle="Initial title">
+        <Player title="Initial title">
           <Consumer />
         </Player>
       );
 
       expect(screen.getByText('Initial title')).toBeTruthy();
 
-      act(() => store.setDefaultContentTitle('Imperative fallback'));
       rerender(
-        <Player contentTitle="Initial title">
+        <Player title="Updated title">
+          <Consumer />
+        </Player>
+      );
+      expect(store.title).toBe('Updated title');
+
+      // Dropping the prop clears the override, leaving what the media carries.
+      rerender(
+        <Player>
+          <Consumer />
+        </Player>
+      );
+      expect(store.title).toBe('');
+    });
+
+    it('applies orientation lock configuration through props', () => {
+      const { Player, usePlayer } = createPlayer({ features: [features.orientationLock] });
+
+      let store!: PlayerStore<[typeof features.orientationLock]>;
+
+      function Consumer() {
+        store = usePlayer();
+        return <span>{store.orientationLockType}</span>;
+      }
+
+      const { rerender } = render(
+        <Player orientationLockType="portrait">
           <Consumer />
         </Player>
       );
 
+      expect(screen.getByText('portrait')).toBeTruthy();
+
       rerender(
-        <Player contentTitle="Updated title">
+        <Player orientationLockType="natural">
           <Consumer />
         </Player>
       );
-      expect(store.contentTitle).toBe('Updated title');
+      expect(store.orientationLockType).toBe('natural');
 
       rerender(
         <Player>
           <Consumer />
         </Player>
       );
-      expect(store.contentTitle).toBe('Imperative fallback');
+      expect(store.orientationLockType).toBe('landscape');
     });
 
     it('seeds config inputs during SSR', () => {
       const { Player, usePlayer } = createPlayer({ features: [metadataFeature] });
 
       function Consumer() {
-        return <span>{usePlayer((state) => state.contentTitle)}</span>;
+        return <span>{usePlayer((state) => state.title)}</span>;
       }
 
       expect(
         renderToString(
-          <Player contentTitle="SSR title">
+          <Player title="SSR title">
             <Consumer />
           </Player>
         )
@@ -280,18 +312,19 @@ describe('createPlayer', () => {
       const { Player, usePlayer } = createPlayer({ features: [metadataFeature] });
 
       function Consumer() {
-        return <span>{usePlayer((state) => state.contentTitle)}</span>;
+        return <span>{usePlayer((state) => state.title)}</span>;
       }
 
       const container = document.createElement('div');
+
       container.innerHTML = renderToString(
-        <Player contentTitle="Hydrated title">
+        <Player title="Hydrated title">
           <Consumer />
         </Player>
       );
 
       const view = render(
-        <Player contentTitle="Hydrated title">
+        <Player title="Hydrated title">
           <Consumer />
         </Player>,
         { container, hydrate: true }
@@ -324,14 +357,16 @@ describe('createPlayer', () => {
 
       function Consumer({ fail = false }: { fail?: boolean }) {
         store = usePlayer();
+
         if (fail) throw new Error('abandon render');
+
         return null;
       }
 
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       const { rerender } = render(
         <Boundary>
-          <Player contentTitle="Committed title">
+          <Player title="Committed title">
             <Consumer />
           </Player>
         </Boundary>
@@ -340,13 +375,13 @@ describe('createPlayer', () => {
 
       rerender(
         <Boundary>
-          <Player contentTitle="Abandoned title">
+          <Player title="Abandoned title">
             <Consumer fail />
           </Player>
         </Boundary>
       );
 
-      expect(committedStore.contentTitle).toBe('Committed title');
+      expect(committedStore.title).toBe('Committed title');
       consoleError.mockRestore();
     });
 
@@ -357,6 +392,7 @@ describe('createPlayer', () => {
       function Locale() {
         const container = useContainer();
         const locale = useLocale();
+
         return <span>{container ? locale : 'pending'}</span>;
       }
 
@@ -379,6 +415,7 @@ describe('createPlayer', () => {
       function Locale() {
         const container = useContainer();
         const locale = useLocale();
+
         return <span>{container ? locale : 'pending'}</span>;
       }
 
@@ -404,13 +441,16 @@ describe('createPlayer', () => {
 
       function ContextConsumer() {
         const ctx = usePlayerContext();
+
         receivedValues.push(ctx);
         return null;
       }
 
       let forceParentRerender!: () => void;
+
       function Parent() {
         const [, setTick] = useState(0);
+
         forceParentRerender = () => setTick((t) => t + 1);
         return (
           <Player>
@@ -503,10 +543,12 @@ describe('createPlayer', () => {
 
       // Container should render
       const containerEl = container.querySelector('[data-testid="container"]');
+
       expect(containerEl).toBeTruthy();
 
       // Video should render inside container
       const videoEl = container.querySelector('[data-testid="video"]');
+
       expect(videoEl).toBeTruthy();
     });
   });

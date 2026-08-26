@@ -3,24 +3,19 @@
  *
  * Every control or request-stream message is framed as:
  *
- * ```
- * MOQT Control Message {
- *   Message Type (vi64),
- *   Message Length (16),
- *   Message Body (..),
- * }
- * ```
+ *     MOQT Control Message {
+ *       Message Type (vi64),
+ *       Message Length (16),
+ *       Message Body (..),
+ *     }
  *
- * Scope follows the subscribe-only engine: the encoders cover what a
- * subscriber sends (SETUP, SUBSCRIBE, FETCH, TRACK_STATUS,
- * SUBSCRIBE_NAMESPACE, REQUEST_UPDATE, GOAWAY, and REQUEST_OK /
- * REQUEST_ERROR responses to incoming PUBLISH); the decoders cover what it
- * receives. All draft-version specifics live in this directory — this is
- * the churn-absorption layer for pre-WGLC drafts.
+ * Scope follows the subscribe-only engine: the encoders cover what a subscriber sends (SETUP, SUBSCRIBE, FETCH,
+ * TRACK_STATUS, SUBSCRIBE_NAMESPACE, REQUEST_UPDATE, GOAWAY, and REQUEST_OK / REQUEST_ERROR responses to incoming
+ * PUBLISH); the decoders cover what it receives. All draft-version specifics live in this directory — this is the
+ * churn-absorption layer for pre-WGLC drafts.
  *
- * Namespace fields and track names are byte strings on the wire; this
- * codec surfaces them as UTF-8 `string`s, which is what MSF (the streaming
- * format this engine speaks) constrains them to.
+ * Namespace fields and track names are byte strings on the wire; this codec surfaces them as UTF-8 `string`s, which is
+ * what MSF (the streaming format this engine speaks) constrains them to.
  */
 import { ByteReader, ByteWriter, utf8Decode, utf8Encode } from './bytes';
 import { MoqtProtocolError } from './errors';
@@ -31,9 +26,8 @@ import { decodeVarint } from './varint';
 // ============================================================================
 
 /**
- * ALPN / WebTransport protocol identifier for the implemented draft.
- * Version negotiation happens at connection time (`WT-Available-Protocols`
- * in WebTransport, ALPN in native QUIC) — not in SETUP.
+ * ALPN / WebTransport protocol identifier for the implemented draft. Version negotiation happens at connection time
+ * (`WT-Available-Protocols` in WebTransport, ALPN in native QUIC) — not in SETUP.
  */
 export const MOQT_PROTOCOL_ID = 'moqt-19';
 
@@ -130,13 +124,10 @@ export const PUBLISH_DONE_STATUS = {
 } as const;
 
 /**
- * REQUEST_ERROR codes for which an identical retry can never succeed: the
- * request or its credentials are wrong in a way that does not change
- * between attempts. Everything else — including codes this table does not
- * know — is treated as retryable, so a relay introducing a new transient
- * code degrades to paced retries rather than a dead player.
- * EXPIRED_AUTH_TOKEN is deliberately absent: it has its own refresh path
- * wherever requests are retried.
+ * REQUEST_ERROR codes for which an identical retry can never succeed: the request or its credentials are wrong in a way
+ * that does not change between attempts. Everything else — including codes this table does not know — is treated as
+ * retryable, so a relay introducing a new transient code degrades to paced retries rather than a dead player.
+ * EXPIRED_AUTH_TOKEN is deliberately absent: it has its own refresh path wherever requests are retried.
  */
 const PERMANENT_REQUEST_ERROR_CODES: ReadonlySet<number> = new Set([
   REQUEST_ERROR_CODE.UNAUTHORIZED,
@@ -160,25 +151,20 @@ const PERMANENT_REQUEST_ERROR_CODES: ReadonlySet<number> = new Set([
 ]);
 
 /**
- * Whether a failed request is worth re-issuing unchanged after a backoff.
- * The transient family (`DOES_NOT_EXIST` while a broadcast has not started,
- * `TIMEOUT`, `INTERNAL_ERROR`, overload, `GOING_AWAY`) reflects relay or
- * publisher *state* that time can fix; the permanent family reflects the
- * request itself and loops forever if retried.
+ * Whether a failed request is worth re-issuing unchanged after a backoff. The transient family (`DOES_NOT_EXIST` while
+ * a broadcast has not started, `TIMEOUT`, `INTERNAL_ERROR`, overload, `GOING_AWAY`) reflects relay or publisher _state_
+ * that time can fix; the permanent family reflects the request itself and loops forever if retried.
  */
 export function isRetryableRequestErrorCode(errorCode: number): boolean {
   return !PERMANENT_REQUEST_ERROR_CODES.has(errorCode);
 }
 
 /**
- * PUBLISH_DONE statuses after which an identical re-subscribe can never
- * succeed: auth-shaped ends (same credentials the relay just rejected) and
- * a malformed track (same request re-earns the same end; a publisher fix
- * arrives as a catalog update through fresh state). Every other status
- * describes publisher/relay state a broadcaster restart or live-edge
- * rejoin legitimately recovers from (`TRACK_ENDED`, `GOING_AWAY`,
- * `TOO_FAR_BEHIND`, overload, …), and unknown statuses degrade to paced
- * retries for the same reason as {@link isRetryableRequestErrorCode}.
+ * PUBLISH_DONE statuses after which an identical re-subscribe can never succeed: auth-shaped ends (same credentials the
+ * relay just rejected) and a malformed track (same request re-earns the same end; a publisher fix arrives as a catalog
+ * update through fresh state). Every other status describes publisher/relay state a broadcaster restart or live-edge
+ * rejoin legitimately recovers from (`TRACK_ENDED`, `GOING_AWAY`, `TOO_FAR_BEHIND`, overload, …), and unknown statuses
+ * degrade to paced retries for the same reason as {@link isRetryableRequestErrorCode}.
  */
 const PERMANENT_PUBLISH_DONE_STATUSES: ReadonlySet<number> = new Set([
   PUBLISH_DONE_STATUS.UNAUTHORIZED,
@@ -229,10 +215,7 @@ export function compareLocations(a: Location, b: Location): number {
   return a.group - b.group || a.object - b.object;
 }
 
-/**
- * Track namespace as an ordered tuple of UTF-8 fields. Byte strings on the
- * wire; MSF constrains them to UTF-8 text.
- */
+/** Track namespace as an ordered tuple of UTF-8 fields. Byte strings on the wire; MSF constrains them to UTF-8 text. */
 export type TrackNamespace = string[];
 
 export interface FullTrackName {
@@ -244,46 +227,54 @@ function writeTrackNamespace(writer: ByteWriter, namespace: TrackNamespace): voi
   if (namespace.length > MAX_NAMESPACE_FIELDS) {
     throw new MoqtProtocolError(`track namespace has more than ${MAX_NAMESPACE_FIELDS} fields`);
   }
+
   writer.writeVarint(namespace.length);
+
   for (const field of namespace) {
     const bytes = utf8Encode(field);
     if (bytes.length === 0) throw new MoqtProtocolError('track namespace field must not be empty');
+
     writer.writeLengthPrefixed(bytes);
   }
 }
 
 function readTrackNamespace(reader: ByteReader): TrackNamespace {
   const fieldCount = reader.readVarint();
+
   if (fieldCount > MAX_NAMESPACE_FIELDS) {
     throw new MoqtProtocolError(`track namespace has more than ${MAX_NAMESPACE_FIELDS} fields`);
   }
+
   const namespace: TrackNamespace = [];
   let totalLength = 0;
+
   for (let i = 0; i < fieldCount; i++) {
     const length = reader.readVarint();
     if (length === 0) throw new MoqtProtocolError('track namespace field must not be empty');
+
     totalLength += length;
+
     if (totalLength > MAX_FULL_TRACK_NAME_LENGTH) {
       throw new MoqtProtocolError('track namespace exceeds 4096 bytes');
     }
+
     namespace.push(utf8Decode(reader.readBytes(length)));
   }
+
   return namespace;
 }
 
 function writeReasonPhrase(writer: ByteWriter, reason: string): void {
   const bytes = utf8Encode(reason);
-  if (bytes.length > MAX_REASON_PHRASE_LENGTH) {
-    throw new MoqtProtocolError('reason phrase exceeds 1024 bytes');
-  }
+  if (bytes.length > MAX_REASON_PHRASE_LENGTH) throw new MoqtProtocolError('reason phrase exceeds 1024 bytes');
+
   writer.writeLengthPrefixed(bytes);
 }
 
 function readReasonPhrase(reader: ByteReader): string {
   const length = reader.readVarint();
-  if (length > MAX_REASON_PHRASE_LENGTH) {
-    throw new MoqtProtocolError('reason phrase exceeds 1024 bytes');
-  }
+  if (length > MAX_REASON_PHRASE_LENGTH) throw new MoqtProtocolError('reason phrase exceeds 1024 bytes');
+
   return utf8Decode(reader.readBytes(length));
 }
 
@@ -301,9 +292,8 @@ function readLocation(reader: ByteReader): Location {
 // ============================================================================
 
 /**
- * A generic MOQT Key-Value-Pair. Even types carry a varint value, odd types
- * a byte field. Used for Setup Options and Track/Object Properties (message
- * parameters use per-type encodings instead — see `MessageParameters`).
+ * A generic MOQT Key-Value-Pair. Even types carry a varint value, odd types a byte field. Used for Setup Options and
+ * Track/Object Properties (message parameters use per-type encodings instead — see `MessageParameters`).
  */
 export interface KeyValuePair {
   type: number;
@@ -314,15 +304,20 @@ export interface KeyValuePair {
 export function encodeKeyValuePairs(writer: ByteWriter, pairs: readonly KeyValuePair[]): void {
   const sorted = [...pairs].sort((a, b) => a.type - b.type);
   let previousType = 0;
+
   for (const { type, value } of sorted) {
     writer.writeVarint(type - previousType);
     previousType = type;
+
     if (type % 2 === 0) {
       if (typeof value !== 'number') throw new MoqtProtocolError(`even KVP type ${type} requires a varint value`);
+
       writer.writeVarint(value);
     } else {
       if (typeof value === 'number') throw new MoqtProtocolError(`odd KVP type ${type} requires a byte value`);
+
       if (value.length > MAX_KVP_VALUE_LENGTH) throw new MoqtProtocolError('KVP value exceeds 2^16-1 bytes');
+
       writer.writeLengthPrefixed(value);
     }
   }
@@ -332,18 +327,24 @@ export function encodeKeyValuePairs(writer: ByteWriter, pairs: readonly KeyValue
 export function decodeKeyValuePairs(reader: ByteReader, endOffset: number): KeyValuePair[] {
   const pairs: KeyValuePair[] = [];
   let previousType = 0;
+
   while (reader.offset < endOffset) {
     const type = previousType + reader.readVarint();
+
     previousType = type;
+
     if (type % 2 === 0) {
       pairs.push({ type, value: reader.readVarint() });
     } else {
       const length = reader.readVarint();
       if (length > MAX_KVP_VALUE_LENGTH) throw new MoqtProtocolError('KVP value exceeds 2^16-1 bytes');
+
       pairs.push({ type, value: reader.readBytes(length) });
     }
   }
+
   if (reader.offset !== endOffset) throw new MoqtProtocolError('KVP block overran its bound');
+
   return pairs;
 }
 
@@ -366,13 +367,17 @@ const LOCATION_FILTER_TYPE = {
 
 export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
   const writer = new ByteWriter(32);
+
   writer.writeVarint(LOCATION_FILTER_TYPE[filter.type]);
+
   if (filter.type === 'absolute-start' || filter.type === 'absolute-range') {
     writeLocation(writer, filter.start);
   }
+
   if (filter.type === 'absolute-range') {
     writer.writeVarint(filter.endGroupDelta);
   }
+
   return writer.toBytes();
 }
 
@@ -393,9 +398,11 @@ export function decodeLocationFilter(bytes: Uint8Array): LocationFilter {
         throw new MoqtProtocolError(`unknown location filter type ${type}`);
     }
   })();
+
   if (reader.remaining !== 0) {
     throw new MoqtProtocolError('location filter has trailing bytes');
   }
+
   return filter;
 }
 
@@ -406,11 +413,9 @@ export function decodeLocationFilter(bytes: Uint8Array): LocationFilter {
 export type GroupOrder = 'ascending' | 'descending';
 
 /**
- * Decoded message parameters. Unlike Setup Options, message parameters use
- * per-type encodings (uint8 / varint / Location / length-prefixed), so the
- * codec is registry-driven. Per §10.2 an unknown parameter type is a
- * PROTOCOL_VIOLATION (parameters cannot be skipped — the block is bounded
- * by count, not length).
+ * Decoded message parameters. Unlike Setup Options, message parameters use per-type encodings (uint8 / varint /
+ * Location / length-prefixed), so the codec is registry-driven. Per §10.2 an unknown parameter type is a
+ * PROTOCOL_VIOLATION (parameters cannot be skipped — the block is bounded by count, not length).
  */
 export interface MessageParameters {
   objectDeliveryTimeout?: number;
@@ -445,55 +450,71 @@ function collectParameterEntries(parameters: MessageParameters): ParameterEntry[
   if (parameters.objectDeliveryTimeout !== undefined) {
     push(PARAMETER_TYPE.OBJECT_DELIVERY_TIMEOUT, (w) => w.writeVarint(parameters.objectDeliveryTimeout!));
   }
+
   if (parameters.subgroupDeliveryTimeout !== undefined) {
     push(PARAMETER_TYPE.SUBGROUP_DELIVERY_TIMEOUT, (w) => w.writeVarint(parameters.subgroupDeliveryTimeout!));
   }
+
   if (parameters.rendezvousTimeout !== undefined) {
     push(PARAMETER_TYPE.RENDEZVOUS_TIMEOUT, (w) => w.writeVarint(parameters.rendezvousTimeout!));
   }
+
   if (parameters.fillTimeout !== undefined) {
     push(PARAMETER_TYPE.FILL_TIMEOUT, (w) => w.writeVarint(parameters.fillTimeout!));
   }
+
   for (const token of parameters.authorizationTokens ?? []) {
     push(PARAMETER_TYPE.AUTHORIZATION_TOKEN, (w) => w.writeLengthPrefixed(token));
   }
+
   if (parameters.expires !== undefined) {
     push(PARAMETER_TYPE.EXPIRES, (w) => w.writeVarint(parameters.expires!));
   }
+
   if (parameters.largestObject !== undefined) {
     push(PARAMETER_TYPE.LARGEST_OBJECT, (w) => writeLocation(w, parameters.largestObject!));
   }
+
   if (parameters.forward !== undefined) {
     push(PARAMETER_TYPE.FORWARD, (w) => w.writeUint8(parameters.forward!));
   }
+
   if (parameters.subscriberPriority !== undefined) {
     push(PARAMETER_TYPE.SUBSCRIBER_PRIORITY, (w) => w.writeUint8(parameters.subscriberPriority!));
   }
+
   if (parameters.locationFilter !== undefined) {
     push(PARAMETER_TYPE.LOCATION_FILTER, (w) =>
       w.writeLengthPrefixed(encodeLocationFilter(parameters.locationFilter!))
     );
   }
+
   if (parameters.groupOrder !== undefined) {
     push(PARAMETER_TYPE.GROUP_ORDER, (w) => w.writeUint8(GROUP_ORDER_WIRE[parameters.groupOrder!]));
   }
+
   if (parameters.newGroupRequest !== undefined) {
     push(PARAMETER_TYPE.NEW_GROUP_REQUEST, (w) => w.writeVarint(parameters.newGroupRequest!));
   }
+
   for (const filter of parameters.rangeFilters ?? []) {
     push(filter.type, (w) => w.writeLengthPrefixed(filter.value));
   }
+
   if (parameters.trackNamespacePrefix !== undefined) {
     push(PARAMETER_TYPE.TRACK_NAMESPACE_PREFIX, (w) => writeTrackNamespace(w, parameters.trackNamespacePrefix!));
   }
+
   return entries;
 }
 
 /** Serialize as `Number of Parameters (vi64)` + delta-typed parameter list. */
 export function encodeMessageParameters(writer: ByteWriter, parameters: MessageParameters = {}): void {
   const entries = collectParameterEntries(parameters).sort((a, b) => a.type - b.type);
+
   writer.writeVarint(entries.length);
   let previousType = 0;
+
   for (const entry of entries) {
     writer.writeVarint(entry.type - previousType);
     previousType = entry.type;
@@ -513,9 +534,12 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
   const count = reader.readVarint();
   const parameters: MessageParameters = {};
   let previousType = 0;
+
   for (let i = 0; i < count; i++) {
     const type = previousType + reader.readVarint();
+
     previousType = type;
+
     switch (type) {
       case PARAMETER_TYPE.OBJECT_DELIVERY_TIMEOUT:
         parameters.objectDeliveryTimeout = reader.readVarint();
@@ -531,6 +555,7 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
         break;
       case PARAMETER_TYPE.AUTHORIZATION_TOKEN: {
         const token = reader.readBytes(reader.readVarint());
+
         (parameters.authorizationTokens ??= []).push(token);
         break;
       }
@@ -543,6 +568,7 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
       case PARAMETER_TYPE.FORWARD: {
         const forward = reader.readUint8();
         if (forward !== 0 && forward !== 1) throw new MoqtProtocolError(`invalid FORWARD value ${forward}`);
+
         parameters.forward = forward;
         break;
       }
@@ -555,6 +581,7 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
       case PARAMETER_TYPE.GROUP_ORDER: {
         const order = reader.readUint8();
         if (order !== 0x1 && order !== 0x2) throw new MoqtProtocolError(`invalid GROUP_ORDER value ${order}`);
+
         parameters.groupOrder = order === 0x1 ? 'ascending' : 'descending';
         break;
       }
@@ -567,15 +594,18 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
       default: {
         if (RANGE_FILTER_TYPES.includes(type)) {
           const value = reader.readBytes(reader.readVarint());
+
           (parameters.rangeFilters ??= []).push({ type, value });
           break;
         }
+
         // §10.2: unknown parameters cannot be skipped (the block is bounded
         // by count, and the value encoding is per-type) — session error.
         throw new MoqtProtocolError(`unknown message parameter type ${type}`);
       }
     }
   }
+
   return parameters;
 }
 
@@ -584,12 +614,12 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
 // ============================================================================
 
 /**
- * Serialize a Token structure with Alias Type USE_VALUE (0x3) — the
- * stateless form the engine uses to attach an MSF-provided token to a
- * request without alias registration.
+ * Serialize a Token structure with Alias Type USE_VALUE (0x3) — the stateless form the engine uses to attach an
+ * MSF-provided token to a request without alias registration.
  */
 export function encodeAuthTokenUseValue(tokenType: number, value: Uint8Array): Uint8Array {
   const writer = new ByteWriter(value.length + 8);
+
   writer.writeVarint(0x3);
   writer.writeVarint(tokenType);
   writer.writeBytes(value);
@@ -608,10 +638,13 @@ export interface ControlMessageFrame {
 
 function frameMessage(type: number, body: ByteWriter): Uint8Array {
   const bodyBytes = body.toBytes();
+
   if (bodyBytes.length > MAX_CONTROL_MESSAGE_LENGTH) {
     throw new MoqtProtocolError('control message exceeds 2^16-1 bytes');
   }
+
   const writer = new ByteWriter(bodyBytes.length + 8);
+
   writer.writeVarint(type);
   writer.writeUint16(bodyBytes.length);
   writer.writeBytes(bodyBytes);
@@ -619,9 +652,8 @@ function frameMessage(type: number, body: ByteWriter): Uint8Array {
 }
 
 /**
- * Incremental control-message deframer. Feed it stream chunks; it yields
- * complete `ControlMessageFrame`s as they materialize. Used for both the
- * control streams and request streams (same framing).
+ * Incremental control-message deframer. Feed it stream chunks; it yields complete `ControlMessageFrame`s as they
+ * materialize. Used for both the control streams and request streams (same framing).
  */
 export class ControlMessageDeframer {
   #buffer: Uint8Array = new Uint8Array(0);
@@ -631,6 +663,7 @@ export class ControlMessageDeframer {
       this.#buffer = chunk;
     } else {
       const merged = new Uint8Array(this.#buffer.length + chunk.length);
+
       merged.set(this.#buffer);
       merged.set(chunk, this.#buffer.length);
       this.#buffer = merged;
@@ -638,12 +671,15 @@ export class ControlMessageDeframer {
 
     const frames: ControlMessageFrame[] = [];
     let offset = 0;
+
     while (true) {
       const frame = this.#tryReadFrame(offset);
       if (!frame) break;
+
       frames.push(frame.frame);
       offset = frame.nextOffset;
     }
+
     this.#buffer = offset > 0 ? this.#buffer.subarray(offset) : this.#buffer;
     return frames;
   }
@@ -656,21 +692,28 @@ export class ControlMessageDeframer {
   #tryReadFrame(offset: number): { frame: ControlMessageFrame; nextOffset: number } | null {
     const buffer = this.#buffer;
     if (offset >= buffer.length) return null;
+
     let type: number;
     let headerLength: number;
+
     try {
       const decoded = decodeVarint(buffer, offset);
+
       type = decoded.value;
       headerLength = decoded.byteLength;
     } catch (error) {
       // Incomplete varint — wait for more bytes.
       if (error instanceof RangeError) return null;
+
       throw error;
     }
+
     if (offset + headerLength + 2 > buffer.length) return null;
+
     const length = buffer[offset + headerLength]! * 256 + buffer[offset + headerLength + 1]!;
     const bodyStart = offset + headerLength + 2;
     if (bodyStart + length > buffer.length) return null;
+
     return {
       frame: { type, body: buffer.slice(bodyStart, bodyStart + length) },
       nextOffset: bodyStart + length,
@@ -685,6 +728,7 @@ export class ControlMessageDeframer {
 /** SETUP (§10.3) — first message on the endpoint's control stream. */
 export function encodeSetup(options: readonly KeyValuePair[] = []): Uint8Array {
   const body = new ByteWriter();
+
   encodeKeyValuePairs(body, options);
   return frameMessage(MESSAGE_TYPE.SETUP, body);
 }
@@ -699,6 +743,7 @@ export interface SubscribeRequest {
 /** SUBSCRIBE (§10.7) — first message on a new request stream. */
 export function encodeSubscribe(request: SubscribeRequest): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(request.requestId);
   writeTrackNamespace(body, request.trackNamespace);
   body.writeLengthPrefixed(utf8Encode(request.trackName));
@@ -709,6 +754,7 @@ export function encodeSubscribe(request: SubscribeRequest): Uint8Array {
 /** TRACK_STATUS (§10.14) — identical wire format to SUBSCRIBE. */
 export function encodeTrackStatus(request: SubscribeRequest): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(request.requestId);
   writeTrackNamespace(body, request.trackNamespace);
   body.writeLengthPrefixed(utf8Encode(request.trackName));
@@ -742,8 +788,10 @@ const FETCH_TYPE_WIRE = { standalone: 0x1, 'relative-joining': 0x2, 'absolute-jo
 /** FETCH (§10.12) — first message on a new request stream. */
 export function encodeFetch(request: FetchRequest): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(request.requestId);
   body.writeVarint(FETCH_TYPE_WIRE[request.type]);
+
   if (request.type === 'standalone') {
     writeTrackNamespace(body, request.trackNamespace);
     body.writeLengthPrefixed(utf8Encode(request.trackName));
@@ -753,6 +801,7 @@ export function encodeFetch(request: FetchRequest): Uint8Array {
     body.writeVarint(request.joiningRequestId);
     body.writeVarint(request.joiningStart);
   }
+
   encodeMessageParameters(body, request.parameters);
   return frameMessage(MESSAGE_TYPE.FETCH, body);
 }
@@ -766,6 +815,7 @@ export interface SubscribeNamespaceRequest {
 /** SUBSCRIBE_NAMESPACE (§10.18) — first message on a new request stream. */
 export function encodeSubscribeNamespace(request: SubscribeNamespaceRequest): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(request.requestId);
   writeTrackNamespace(body, request.trackNamespacePrefix);
   encodeMessageParameters(body, request.parameters);
@@ -775,28 +825,31 @@ export function encodeSubscribeNamespace(request: SubscribeNamespaceRequest): Ui
 /** REQUEST_UPDATE (§10.9) — sent on an existing request stream. */
 export function encodeRequestUpdate(requestId: number, parameters: MessageParameters = {}): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(requestId);
   encodeMessageParameters(body, parameters);
   return frameMessage(MESSAGE_TYPE.REQUEST_UPDATE, body);
 }
 
 /**
- * GOAWAY (§10.4). Clients MUST send a zero-length New Session URI, so the
- * encoder takes only the timeout (milliseconds; 0 = no specific timeout).
+ * GOAWAY (§10.4). Clients MUST send a zero-length New Session URI, so the encoder takes only the timeout (milliseconds;
+ * 0 = no specific timeout).
  */
 export function encodeGoaway(timeout = 0): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(0);
   body.writeVarint(timeout);
   return frameMessage(MESSAGE_TYPE.GOAWAY, body);
 }
 
 /**
- * REQUEST_OK (§10.5). The subscriber sends this to accept an incoming
- * PUBLISH (PUBLISH_OK). Track Properties are always empty in that role.
+ * REQUEST_OK (§10.5). The subscriber sends this to accept an incoming PUBLISH (PUBLISH_OK). Track Properties are always
+ * empty in that role.
  */
 export function encodeRequestOk(parameters: MessageParameters = {}): Uint8Array {
   const body = new ByteWriter();
+
   encodeMessageParameters(body, parameters);
   return frameMessage(MESSAGE_TYPE.REQUEST_OK, body);
 }
@@ -804,6 +857,7 @@ export function encodeRequestOk(parameters: MessageParameters = {}): Uint8Array 
 /** REQUEST_ERROR (§10.6) without a Redirect — enough to reject incoming requests. */
 export function encodeRequestError(errorCode: number, reason = '', retryInterval = 0): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(errorCode);
   body.writeVarint(retryInterval);
   writeReasonPhrase(body, reason);
@@ -825,6 +879,7 @@ export function encodeSubscribeOk(
   trackProperties: readonly KeyValuePair[] = []
 ): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(trackAlias);
   encodeMessageParameters(body, parameters);
   encodeKeyValuePairs(body, trackProperties);
@@ -834,6 +889,7 @@ export function encodeSubscribeOk(
 /** PUBLISH_DONE (§10.11). */
 export function encodePublishDone(statusCode: number, streamCount: number, reason = ''): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(statusCode);
   body.writeVarint(streamCount);
   writeReasonPhrase(body, reason);
@@ -848,6 +904,7 @@ export function encodeFetchOk(
   trackProperties: readonly KeyValuePair[] = []
 ): Uint8Array {
   const body = new ByteWriter();
+
   body.writeUint8(endOfTrack ? 1 : 0);
   writeLocation(body, endLocation);
   encodeMessageParameters(body, parameters);
@@ -861,6 +918,7 @@ export function encodePublish(
   trackProperties: readonly KeyValuePair[] = []
 ): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(request.requestId);
   writeTrackNamespace(body, request.trackNamespace);
   body.writeLengthPrefixed(utf8Encode(request.trackName));
@@ -879,6 +937,7 @@ export interface PublishNamespaceRequest {
 /** PUBLISH_NAMESPACE (§10.15) — a publisher announcing a namespace. */
 export function encodePublishNamespace(request: PublishNamespaceRequest): Uint8Array {
   const body = new ByteWriter();
+
   body.writeVarint(request.requestId);
   writeTrackNamespace(body, request.trackNamespace);
   encodeMessageParameters(body, request.parameters);
@@ -951,19 +1010,19 @@ function readRedirect(reader: ByteReader): Redirect {
   const trackNamespace = readTrackNamespace(reader);
   const nameLength = reader.readVarint();
   const trackName = utf8Decode(reader.readBytes(nameLength));
+
   return { connectUri, trackNamespace, trackName };
 }
 
 /**
- * Decode one control-message frame into a typed message. Throws
- * `MoqtProtocolError` for unknown message types (§10: "An endpoint that
- * receives an unknown message type MUST close the session") and for
- * malformed bodies.
+ * Decode one control-message frame into a typed message. Throws `MoqtProtocolError` for unknown message types (§10: "An
+ * endpoint that receives an unknown message type MUST close the session") and for malformed bodies.
  */
 export function decodeControlMessage(frame: ControlMessageFrame): ControlMessage {
   const reader = new ByteReader(frame.body);
   const end = frame.body.length;
   let message: ControlMessage;
+
   try {
     message = decodeControlMessageBody(frame.type, reader, end);
   } catch (error) {
@@ -974,11 +1033,14 @@ export function decodeControlMessage(frame: ControlMessageFrame): ControlMessage
     if (error instanceof RangeError) {
       throw new MoqtProtocolError(`control message 0x${frame.type.toString(16)} body is truncated`);
     }
+
     throw error;
   }
+
   if (reader.offset !== end) {
     throw new MoqtProtocolError(`control message 0x${frame.type.toString(16)} body length mismatch`);
   }
+
   return message;
 }
 
@@ -988,37 +1050,46 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
       return { kind: 'setup', options: decodeKeyValuePairs(reader, end) };
     case MESSAGE_TYPE.GOAWAY: {
       const uriLength = reader.readVarint();
+
       if (uriLength > MAX_NEW_SESSION_URI_LENGTH) {
         throw new MoqtProtocolError('GOAWAY new session URI exceeds 8192 bytes');
       }
+
       const newSessionUri = utf8Decode(reader.readBytes(uriLength));
+
       return { kind: 'goaway', newSessionUri, timeout: reader.readVarint() };
     }
     case MESSAGE_TYPE.SUBSCRIBE_OK: {
       const trackAlias = reader.readVarint();
       const parameters = decodeMessageParameters(reader);
+
       return { kind: 'subscribe-ok', trackAlias, parameters, trackProperties: decodeKeyValuePairs(reader, end) };
     }
     case MESSAGE_TYPE.REQUEST_OK: {
       const parameters = decodeMessageParameters(reader);
+
       return { kind: 'request-ok', parameters, trackProperties: decodeKeyValuePairs(reader, end) };
     }
     case MESSAGE_TYPE.REQUEST_ERROR: {
       const errorCode = reader.readVarint();
       const retryInterval = reader.readVarint();
       const reason = readReasonPhrase(reader);
+
       if (errorCode === REQUEST_ERROR_CODE.REDIRECT) {
         return { kind: 'request-error', errorCode, retryInterval, reason, redirect: readRedirect(reader) };
       }
+
       return { kind: 'request-error', errorCode, retryInterval, reason };
     }
     case MESSAGE_TYPE.REQUEST_UPDATE: {
       const requestId = reader.readVarint();
+
       return { kind: 'request-update', requestId, parameters: decodeMessageParameters(reader) };
     }
     case MESSAGE_TYPE.PUBLISH_DONE: {
       const statusCode = reader.readVarint();
       const streamCount = reader.readVarint();
+
       return { kind: 'publish-done', statusCode, streamCount, reason: readReasonPhrase(reader) };
     }
     case MESSAGE_TYPE.PUBLISH: {
@@ -1027,6 +1098,7 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
       const trackName = utf8Decode(reader.readBytes(reader.readVarint()));
       const trackAlias = reader.readVarint();
       const parameters = decodeMessageParameters(reader);
+
       return {
         kind: 'publish',
         requestId,
@@ -1040,16 +1112,17 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
     case MESSAGE_TYPE.PUBLISH_NAMESPACE: {
       const requestId = reader.readVarint();
       const trackNamespace = readTrackNamespace(reader);
+
       return { kind: 'publish-namespace', requestId, trackNamespace, parameters: decodeMessageParameters(reader) };
     }
     case MESSAGE_TYPE.FETCH_OK: {
       const endOfTrackWire = reader.readUint8();
-      if (endOfTrackWire > 1) {
-        throw new MoqtProtocolError(`invalid FETCH_OK end-of-track value ${endOfTrackWire}`);
-      }
+      if (endOfTrackWire > 1) throw new MoqtProtocolError(`invalid FETCH_OK end-of-track value ${endOfTrackWire}`);
+
       const endOfTrack = endOfTrackWire === 1;
       const endLocation = readLocation(reader);
       const parameters = decodeMessageParameters(reader);
+
       return {
         kind: 'fetch-ok',
         endOfTrack,
@@ -1065,34 +1138,41 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
       const trackName = utf8Decode(reader.readBytes(reader.readVarint()));
       const parameters = decodeMessageParameters(reader);
       const kind = type === MESSAGE_TYPE.SUBSCRIBE ? 'subscribe' : 'track-status';
+
       return { kind, requestId, trackNamespace, trackName, parameters };
     }
     case MESSAGE_TYPE.FETCH: {
       const requestId = reader.readVarint();
       const fetchType = reader.readVarint();
+
       if (fetchType === FETCH_TYPE_WIRE.standalone) {
         const trackNamespace = readTrackNamespace(reader);
         const trackName = utf8Decode(reader.readBytes(reader.readVarint()));
         const startLocation = readLocation(reader);
         const endLocation = readLocation(reader);
         const parameters = decodeMessageParameters(reader);
+
         return {
           kind: 'fetch',
           request: { requestId, type: 'standalone', trackNamespace, trackName, startLocation, endLocation, parameters },
         };
       }
+
       if (fetchType !== FETCH_TYPE_WIRE['relative-joining'] && fetchType !== FETCH_TYPE_WIRE['absolute-joining']) {
         throw new MoqtProtocolError(`unknown fetch type ${fetchType}`);
       }
+
       const joiningRequestId = reader.readVarint();
       const joiningStart = reader.readVarint();
       const parameters = decodeMessageParameters(reader);
       const joiningType = fetchType === FETCH_TYPE_WIRE['relative-joining'] ? 'relative-joining' : 'absolute-joining';
+
       return { kind: 'fetch', request: { requestId, type: joiningType, joiningRequestId, joiningStart, parameters } };
     }
     case MESSAGE_TYPE.SUBSCRIBE_NAMESPACE: {
       const requestId = reader.readVarint();
       const trackNamespacePrefix = readTrackNamespace(reader);
+
       return {
         kind: 'subscribe-namespace',
         requestId,
@@ -1107,6 +1187,7 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
     case MESSAGE_TYPE.PUBLISH_SKIPPED: {
       const trackNamespaceSuffix = readTrackNamespace(reader);
       const trackName = utf8Decode(reader.readBytes(reader.readVarint()));
+
       return { kind: 'publish-skipped', trackNamespaceSuffix, trackName };
     }
     default:

@@ -1,6 +1,7 @@
-import { defineComponent } from '@videojs/jsx';
-import type { SliderProps } from './slider-core';
-import { SliderDataAttrs } from './slider-data-attrs';
+import { defineComponent } from 'vjsc/components';
+
+import type { SliderPreviewProps, SliderProps } from './core';
+import { SliderDataAttrs } from './data';
 
 export interface SliderValueProps {
   /** Which slider value to display. */
@@ -11,6 +12,7 @@ export interface SliderValueProps {
 
 export default defineComponent({
   name: 'Slider',
+  root: 'Root',
   parts: {
     Root: defineComponent<SliderProps>(),
     Track: defineComponent(),
@@ -23,7 +25,7 @@ export default defineComponent({
         Image: defineComponent(),
       },
     }),
-    Preview: defineComponent(),
+    Preview: defineComponent<SliderPreviewProps>(),
     Value: defineComponent<SliderValueProps>(),
   },
   dataAttrs: SliderDataAttrs,

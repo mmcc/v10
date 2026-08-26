@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
 import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
 import type { MoqtObject } from '../../../network/moqt/object-stream';
@@ -23,6 +24,7 @@ function createFakeSession() {
     ready: Promise.resolve(),
     subscribe(options: FakeSubscription['options'], handlers: SubscriptionHandlers = {}) {
       const record: FakeSubscription = { options, handlers, cancelled: false, requestId: nextRequestId };
+
       nextRequestId += 2;
       subscriptions.push(record);
       return {
@@ -38,6 +40,7 @@ function createFakeSession() {
     close: () => {},
     destroy: () => {},
   } as unknown as MoqtSession;
+
   return { session, subscriptions };
 }
 
@@ -164,6 +167,7 @@ describe('createTrackSubscriberActor', () => {
     // envelope would read as seconds of network jitter. The reset frame
     // seeds the fresh envelope.
     const jitter = subscriber.snapshot.get().context.arrivalJitter!;
+
     expect(jitter.epoch).toBe(epochBefore + 1);
     expect(jitter.sampleCount).toBe(1);
 
@@ -228,6 +232,7 @@ describe('createTrackSubscriberActor', () => {
     // first object only establishes the timing baseline — its bytes have
     // no arrival interval, so counting them would overstate throughput.
     const arrivals = subscriber.snapshot.get().context.arrivals!;
+
     expect(arrivals.seq).toBe(2);
     expect(arrivals.totalBytes).toBe(2); // second 2-byte locObject payload
     expect(arrivals.totalDurationMs).toBeGreaterThanOrEqual(0);
@@ -242,6 +247,7 @@ describe('createTrackSubscriberActor', () => {
   it('publishes a decaying arrival-offset envelope', () => {
     const now = vi.spyOn(performance, 'now');
     const { session, subscriptions } = createFakeSession();
+
     now.mockReturnValue(0);
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });
     const { handlers } = subscriptions[0]!;
@@ -270,6 +276,7 @@ describe('createTrackSubscriberActor', () => {
     // unbounded max (or min) is what makes this class of estimate drift
     // permanently pessimistic.
     for (let i = 2; i < 300; i++) deliver(i);
+
     expect(jitter().maxOffsetMs - jitter().minOffsetMs).toBeLessThan(5);
 
     subscriber.destroy();
@@ -333,11 +340,13 @@ describe('createTrackSubscriberActor', () => {
   it('transitions to ended on PUBLISH_DONE and error on REQUEST_ERROR', () => {
     const { session, subscriptions } = createFakeSession();
     const first = createTrackSubscriberActor({ session, track: TRACK });
+
     subscriptions[0]!.handlers.onDone?.({ statusCode: 0x2, streamCount: 3, reason: 'track ended' });
     expect(first.snapshot.get().context.status).toBe('ended');
     first.destroy();
 
     const second = createTrackSubscriberActor({ session, track: TRACK });
+
     subscriptions[1]!.handlers.onError?.({ errorCode: 0x10, retryInterval: 0, reason: 'gone' });
     expect(second.snapshot.get().context.status).toBe('error');
     // DOES_NOT_EXIST is transient (the track may appear) — recoverable.
@@ -378,6 +387,7 @@ describe('createTrackSubscriberActor', () => {
     // No refresh seam: the very first expiry is already unrecoverable.
     const bare = createFakeSession();
     const noSeam = createTrackSubscriberActor({ session: bare.session, track: TRACK });
+
     bare.subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 0,
@@ -393,6 +403,7 @@ describe('createTrackSubscriberActor', () => {
       throw new Error('no fresh token');
     });
     const refused = createTrackSubscriberActor({ session: giveUp.session, track: TRACK, refreshAuth });
+
     giveUp.subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 0,
@@ -409,6 +420,7 @@ describe('createTrackSubscriberActor', () => {
 
     // UNAUTHORIZED answers an identical retry identically.
     const refused = createTrackSubscriberActor({ session, track: TRACK });
+
     subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.UNAUTHORIZED,
       retryInterval: 0,
@@ -421,6 +433,7 @@ describe('createTrackSubscriberActor', () => {
     // An auth-shaped PUBLISH_DONE: the replacement would carry the same
     // credentials the relay just rejected.
     const authEnded = createTrackSubscriberActor({ session, track: TRACK });
+
     subscriptions[1]!.handlers.onDone?.({
       statusCode: PUBLISH_DONE_STATUS.UNAUTHORIZED,
       streamCount: 0,
@@ -432,6 +445,7 @@ describe('createTrackSubscriberActor', () => {
 
     // TRACK_ENDED is the ordinary broadcaster blip — fully recoverable.
     const blipped = createTrackSubscriberActor({ session, track: TRACK });
+
     subscriptions[2]!.handlers.onDone?.({
       statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
       streamCount: 0,
@@ -449,6 +463,7 @@ describe('createTrackSubscriberActor', () => {
     const now = vi.spyOn(performance, 'now');
     const { session, subscriptions } = createFakeSession();
     const refreshAuth = vi.fn(async () => ({ authorizationTokens: [new Uint8Array([1])] }));
+
     now.mockReturnValue(0);
     const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth });
 
@@ -458,11 +473,15 @@ describe('createTrackSubscriberActor', () => {
       now.mockReturnValue(100 + index * (1000 / 30) + lateMs);
       subscriptions[0]!.handlers.onObject?.(locObject(1, index, Math.round((index * 1_000_000) / 30)));
     };
+
     deliver(0);
+
     for (let i = 1; i < 60; i++) deliver(i, i % 10 === 0 ? 40 : 0);
+
     const beforeSpread =
       subscriber.snapshot.get().context.arrivalJitter!.maxOffsetMs -
       subscriber.snapshot.get().context.arrivalJitter!.minOffsetMs;
+
     expect(beforeSpread).toBeGreaterThan(5);
     const beforeArrivals = subscriber.snapshot.get().context.arrivals!;
 
@@ -479,6 +498,7 @@ describe('createTrackSubscriberActor', () => {
     subscriptions[1]!.handlers.onObject?.(locObject(2, 0, 21_900_000));
 
     const jitter = subscriber.snapshot.get().context.arrivalJitter!;
+
     // Counted against the outage, the relaxation factor is ~1 and both
     // bounds collapse onto this one sample: a spread of 0 published in the
     // moment just after the path failed, which is where the adaptive
@@ -495,6 +515,7 @@ describe('createTrackSubscriberActor', () => {
     // `totalDurationMs` against one object's bytes it is a single
     // arbitrarily low outlier for the bandwidth estimator.
     const arrivals = subscriber.snapshot.get().context.arrivals!;
+
     expect(arrivals.totalDurationMs).toBe(beforeArrivals.totalDurationMs);
     expect(arrivals.totalBytes).toBe(beforeArrivals.totalBytes);
 
@@ -573,6 +594,7 @@ describe('createTrackSubscriberActor', () => {
 
     await vi.advanceTimersByTimeAsync(1);
     const { status, error } = subscriber.snapshot.get().context;
+
     expect(status).toBe('error');
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/no objects/);

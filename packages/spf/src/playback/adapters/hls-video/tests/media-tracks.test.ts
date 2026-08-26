@@ -1,6 +1,7 @@
 import { HTMLVideoElementHost } from '@videojs/media/dom/video-host';
 import { MediaTracksMixin } from '@videojs/media/media-tracks';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test';
+
 import { effect } from '../../../../core/signals/effect';
 import { signal } from '../../../../core/signals/primitives';
 import { HlsVideoMediaMediaTracksMixin } from '../media-tracks';
@@ -82,9 +83,11 @@ const flush = () =>
     const sig = signal(0);
     const stop = effect(() => {
       if (sig.get() === 0) return; // skip the synchronous initial run
+
       stop();
       resolve();
     });
+
     sig.set(1);
   });
 
@@ -196,6 +199,7 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
     // width/height/bitrate. A shape comparison marks both active; only the
     // switching set the resolved id lives in tells them apart.
     const shape = { width: 1280, height: 720, bandwidth: 3_000_000 };
+
     engine.state.presentation.set(
       multiSetPresentation([vTrack({ id: 'camera-720', ...shape })], [vTrack({ id: 'screen-720', ...shape })])
     );
@@ -212,6 +216,7 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
     // The criteria are shape-only and match both sets; without the id the
     // engine would confine to whichever set comes first (the camera).
     const shape = { width: 1280, height: 720, bandwidth: 3_000_000 };
+
     engine.state.presentation.set(
       multiSetPresentation([vTrack({ id: 'camera-720', ...shape })], [vTrack({ id: 'screen-720', ...shape })])
     );
@@ -306,6 +311,7 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
       vTrack({ id: 'hi', width: 1920, height: 1080, bandwidth: 5_000_000 }),
       vTrack({ id: 'lo', width: 640, height: 360, bandwidth: 800_000 }),
     ];
+
     engine.state.presentation.set(presentation(tracks));
     await flush();
     engine.state.selectedVideoTrackId.set('lo');
@@ -362,6 +368,7 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
       vTrack({ id: 'hi', width: 1920, height: 1080, bandwidth: 5_000_000 }),
       vTrack({ id: 'lo', width: 640, height: 360, bandwidth: 800_000 }),
     ];
+
     engine.state.presentation.set(presentation(tracks));
     await flush();
 

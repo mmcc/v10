@@ -8,6 +8,7 @@ import '@videojs/html/media/mux-video';
 import { createHtmlSandboxState, createLatestLoader, renderMediaAttrs } from '@app/shared/html/sandbox-state';
 import { loadVideoSkinTag } from '@app/shared/html/skins';
 import {
+  getInitialPlaybackOverrides,
   onAutoplayChange,
   onLoopChange,
   onMutedChange,
@@ -35,29 +36,33 @@ async function render() {
   const playerTag = live ? 'live-video-player' : 'video-player';
 
   // A source carrying signed tokens has no room in the `src` attribute, so it is
-  // assigned as an object below instead.
+  // assigned as an object below instead. Query-string playback overrides need the
+  // object for the same reason, and need it before the first load so the engine is
+  // built with them rather than reconfigured afterwards.
+  const overrides = getInitialPlaybackOverrides();
   const { source, url } = SOURCES[state.source];
-  const srcAttr = source ? '' : ` src="${url}"`;
+  const initialSource = source ?? (Object.keys(overrides).length > 0 ? { src: url } : undefined);
+  const srcAttr = initialSource ? '' : ` src="${url}"`;
 
   document.getElementById('root')!.innerHTML = wrapSandboxHtmlI18n(html`
-    <${playerTag}>
-      <${tag} class="aspect-video max-w-4xl mx-auto"${placeholder ? ` placeholdersrc="${placeholder}"` : ''}>
+    <${playerTag}${poster ? ` poster="${poster}"` : ''}>
+      <${tag} class="aspect-video max-w-4xl mx-auto">
+        ${placeholder ? `<img slot="poster" alt="" crossorigin style="background: url('${placeholder}') var(--media-object-position, center) / contain no-repeat">` : ''}
         <!-- The storyboard track is derived automatically from the Mux src. -->
-        <mux-video${srcAttr} ${mediaAttrs} playsinline crossorigin="anonymous">
+        <mux-video${srcAttr} ${mediaAttrs} playsinline crossorigin>
           ${renderChapters(getChapters(state.source))}
         </mux-video>
         <!-- Mux Data and Cast are opt-in media components; no env key is needed for Mux-hosted sources. -->
         <mux-data player-software-name="mux-video"></mux-data>
         <google-cast></google-cast>
-        ${poster ? html`<img slot="poster" src="${poster}" alt="Video poster" />` : ''}
       </${tag}>
     </${playerTag}>
   `);
 
   // A Mux `source.drm.token` becomes the FairPlay / Widevine / PlayReady license
   // servers; the playback, poster, and storyboard tokens sign the rest.
-  if (source) {
-    document.querySelector('mux-video')!.source = source;
+  if (initialSource) {
+    document.querySelector('mux-video')!.source = { ...initialSource, ...overrides };
   }
 }
 

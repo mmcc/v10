@@ -17,7 +17,8 @@ import type {
   MediaVolumeState,
 } from '@videojs/media';
 import type { AnySlice, InferSliceSourceState, Slice, Store, UnionSliceState } from '@videojs/store';
-import type { Simplify, UnionToIntersection } from '@videojs/utils/types';
+import type { CamelCase, Simplify, UnionToIntersection } from '@videojs/utils/types';
+
 import type { metadataFeature } from './store/features/metadata';
 
 export interface MediaContainer extends HTMLElement {}
@@ -35,11 +36,15 @@ type ActionInput<Action> = Action extends (...args: infer Arguments) => unknown
     : never
   : never;
 
+/**
+ * Actions accepting text, including narrower unions such as a string enum, so a feature keeps its own value type on the
+ * provider input. `null | undefined` stays mandatory because that is how a provider clears an absent input.
+ */
 type ConfigActionKey<State> = [State] extends [never]
   ? PropertyKey
   : {
       [Key in keyof State]-?: [ActionInput<State[Key]>] extends [ConfigValue]
-        ? [ConfigValue] extends [ActionInput<State[Key]>]
+        ? [null | undefined] extends [ActionInput<State[Key]>]
           ? Key
           : never
         : never;
@@ -48,17 +53,28 @@ type ConfigActionKey<State> = [State] extends [never]
 type ConfigStateKey<State> = [State] extends [never] ? PropertyKey : keyof State;
 
 /**
- * Maps provider inputs to feature-owned state actions and detach-persistent keys.
- * Pass the feature's source-state type when declaring a config map so both keys
- * are checked and each action accepts nullable text, including absent input.
+ * Maps provider inputs to feature-owned state actions and detach-persistent keys. Pass the feature's source-state type
+ * when declaring a config map so both keys are checked and each action accepts nullable text, including absent input.
  */
 export type PlayerFeatureConfig<State = never> = Record<
   string,
   {
-    /** Private source-state action that accepts `string | null | undefined`. */
+    /**
+     * Source-state action applied when the input changes. It must accept the input's own value type plus `null |
+     * undefined`, since an input the author omits arrives as `undefined`. A feature's own public setter qualifies when
+     * it accepts that; otherwise point at a private action that does.
+     */
     action: ConfigActionKey<State>;
     /** Provider-owned source-state key whose value survives media detach. */
     state: ConfigStateKey<State>;
+    /** How an HTML provider element names this input, when the key's own name won't do. */
+    html?: {
+      /**
+       * Attribute name in markup, kebab-case, for a key whose own name is taken on an element. The matching property
+       * follows from it, so `content-title` is also `element.contentTitle`. Defaults to the kebab-cased key.
+       */
+      attribute: string;
+    };
   }
 >;
 
@@ -72,28 +88,55 @@ export type PlayerFeature<State, Derived = object, Config extends PlayerFeatureC
 
 export type AnyPlayerFeature = AnySlice<PlayerTarget> & { config?: PlayerFeatureConfig };
 
+type ConfigInputValue<Feature extends AnyPlayerFeature, Entry> = Entry extends { action: infer Action }
+  ? Action extends keyof InferSliceSourceState<Feature>
+    ? ActionInput<InferSliceSourceState<Feature>[Action]>
+    : never
+  : never;
+
 export type InferPlayerFeatureConfig<Feature extends AnyPlayerFeature> = Feature extends {
   config?: infer Config extends PlayerFeatureConfig;
 }
+  ? { [Key in keyof Config]: ConfigInputValue<Feature, Config[Key]> }
+  : object;
+
+/** The same inputs under the names they go by on an HTML element. */
+export type InferPlayerFeatureHtmlConfig<Feature extends AnyPlayerFeature> = Feature extends {
+  config?: infer Config extends PlayerFeatureConfig;
+}
   ? {
-      [Key in keyof Config]: Config[Key]['action'] extends keyof InferSliceSourceState<Feature>
-        ? ActionInput<InferSliceSourceState<Feature>[Config[Key]['action']]>
-        : never;
+      [Key in keyof Config as HtmlPropertyKey<Key, Config[Key]>]: ConfigInputValue<Feature, Config[Key]>;
     }
   : object;
+
+type HtmlPropertyKey<Key, Entry> = Entry extends { html: { attribute: infer Attribute extends string } }
+  ? CamelCase<Attribute>
+  : Key;
 
 export type UnionPlayerConfig<Features extends readonly AnyPlayerFeature[]> = Features extends readonly []
   ? object
   : Simplify<UnionToIntersection<InferPlayerFeatureConfig<Features[number]>>>;
 
+export type UnionPlayerHtmlConfig<Features extends readonly AnyPlayerFeature[]> = Features extends readonly []
+  ? object
+  : Simplify<UnionToIntersection<InferPlayerFeatureHtmlConfig<Features[number]>>>;
+
 declare const PLAYER_CONFIG: unique symbol;
+declare const PLAYER_HTML_CONFIG: unique symbol;
 
 export type PlayerStore<Features extends AnyPlayerFeature[] = []> = Store<PlayerTarget, UnionSliceState<Features>> & {
   readonly [PLAYER_CONFIG]?: UnionPlayerConfig<Features>;
+  readonly [PLAYER_HTML_CONFIG]?: UnionPlayerHtmlConfig<Features>;
 };
 
 export type InferPlayerConfig<Store> = Store extends {
   readonly [PLAYER_CONFIG]?: infer Config;
+}
+  ? Config
+  : object;
+
+export type InferPlayerHtmlConfig<Store> = Store extends {
+  readonly [PLAYER_HTML_CONFIG]?: infer Config;
 }
   ? Config
   : object;
@@ -137,10 +180,8 @@ export type AudioFeatures = [
 export type BackgroundFeatures = [];
 
 /**
- * Features for a live video player. Mirrors {@link VideoFeatures} but drops
- * the playback-rate feature (not meaningful for live) and adds
- * `PlayerFeature<MediaLiveState>` so the store exposes `liveEdgeStart` and
- * `targetLiveWindow`.
+ * Features for a live video player. Mirrors {@link VideoFeatures} but drops the playback-rate feature (not meaningful
+ * for live) and adds `PlayerFeature<MediaLiveState>` so the store exposes `liveEdgeStart` and `targetLiveWindow`.
  */
 export type LiveVideoFeatures = [
   PlayerFeature<MediaPlaybackState>,
@@ -159,10 +200,8 @@ export type LiveVideoFeatures = [
 ];
 
 /**
- * Features for a live audio player. Mirrors {@link AudioFeatures} but drops
- * the playback-rate feature (not meaningful for live) and adds
- * `PlayerFeature<MediaLiveState>` so the store exposes `liveEdgeStart` and
- * `targetLiveWindow`.
+ * Features for a live audio player. Mirrors {@link AudioFeatures} but drops the playback-rate feature (not meaningful
+ * for live) and adds `PlayerFeature<MediaLiveState>` so the store exposes `liveEdgeStart` and `targetLiveWindow`.
  */
 export type LiveAudioFeatures = [
   PlayerFeature<MediaPlaybackState>,

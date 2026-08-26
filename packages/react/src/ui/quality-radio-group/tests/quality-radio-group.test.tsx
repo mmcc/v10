@@ -1,10 +1,8 @@
-'use client';
-
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { registerI18n, resetI18nRegistry } from '@videojs/core/i18n';
 import type { MediaVideoRendition } from '@videojs/media';
 import { createRef } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { I18nProvider } from '../../../i18n';
 import { createPlayerWrapper } from '../../../testing/mocks';
@@ -37,9 +35,11 @@ function renderQualityRadioGroup({
   const { Wrapper } = createPlayerWrapper({ videoRenditionList, activeVideoRendition, selectVideoRendition });
   const content = (
     <Menu.Root defaultOpen>
-      <Menu.Content>
-        {group ?? <QualityRadioGroup renderItem={(props) => <Menu.RadioItem {...props} />} />}
-      </Menu.Content>
+      <Menu.Popup>
+        <Menu.Content>
+          {group ?? <QualityRadioGroup renderItem={(props) => <Menu.RadioItem {...props} />} />}
+        </Menu.Content>
+      </Menu.Popup>
     </Menu.Root>
   );
 
@@ -51,6 +51,7 @@ function renderQualityRadioGroup({
 describe('QualityRadioGroup', () => {
   it('renders generated radio item props and item state', () => {
     const states: QualityRadioGroupItemState[] = [];
+
     renderQualityRadioGroup({
       group: (
         <QualityRadioGroup
@@ -75,6 +76,7 @@ describe('QualityRadioGroup', () => {
 
   it('selects a video rendition', () => {
     const selectVideoRendition = vi.fn();
+
     renderQualityRadioGroup({ selectVideoRendition });
 
     fireEvent.click(screen.getByRole('menuitemradio', { name: '720p' }));
@@ -84,6 +86,7 @@ describe('QualityRadioGroup', () => {
 
   it('exposes group state through attributes and callbacks', () => {
     const ref = createRef<HTMLDivElement>();
+
     renderQualityRadioGroup({
       group: (
         <QualityRadioGroup
@@ -96,6 +99,7 @@ describe('QualityRadioGroup', () => {
     });
 
     const group = screen.getByTestId('group');
+
     expect(ref.current).toBe(group);
     expect(group.classList.contains('quality-available')).toBe(true);
     expect(group.getAttribute('aria-label')).toBe('Quality');
@@ -107,6 +111,7 @@ describe('QualityRadioGroup', () => {
     renderQualityRadioGroup({ videoRenditionList: [defaultVideoRenditionList[0]!] });
 
     const group = document.querySelector<HTMLElement>('[role="group"]');
+
     expect(group).toBeTruthy();
     expect(group?.hidden).toBe(true);
     expect(group?.getAttribute('aria-disabled')).toBe('true');
@@ -130,6 +135,7 @@ describe('QualityRadioGroup', () => {
     });
 
     const group = screen.getByRole('group', { name: 'Quality' });
+
     expect(group.tagName).toBe('SECTION');
     expect(group.getAttribute('data-value')).toBe('auto');
     expect(screen.getByRole('menuitemradio', { name: 'Auto' }).querySelector('[aria-hidden="true"]')).toBeTruthy();

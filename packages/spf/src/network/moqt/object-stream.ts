@@ -3,15 +3,14 @@
  *
  * Every unidirectional stream begins with a varint stream type:
  *
- * - `SUBGROUP_HEADER` (0b0XX1XXXX) — objects for one subgroup of one group
- *   of a subscribed track, identified by Track Alias.
- * - `FETCH_HEADER` (0x05) — objects for a FETCH response, identified by
- *   Request ID.
+ * - `SUBGROUP_HEADER` (0b0XX1XXXX) — objects for one subgroup of one group of a subscribed track, identified by Track
+ *   Alias.
+ * - `FETCH_HEADER` (0x05) — objects for a FETCH response, identified by Request ID.
  * - `SETUP` (0x2F00) — the peer's control stream (handled by the session).
  * - `PADDING` (0x132B3E28) — bandwidth probing; drained and ignored.
  *
- * The parsers are async generators over a `StreamReader`, mirroring how
- * `ChunkedStreamIterable` adapts fetch bodies elsewhere in `network/`.
+ * The parsers are async generators over a `StreamReader`, mirroring how `ChunkedStreamIterable` adapts fetch bodies
+ * elsewhere in `network/`.
  */
 import { ByteReader, type StreamReader } from './bytes';
 import { decodeKeyValuePairs, type KeyValuePair } from './control-messages';
@@ -29,12 +28,12 @@ export const STREAM_TYPE = {
 } as const;
 
 /**
- * Whether a stream-type varint is a SUBGROUP_HEADER. Valid values have the
- * form 0b0XX1XXXX (bit 4 set, bit 7 clear) with SUBGROUP_ID_MODE ≠ 0b11
- * (reserved).
+ * Whether a stream-type varint is a SUBGROUP_HEADER. Valid values have the form 0b0XX1XXXX (bit 4 set, bit 7 clear)
+ * with SUBGROUP_ID_MODE ≠ 0b11 (reserved).
  */
 export function isSubgroupHeaderType(type: number): boolean {
   if (type > 0x7f || (type & 0x10) === 0) return false;
+
   return (type & 0x06) >> 1 !== 0b11;
 }
 
@@ -45,16 +44,14 @@ export function isSubgroupHeaderType(type: number): boolean {
 /**
  * Ceiling on a single object's payload, and on its Properties block.
  *
- * Unlike control messages — bounded by their 16-bit frame length — a data
- * stream's payload length is an unbounded varint that feeds straight into
- * `StreamReader.readBytes`, which buffers until satisfied. A malformed or
- * hostile relay declaring 2^53 would exhaust memory before the read ever
- * completed, so the declaration is rejected before any allocation.
+ * Unlike control messages — bounded by their 16-bit frame length — a data stream's payload length is an unbounded
+ * varint that feeds straight into `StreamReader.readBytes`, which buffers until satisfied. A malformed or hostile relay
+ * declaring 2^53 would exhaust memory before the read ever completed, so the declaration is rejected before any
+ * allocation.
  *
- * 16 MiB clears any real LOC frame (a 4K keyframe is low single-digit MB).
- * The Properties block is Key-Value-Pairs whose individual byte values may
- * legally reach 2^16-1 (`MAX_KVP_VALUE_LENGTH`), so its bound leaves room
- * for several maximum-size values, not just typical frame metadata.
+ * 16 MiB clears any real LOC frame (a 4K keyframe is low single-digit MB). The Properties block is Key-Value-Pairs
+ * whose individual byte values may legally reach 2^16-1 (`MAX_KVP_VALUE_LENGTH`), so its bound leaves room for several
+ * maximum-size values, not just typical frame metadata.
  */
 export const MAX_OBJECT_PAYLOAD_LENGTH = 16 * 1024 * 1024;
 export const MAX_OBJECT_PROPERTIES_LENGTH = 1024 * 1024;
@@ -63,6 +60,7 @@ function checkPayloadLength(length: number): number {
   if (length > MAX_OBJECT_PAYLOAD_LENGTH) {
     throw new MoqtProtocolError(`object payload length ${length} exceeds ${MAX_OBJECT_PAYLOAD_LENGTH} bytes`);
   }
+
   return length;
 }
 
@@ -122,6 +120,7 @@ export async function readSubgroupHeader(reader: StreamReader, type: number): Pr
   if (!isSubgroupHeaderType(type)) {
     throw new MoqtProtocolError(`invalid subgroup header type 0x${type.toString(16)}`);
   }
+
   const modeBits = (type & SUBGROUP_FLAG.SUBGROUP_ID_MODE_MASK) >> 1;
   const subgroupIdMode: SubgroupIdMode =
     modeBits === 0b00 ? 'zero' : modeBits === 0b01 ? 'first-object-id' : 'explicit';
@@ -148,24 +147,27 @@ export async function readSubgroupHeader(reader: StreamReader, type: number): Pr
 async function readObjectProperties(reader: StreamReader): Promise<KeyValuePair[]> {
   const length = await reader.readVarint();
   if (length === 0) return [];
+
   if (length > MAX_OBJECT_PROPERTIES_LENGTH) {
     throw new MoqtProtocolError(`object properties length ${length} exceeds ${MAX_OBJECT_PROPERTIES_LENGTH} bytes`);
   }
+
   const bytes = await reader.readBytes(length);
+
   return decodeKeyValuePairs(new ByteReader(bytes), length);
 }
 
 function readObjectStatus(statusWire: number): ObjectStatus {
   const status = OBJECT_STATUS_WIRE[statusWire];
   if (status === undefined) throw new MoqtProtocolError(`unknown object status ${statusWire}`);
+
   return status;
 }
 
 /**
- * Yield the objects of one subgroup stream until FIN. Object IDs are
- * delta-decoded (`delta + 1` from the previous object; absolute for the
- * first). The stream's `subgroupId` resolves per the header's mode — for
- * `'first-object-id'` it is the first object's ID.
+ * Yield the objects of one subgroup stream until FIN. Object IDs are delta-decoded (`delta + 1` from the previous
+ * object; absolute for the first). The stream's `subgroupId` resolves per the header's mode — for `'first-object-id'`
+ * it is the first object's ID.
  */
 export async function* readSubgroupObjects(reader: StreamReader, header: SubgroupHeader): AsyncGenerator<MoqtObject> {
   let previousObjectId: number | undefined;
@@ -173,16 +175,17 @@ export async function* readSubgroupObjects(reader: StreamReader, header: Subgrou
 
   while (!(await reader.atEnd())) {
     const objectIdDelta = await reader.readVarint();
+
     const objectId = previousObjectId === undefined ? objectIdDelta : previousObjectId + objectIdDelta + 1;
     // Each operand fits the varint range, but the delta sum can round past
     // 2^53-1 and silently collide subsequent IDs — the exact corruption the
     // varint layer rejects loudly.
-    if (objectId > MAX_VARINT_VALUE) {
-      throw new MoqtProtocolError('subgroup object ID exceeds supported range');
-    }
+    if (objectId > MAX_VARINT_VALUE) throw new MoqtProtocolError('subgroup object ID exceeds supported range');
+
     if (previousObjectId === undefined && header.subgroupIdMode === 'first-object-id') {
       subgroupId = objectId;
     }
+
     previousObjectId = objectId;
 
     const properties = header.hasProperties ? await readObjectProperties(reader) : [];
@@ -242,9 +245,8 @@ export async function readFetchHeader(reader: StreamReader): Promise<{ requestId
 }
 
 /**
- * Yield the entries of one FETCH response stream until FIN. Group/object
- * IDs are delta-decoded against the prior entry per §11.4.4.1; the first
- * object must carry both deltas (as absolute values).
+ * Yield the entries of one FETCH response stream until FIN. Group/object IDs are delta-decoded against the prior entry
+ * per §11.4.4.1; the first object must carry both deltas (as absolute values).
  */
 export async function* readFetchEntries(
   reader: StreamReader,
@@ -259,18 +261,21 @@ export async function* readFetchEntries(
       const groupId = await reader.readVarint();
       const objectId = await reader.readVarint();
       const status = flags === FETCH_END_OF_NON_EXISTENT_RANGE ? 'non-existent' : 'unknown';
+
       // The indicator becomes the prior Location; subgroup/priority carry
       // over from the last actual object (§11.4.4.2).
       prior = { groupId, objectId, subgroupId: prior?.subgroupId, priority: prior?.priority };
       yield { kind: 'end-of-range', status, groupId, objectId };
       continue;
     }
+
     if (flags > 0x7f) {
       throw new MoqtProtocolError(`invalid fetch serialization flags 0x${flags.toString(16)}`);
     }
 
     const groupIdDeltaPresent = (flags & FETCH_FLAG.GROUP_ID_DELTA_PRESENT) !== 0;
     const objectIdDeltaPresent = (flags & FETCH_FLAG.OBJECT_ID_DELTA_PRESENT) !== 0;
+
     if (prior === undefined && (!groupIdDeltaPresent || !objectIdDeltaPresent)) {
       throw new MoqtProtocolError('first fetch object must carry group and object IDs');
     }
@@ -281,6 +286,7 @@ export async function* readFetchEntries(
     const isDatagram = (flags & FETCH_FLAG.DATAGRAM) !== 0;
     const subgroupMode = isDatagram ? -1 : flags & FETCH_FLAG.SUBGROUP_MODE_MASK;
     let subgroupId: number | undefined;
+
     if (subgroupMode === 0x03) {
       subgroupId = await reader.readVarint();
     } else if (subgroupMode === 0x00) {
@@ -289,6 +295,7 @@ export async function* readFetchEntries(
       if (prior?.subgroupId === undefined) {
         throw new MoqtProtocolError('fetch object references prior subgroup ID with no prior object');
       }
+
       subgroupId = subgroupMode === 0x01 ? prior.subgroupId : prior.subgroupId + 1;
     }
 
@@ -312,6 +319,7 @@ export async function* readFetchEntries(
           : objectIdDelta !== undefined
             ? prior.objectId + objectIdDelta
             : prior.objectId + 1;
+
     // Mirror of the underflow check above: delta sums can round past 2^53-1
     // and silently collapse later locations.
     if (groupId > MAX_VARINT_VALUE || objectId > MAX_VARINT_VALUE) {
@@ -319,12 +327,14 @@ export async function* readFetchEntries(
     }
 
     let priority: number;
+
     if ((flags & FETCH_FLAG.PRIORITY_PRESENT) !== 0) {
       priority = await reader.readUint8();
     } else {
       if (prior?.priority === undefined) {
         throw new MoqtProtocolError('fetch object references prior priority with no prior object');
       }
+
       priority = prior.priority;
     }
 

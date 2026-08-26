@@ -1,17 +1,14 @@
 /**
  * Per-request bidirectional-stream lifecycle (moq-transport draft-19 §3.3).
  *
- * Draft-19's control model is request-stream based: each request
- * (SUBSCRIBE, FETCH, TRACK_STATUS, …) opens its own bidirectional stream,
- * the first message on it is the request, and responses (SUBSCRIBE_OK /
- * REQUEST_OK / REQUEST_ERROR / PUBLISH_DONE / GOAWAY) arrive as control
- * messages on the same stream. There is no UNSUBSCRIBE message —
- * cancellation IS the stream lifecycle: abort our sending direction
- * (RESET_STREAM) and cancel the receiving direction (STOP_SENDING),
- * per §3.3.3.
+ * Draft-19's control model is request-stream based: each request (SUBSCRIBE, FETCH, TRACK_STATUS, …) opens its own
+ * bidirectional stream, the first message on it is the request, and responses (SUBSCRIBE_OK / REQUEST_OK /
+ * REQUEST_ERROR / PUBLISH_DONE / GOAWAY) arrive as control messages on the same stream. There is no UNSUBSCRIBE message
+ * — cancellation IS the stream lifecycle: abort our sending direction (RESET_STREAM) and cancel the receiving direction
+ * (STOP_SENDING), per §3.3.3.
  *
- * Callback-shaped, no signals — the session driver binds this to its own
- * bookkeeping; SPF actors bind signals at the `playback/` layer.
+ * Callback-shaped, no signals — the session driver binds this to its own bookkeeping; SPF actors bind signals at the
+ * `playback/` layer.
  */
 import { type ControlMessage, ControlMessageDeframer, decodeControlMessage } from './control-messages';
 import { MoqtProtocolError } from './errors';
@@ -25,10 +22,9 @@ export interface BidirectionalStreamLike {
 export interface RequestStreamHandlers {
   onMessage(message: ControlMessage): void;
   /**
-   * The peer FINed its direction. Per §3.3.2 this signals the request is
-   * complete; an endpoint that receives a FIN before all required
-   * messages treats the request as failed — that judgement is the
-   * caller's (it knows which messages arrived).
+   * The peer FINed its direction. Per §3.3.2 this signals the request is complete; an endpoint that receives a FIN
+   * before all required messages treats the request as failed — that judgement is the caller's (it knows which messages
+   * arrived).
    */
   onFin?(): void;
   /** Read failure, stream reset, or a decode error (`MoqtProtocolError`). */
@@ -41,19 +37,17 @@ export interface RequestStream {
   /** Gracefully close our sending direction (FIN). Not a cancellation. */
   finWrite(): Promise<void>;
   /**
-   * Cancel the request (§3.3.3): abort the sending direction and stop
-   * reading the receiving direction. `reason` is surfaced to the
-   * transport — a DOM caller passes a `WebTransportError` carrying the
-   * stream error code; tests pass anything.
+   * Cancel the request (§3.3.3): abort the sending direction and stop reading the receiving direction. `reason` is
+   * surfaced to the transport — a DOM caller passes a `WebTransportError` carrying the stream error code; tests pass
+   * anything.
    */
   cancel(reason?: unknown): void;
   readonly cancelled: boolean;
 }
 
 /**
- * Open a request over an established bidirectional stream: write the
- * encoded request message, then pump incoming control messages to
- * `handlers.onMessage` until FIN, reset, or cancellation.
+ * Open a request over an established bidirectional stream: write the encoded request message, then pump incoming
+ * control messages to `handlers.onMessage` until FIN, reset, or cancellation.
  */
 export function openRequestStream(
   stream: BidirectionalStreamLike,
@@ -69,14 +63,17 @@ export function openRequestStream(
 
   const readLoop = async () => {
     const deframer = new ControlMessageDeframer();
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
         for (const frame of deframer.push(value)) {
           handlers.onMessage(decodeControlMessage(frame));
         }
       }
+
       if (!cancelled) {
         // A FIN that lands mid-frame is a truncated response, not a clean
         // completion — surfacing it as FIN would leave the request pending
@@ -97,6 +94,7 @@ export function openRequestStream(
   const firstWrite = writer.write(requestMessage).catch((error) => {
     if (!cancelled) handlers.onError?.(error);
   });
+
   void readLoop();
 
   return {
@@ -107,6 +105,7 @@ export function openRequestStream(
 
     async finWrite(): Promise<void> {
       if (finished || cancelled) return;
+
       finished = true;
       await firstWrite;
       await writer.close();
@@ -114,11 +113,14 @@ export function openRequestStream(
 
     cancel(reason?: unknown): void {
       if (cancelled) return;
+
       cancelled = true;
+
       if (!finished) {
         finished = true;
         writer.abort(reason).catch(() => {});
       }
+
       // STOP_SENDING on the receiving direction. The read loop's pending
       // read resolves as done; `cancelled` suppresses the FIN callback.
       reader.cancel(reason).catch(() => {});

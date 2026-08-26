@@ -40,6 +40,7 @@ import {
   type MoqSource,
   parseMoqSource,
 } from '@videojs/spf/moq';
+
 import { createLoopbackRelay, type LoopbackRelay, unsupportedLoopbackCodecs } from './loopback-relay';
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -109,46 +110,51 @@ function oneOf<Value extends string>(raw: string | null, allowed: readonly Value
 
 function positiveSeconds(raw: string | null, fallback: number): number {
   const parsed = Number(raw);
+
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 /**
- * A pasted `?relay=moqt://host/path#msf:ns--catalog` loses everything from the
- * `#` onward to the page's own fragment, so an MSF fragment sitting there
- * belongs to the relay URL — put it back rather than fail on a truncated source.
+ * A pasted `?relay=moqt://host/path#msf:ns--catalog` loses everything from the `#` onward to the page's own fragment,
+ * so an MSF fragment sitting there belongs to the relay URL — put it back rather than fail on a truncated source.
  */
 function readRelayParam(): string {
   const relay = params.get('relay') ?? '';
   if (!relay || relay.includes('#')) return relay;
+
   const hash = window.location.hash;
+
   return hash.startsWith('#msf:') ? `${relay}${hash}` : relay;
 }
 
 /**
- * Whether the engine will accept this source, reported on the page instead of
- * only as a dev warning from inside the engine. Delegates to the engine's own
- * `parseMoqSource` so the page cannot drift from what the pipeline accepts —
- * a hand-rolled approximation would pass URLs the parser then rejects
- * (`#msf:` present but no `--` delimiter, bad escapes, `connection=bogus`, …),
- * which is exactly the empty-player case this guard exists to avoid.
+ * Whether the engine will accept this source, reported on the page instead of only as a dev warning from inside the
+ * engine. Delegates to the engine's own `parseMoqSource` so the page cannot drift from what the pipeline accepts — a
+ * hand-rolled approximation would pass URLs the parser then rejects (`#msf:` present but no `--` delimiter, bad
+ * escapes, `connection=bogus`, …), which is exactly the empty-player case this guard exists to avoid.
  */
 function relayProblem(url: string): string | undefined {
   if (!isMoqSourceUrl(url)) return 'must start with moqt://';
+
   if (!url.includes('#msf:')) {
     return "is missing its '#msf:<namespace>--<track>' fragment (percent-encode the '#' as %23 in ?relay=)";
   }
+
   let source: MoqSource;
+
   try {
     source = parseMoqSource(url);
   } catch (error) {
     return `is not a valid MSF source — ${error instanceof Error ? error.message : String(error)}`;
   }
+
   // Relay mode mounts the plain element, whose only transport is WebTransport.
   // `createMoqSessionActor` refuses a native-QUIC mandate without a
   // QUIC-capable factory, so accepting one here would mount a dead player.
   if (source.connection === 'quic') {
     return 'mandates a native QUIC connection (connection=q), which a browser cannot provide';
   }
+
   return undefined;
 }
 
@@ -156,27 +162,25 @@ function relayProblem(url: string): string | undefined {
 const DEFAULT_RELAY_ORIGIN = 'moqt://relay.mux.dev';
 
 /**
- * Build an MSF catalog URL from the parts a relay token is issued for: a
- * relay origin, a slash-separated broadcast path (the same shape as the
- * publisher sandbox's `?ns=`), and an optional JWT. Delegates to the
- * engine's own `composeMoqSource` so the page cannot drift from the
- * encoding `parseMoqSource` accepts. The token rides the `c4m` fragment
- * parameter, which the engine composes onto the connect URL as `?jwt=` —
- * the only auth carriage the relay fleet accepts (draft-19
- * AUTHORIZATION_TOKEN structures hard-close the session).
+ * Build an MSF catalog URL from the parts a relay token is issued for: a relay origin, a slash-separated broadcast path
+ * (the same shape as the publisher sandbox's `?ns=`), and an optional JWT. Delegates to the engine's own
+ * `composeMoqSource` so the page cannot drift from the encoding `parseMoqSource` accepts. The token rides the `c4m`
+ * fragment parameter, which the engine composes onto the connect URL as `?jwt=` — the only auth carriage the relay
+ * fleet accepts (draft-19 AUTHORIZATION_TOKEN structures hard-close the session).
  */
 function composeMsfSource(origin: string, path: string, token: string): string {
   return composeMoqSource(origin.trim() || DEFAULT_RELAY_ORIGIN, path, token ? { token } : {});
 }
 
 /**
- * Attach a `?token=` page param to a full `?relay=` URL that carries no auth
- * of its own. Explicit auth already on the URL — a `c4m` fragment param or a
- * `jwt` connect param — wins over the page param.
+ * Attach a `?token=` page param to a full `?relay=` URL that carries no auth of its own. Explicit auth already on the
+ * URL — a `c4m` fragment param or a `jwt` connect param — wins over the page param.
  */
 function withC4mToken(url: string, token: string): string {
   if (!url.includes('#') || /[#&]c4m=/.test(url)) return url;
+
   if (/[?&]jwt=/.test(url.slice(0, url.indexOf('#')))) return url;
+
   return `${url}&c4m=${encodeURIComponent(token)}`;
 }
 
@@ -186,6 +190,7 @@ const tokenParam = params.get('token') ?? '';
 
 let initialRelaySrc = relayParam;
 let composeProblem: string | undefined;
+
 if (nsParam) {
   try {
     initialRelaySrc = composeMsfSource(relayParam, nsParam, tokenParam);
@@ -220,6 +225,7 @@ skinSelect.value = state.skin;
 // ── Logging ──────────────────────────────────────────────────────────────────
 function log(message: string, kind: 'info' | 'event' | 'error' = 'info'): void {
   const line = document.createElement('div');
+
   line.className = kind;
   line.textContent = `${new Date().toLocaleTimeString()}  ${message}`;
   logsDiv.append(line);
@@ -240,6 +246,7 @@ class LoopbackMoqVideoElement extends SimpleMoqVideoElement {
       engineConfig: {
         createMoqTransport: (connectUrl: string, protocols: string[]) => {
           if (!activeRelay) throw new Error('loopback relay is not running');
+
           return activeRelay.createMoqTransport(connectUrl, protocols);
         },
       },
@@ -314,16 +321,20 @@ const CAPABILITIES: CapabilityProbe[] = [
 
 function renderCapabilities(media: SimpleMoqVideoElement): void {
   const probeTarget = media as unknown as Record<string, unknown>;
+
   capabilitiesBody.replaceChildren(
     ...CAPABILITIES.map(({ capability, ui, probe }) => {
       const claimed = probe(probeTarget);
       const row = document.createElement('tr');
       const name = document.createElement('td');
+
       name.textContent = capability;
       const status = document.createElement('td');
+
       status.className = `state ${claimed ? 'ok' : 'bad'}`;
       status.textContent = claimed ? 'claimed' : 'unclaimed';
       const description = document.createElement('td');
+
       description.textContent = ui;
       row.append(name, status, description);
       return row;
@@ -336,10 +347,13 @@ function renderRows(target: HTMLDListElement, rows: [label: string, value: strin
   target.replaceChildren(
     ...rows.map(([label, value]) => {
       const row = document.createElement('div');
+
       row.className = 'row';
       const dt = document.createElement('dt');
+
       dt.textContent = label;
       const dd = document.createElement('dd');
+
       dd.textContent = value;
       dd.title = value;
       row.append(dt, dd);
@@ -354,6 +368,7 @@ function formatSeconds(value: number | undefined): string {
 
 function formatBitrate(bps: number | undefined): string {
   if (bps === undefined) return '—';
+
   return bps >= 1_000_000 ? `${(bps / 1_000_000).toFixed(2)} Mbps` : `${Math.round(bps / 1000)} Kbps`;
 }
 
@@ -366,6 +381,7 @@ function renderPanels(media: SimpleMoqVideoElement): void {
   const engineContext = snapshot(media.engine.context);
 
   const session = engineContext.moqSessionActor?.snapshot.get().context;
+
   renderRows(PANELS.session, [
     ['status', session?.status ?? 'no session'],
     ['goaway', session?.goaway ? 'announced' : '—'],
@@ -377,6 +393,7 @@ function renderPanels(media: SimpleMoqVideoElement): void {
   const resolved = isResolvedPresentation(presentation);
   const videoTracks = presentation?.selectionSets?.find((set) => set.type === 'video')?.switchingSets[0]?.tracks ?? [];
   const audioTracks = presentation?.selectionSets?.find((set) => set.type === 'audio')?.switchingSets[0]?.tracks ?? [];
+
   renderRows(PANELS.selection, [
     ['catalog', resolved ? 'resolved' : 'pending'],
     ['video tracks', String(videoTracks.length)],
@@ -400,6 +417,7 @@ function renderPanels(media: SimpleMoqVideoElement): void {
   const audio = engineContext.audioRendererActor?.snapshot.get().context;
   const videoBuffer = engineContext.videoSubscriberActor?.snapshot.get().context;
   const audioBuffer = engineContext.audioSubscriberActor?.snapshot.get().context;
+
   renderRows(PANELS.renderers, [
     ['video', video ? `${video.status} · ${video.framesDecoded} decoded · ${video.framesDropped} dropped` : '—'],
     ['video buffer', videoBuffer ? `${videoBuffer.frameCount} frames` : '—'],
@@ -410,6 +428,7 @@ function renderPanels(media: SimpleMoqVideoElement): void {
 
   if (state.mode === 'loopback' && activeRelay) {
     const { subscriptions, objectsPublished, bytesPublished } = activeRelay.stats;
+
     renderRows(PANELS.publisher, [
       ['mode', 'loopback (in-page)'],
       ['subscribed', subscriptions.length ? subscriptions.join(', ') : 'none'],
@@ -432,6 +451,7 @@ function renderTrackButtons(media: SimpleMoqVideoElement): void {
   trackButtons.replaceChildren(
     ...tracks.map((track) => {
       const button = document.createElement('button');
+
       button.type = 'button';
       button.textContent = track.width && track.height ? `${track.width}×${track.height}` : track.id;
       button.dataset.trackId = track.id;
@@ -449,7 +469,9 @@ function renderTrackButtons(media: SimpleMoqVideoElement): void {
 
 function syncTrackButtons(media: SimpleMoqVideoElement): void {
   const selectedId = untrack(() => media.engine.state.userVideoTrackSelection.get())?.id;
+
   trackAutoButton.setAttribute('aria-pressed', String(!selectedId));
+
   for (const button of trackButtons.querySelectorAll('button')) {
     button.setAttribute('aria-pressed', String(button.dataset.trackId === selectedId));
   }
@@ -459,9 +481,8 @@ function syncTrackButtons(media: SimpleMoqVideoElement): void {
 let teardown: (() => void) | undefined;
 
 /**
- * Bumped on every `render()` entry — including the ones that bail early on
- * missing APIs — so a call still awaiting its skin import cannot resume and
- * mount over a newer decision (or into a mode that was just rejected).
+ * Bumped on every `render()` entry — including the ones that bail early on missing APIs — so a call still awaiting its
+ * skin import cannot resume and mount over a newer decision (or into a mode that was just rejected).
  */
 let renderGeneration = 0;
 
@@ -489,23 +510,28 @@ async function render(): Promise<void> {
   // Re-checked per render, not once at boot: what's required depends on the
   // mode, and the mode is switchable at runtime.
   const missing = await missingSupport(state.mode);
+
   // The codec probe awaits, so this is a suspension point like the skin load.
   if (generation !== renderGeneration) return;
+
   if (missing.length > 0) {
     unmount();
     unsupported.hidden = false;
     unsupported.textContent = `This browser cannot run: ${missing.join(', ')}. MoQ playback needs all of them.`;
     return;
   }
+
   unsupported.hidden = true;
 
   let skinTag: string;
+
   try {
     skinTag = await loadVideoSkinTag(state.skin, 'css', { live: true });
   } catch (error) {
     log(`failed to load the ${state.skin} skin: ${String(error)}`, 'error');
     return;
   }
+
   // A newer render() superseded this one while the skin loaded.
   if (generation !== renderGeneration) return;
 
@@ -526,8 +552,11 @@ async function render(): Promise<void> {
   const media = document.createElement(tagName) as SimpleMoqVideoElement;
 
   media.setAttribute('preload', state.preload);
+
   if (state.muted) media.setAttribute('muted', '');
+
   if (state.autoplay) media.setAttribute('autoplay', '');
+
   media.setAttribute('target-latency', String(state.targetLatency));
 
   skin.append(media);
@@ -552,6 +581,7 @@ function connectDiagnostics(media: SimpleMoqVideoElement): void {
 
   for (const type of BRIDGED_EVENTS) {
     const handler = () => log(`event: ${type}`, 'event');
+
     media.addEventListener(type, handler);
     disposers.push(() => media.removeEventListener(type, handler));
   }
@@ -562,19 +592,23 @@ function connectDiagnostics(media: SimpleMoqVideoElement): void {
   disposers.push(
     effect(() => {
       const resolved = isResolvedPresentation(media.engine.state.presentation.get());
+
       if (resolved) untrack(() => renderTrackButtons(media));
     })
   );
 
   const timer = setInterval(() => renderPanels(media), 250);
+
   disposers.push(() => clearInterval(timer));
 
   renderCapabilities(media);
   renderPanels(media);
 
   const relay = activeRelay;
+
   teardown = () => {
     for (const dispose of disposers) dispose();
+
     relay?.destroy();
   };
 }
@@ -586,15 +620,19 @@ function mediaElement(): SimpleMoqVideoElement | null {
 
 applyRelayButton.addEventListener('click', () => {
   const value = relayInput.value.trim();
+
   if (!value) {
     log('enter a moqt:// URL first', 'error');
     return;
   }
+
   const problem = relayProblem(value);
+
   if (problem) {
     log(`relay URL ${problem}`, 'error');
     return;
   }
+
   state.mode = 'relay';
   state.relaySrc = value;
   void render();
@@ -607,22 +645,28 @@ useLoopbackButton.addEventListener('click', () => {
 
 composeLoadButton.addEventListener('click', () => {
   const path = pathInput.value.trim();
+
   if (!path) {
     log('enter a broadcast path first (e.g. mattypoo/room/42)', 'error');
     return;
   }
+
   let composed: string;
+
   try {
     composed = composeMsfSource(hostInput.value, path, tokenInput.value.trim());
   } catch (error) {
     log(`cannot compose a source — ${error instanceof Error ? error.message : String(error)}`, 'error');
     return;
   }
+
   const problem = relayProblem(composed);
+
   if (problem) {
     log(`composed URL ${problem}`, 'error');
     return;
   }
+
   // Shown where it can be copied: the composed URL is exactly what 'Load
   // relay' accepts, so the row doubles as a reference for the MSF format.
   relayInput.value = composed;
@@ -634,6 +678,7 @@ composeLoadButton.addEventListener('click', () => {
 trackAutoButton.addEventListener('click', () => {
   const media = mediaElement();
   if (!media) return;
+
   media.engine.state.userVideoTrackSelection.set(undefined);
   log('user selection cleared — back to ABR');
   syncTrackButtons(media);
@@ -642,6 +687,7 @@ trackAutoButton.addEventListener('click', () => {
 latencyInput.addEventListener('change', () => {
   const value = Number(latencyInput.value);
   if (!Number.isFinite(value) || value <= 0) return;
+
   state.targetLatency = value;
   mediaElement()?.setAttribute('target-latency', String(value));
   log(`target latency → ${value}s`);
@@ -661,20 +707,22 @@ skinSelect.addEventListener('change', () => {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
 /**
- * Playback needs the WebCodecs decoders in both modes. Everything else is
- * mode-specific: only the in-page publisher encodes and draws offscreen, and
- * only a remote relay needs WebTransport — so a browser that can play a real
- * relay must not be turned away for lacking encoders.
+ * Playback needs the WebCodecs decoders in both modes. Everything else is mode-specific: only the in-page publisher
+ * encodes and draws offscreen, and only a remote relay needs WebTransport — so a browser that can play a real relay
+ * must not be turned away for lacking encoders.
  */
 async function missingSupport(mode: Mode): Promise<string[]> {
   const missing: string[] = [];
+
   if (typeof VideoDecoder === 'undefined' || typeof AudioDecoder === 'undefined') missing.push('WebCodecs decoders');
 
   if (mode === 'loopback') {
     if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') {
       missing.push('WebCodecs encoders (loopback publisher)');
     }
+
     if (typeof OffscreenCanvas === 'undefined') missing.push('OffscreenCanvas (loopback publisher)');
+
     // Present constructors don't mean the platform can run these codecs, and
     // a rejected `configure()` would surface only as a stream that never
     // delivers — so probe the exact configurations the publisher uses.
@@ -687,8 +735,10 @@ async function missingSupport(mode: Mode): Promise<string[]> {
 }
 
 if (composeProblem) log(`ignoring ?ns= — ${composeProblem}`, 'error');
+
 if (relayParamProblem)
   log(`ignoring ${nsParam ? 'the composed source' : '?relay='} — it ${relayParamProblem}`, 'error');
+
 log(
   state.autoplay
     ? 'autoplay — video starts immediately; audio (the master clock) unlocks on the first gesture'

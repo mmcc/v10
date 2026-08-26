@@ -1,29 +1,29 @@
-'use client';
-
 import type { MenuCore, MenuState } from '@videojs/core';
 import { isMenuNavigationKey } from '@videojs/core/dom';
+import { isInteractiveActivation } from '@videojs/utils/dom';
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { UIComponentProps } from '../../utils/types';
 import { renderElement } from '../../utils/use-render';
 import { useSafeId } from '../../utils/use-safe-id';
 import { MenuTriggerChildContextProvider, useMenuContext } from './context';
+import { callKeyDownHandler, preventMenuKeyDefault } from './menu-keyboard';
 
-export interface MenuTriggerProps extends Omit<UIComponentProps<'button', MenuState>, 'type'> {
+type MenuTriggerElement = HTMLButtonElement | HTMLDivElement;
+
+export interface MenuTriggerProps extends Omit<
+  UIComponentProps<'button', MenuState>,
+  'type' | 'onClick' | 'onKeyDown'
+> {
   /** Disables the trigger. */
   disabled?: boolean;
-}
-
-function preventMenuKeyDefault(event: React.KeyboardEvent<HTMLElement>): void {
-  if (event.key !== 'Escape' && isMenuNavigationKey(event) && !event.defaultPrevented) {
-    event.preventDefault();
-  }
+  onClick?: React.MouseEventHandler<MenuTriggerElement>;
+  onKeyDown?: React.KeyboardEventHandler<MenuTriggerElement>;
 }
 
 /**
- * Button that toggles the menu visibility. At root level renders a `<button>`.
- * When inside a parent menu (as a submenu trigger), renders as a `<div role="menuitem">`
- * that opens the submenu on click or ArrowRight.
+ * Button that toggles the menu visibility. At root level renders a `<button>`. When inside a parent menu (as a submenu
+ * trigger), renders as a `<div role="menuitem">` that opens the submenu on click or ArrowRight.
  */
 export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTriggerProps>(function MenuTrigger(
   { render, className, style, disabled, onClick, onKeyDown, ...elementProps },
@@ -31,6 +31,7 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
 ) {
   const { core, menu, parent, state, contentId } = useMenuContext();
   const isSubMenuTrigger = parent !== null;
+  const controlledId = state.open || state.status === 'ending' ? contentId : undefined;
 
   const elementRef = useRef<HTMLElement>(null);
   const triggerId = useSafeId('sub-trigger');
@@ -40,10 +41,13 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
   // Register with the parent menu's item list when acting as a submenu trigger.
   useEffect(() => {
     if (!isSubMenuTrigger || !parentMenuApi) return;
+
     const element = elementRef.current;
     if (!element) return;
+
     menu.setTriggerElement(element);
     const unregister = parentMenuApi.registerItem(element);
+
     return () => {
       unregister();
       menu.setTriggerElement(null);
@@ -56,8 +60,10 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
 
   const handleSubMenuClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      (onClick as React.MouseEventHandler<HTMLDivElement> | undefined)?.(event);
+      onClick?.(event);
+
       if (event.defaultPrevented) return;
+
       openSubMenu();
     },
     [onClick, openSubMenu]
@@ -65,8 +71,9 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
 
   const handleSubMenuKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      (onKeyDown as React.KeyboardEventHandler<HTMLDivElement> | undefined)?.(event);
-      if (disabled || event.defaultPrevented) return;
+      const defaultPreventedByUser = callKeyDownHandler(onKeyDown, event);
+      if (disabled || defaultPreventedByUser) return;
+
       if (event.key === 'ArrowRight') {
         event.preventDefault();
         openSubMenu();
@@ -78,7 +85,8 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
   const handlePointerEnter = useCallback(() => {
     const element = elementRef.current;
     if (!element || disabled || !parentMenuApi) return;
-    parentMenuApi.highlight(element, { focus: false });
+
+    parentMenuApi.highlight(element, { focus: false, pointer: true });
   }, [disabled, parentMenuApi]);
 
   // Root trigger mode — standard button that toggles the menu.
@@ -89,20 +97,34 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
     [menu]
   );
 
-  const rootTriggerProps = useMemo(() => {
-    if (!disabled) return menu.triggerProps;
+  const handleRootKeyDown = useCallback(
+    (event: React.KeyboardEvent<MenuTriggerElement>) => {
+      const defaultPreventedByUser = callKeyDownHandler(onKeyDown, event);
 
-    return {
-      onClick: (event: React.MouseEvent<HTMLElement>) => {
+      if (disabled || defaultPreventedByUser) {
+        if (disabled && isMenuNavigationKey(event)) event.preventDefault();
+
+        return;
+      }
+
+      if (isInteractiveActivation(event.nativeEvent)) {
         event.preventDefault();
-      },
-      onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
-        if (event.key === 'Enter' || event.key === ' ' || isMenuNavigationKey(event)) {
-          event.preventDefault();
-        }
-      },
-    };
-  }, [disabled, menu.triggerProps]);
+        menu.triggerProps.onClick(event.nativeEvent);
+        return;
+      }
+
+      menu.triggerProps.onKeyDown(event);
+    },
+    [disabled, menu.triggerProps, onKeyDown]
+  );
+
+  const rootTriggerProps = useMemo(
+    () => ({
+      onClick: disabled ? (event: React.MouseEvent<HTMLElement>) => event.preventDefault() : menu.triggerProps.onClick,
+      onKeyDown: handleRootKeyDown,
+    }),
+    [disabled, handleRootKeyDown, menu.triggerProps]
+  );
 
   // Submenu trigger mode — renders as a div with role="menuitem"
   if (isSubMenuTrigger) {
@@ -116,7 +138,7 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
         forwardedRef={forwardedRef}
         elementRef={elementRef}
         triggerId={triggerId}
-        triggerAttrs={core.getTriggerAttrs(state, contentId)}
+        triggerAttrs={core.getTriggerAttrs(state, controlledId)}
         state={state}
         onSubMenuClick={handleSubMenuClick}
         onSubMenuKeyDown={handleSubMenuKeyDown}
@@ -134,7 +156,7 @@ export const MenuTrigger = forwardRef<HTMLButtonElement | HTMLDivElement, MenuTr
           state,
           ref: [forwardedRef as React.Ref<HTMLButtonElement>, triggerRef],
           props: [
-            { type: 'button' as const, ...core.getTriggerAttrs(state, contentId) },
+            { type: 'button' as const, ...core.getTriggerAttrs(state, controlledId) },
             disabled ? { disabled: true, 'aria-disabled': 'true' as const } : undefined,
             state.open ? { onKeyDownCapture: preventMenuKeyDefault } : undefined,
             rootTriggerProps,

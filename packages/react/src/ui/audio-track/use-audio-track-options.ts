@@ -1,5 +1,3 @@
-'use client';
-
 import { AudioTrackRadioGroupCore, type AudioTrackRadioGroupOption } from '@videojs/core';
 import { selectAudioTrack } from '@videojs/core/dom';
 
@@ -28,8 +26,8 @@ const useAudioTrackRadioOptions = createRadioOptionsHook({
 });
 
 /**
- * Create audio track menu options from the player audio track state. Returns
- * `null` when the audio track feature is not configured.
+ * Create audio track menu options from the player audio track state. Returns `null` when the audio track feature is not
+ * configured.
  *
  * @param props - Optional `label`, `formatTrack`, and `disabled` overrides.
  */

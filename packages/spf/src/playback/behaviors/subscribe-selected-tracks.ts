@@ -1,63 +1,41 @@
 /**
- * **Turn per-type track selection into MoQ subscriptions.** The MoQ analog
- * of `resolve-track` + `load-segments` combined: reacts to
- * `selected{Video,Audio}TrackId` (written by the reused `track-switching`
- * behaviors) and keeps exactly one live `track-subscriber` actor per type
- * in context, feeding the renderers.
+ * **Turn per-type track selection into MoQ subscriptions.** The MoQ analog of `resolve-track` + `load-segments`
+ * combined: reacts to `selected{Video,Audio}TrackId` (written by the reused `track-switching` behaviors) and keeps
+ * exactly one live `track-subscriber` actor per type in context, feeding the renderers.
  *
- * Switches are **make-before-break**: the new track is subscribed at an
- * MSF time-aligned boundary (`next-group-start` — groups open with a
- * random-access point, and alternate-group tracks share group numbers,
- * §4.2) while the old subscription keeps playing. Only once the new
- * subscriber has buffered a decodable keyframe-led group
- * (`hasDecodableFrame`) *and* its oldest frame is due at the playout
- * clock (`currentTime`) does the swap happen: old cancelled, new
- * promoted.
- * That's what prevents playback gaps on ABR/language switches, and it's
- * why each type has a `pending*SubscriberActor` sibling slot — old and
- * new overlap during the handoff.
+ * Switches are **make-before-break**: the new track is subscribed at an MSF time-aligned boundary (`next-group-start` —
+ * groups open with a random-access point, and alternate-group tracks share group numbers, §4.2) while the old
+ * subscription keeps playing. Only once the new subscriber has buffered a decodable keyframe-led group
+ * (`hasDecodableFrame`) _and_ its oldest frame is due at the playout clock (`currentTime`) does the swap happen: old
+ * cancelled, new promoted. That's what prevents playback gaps on ABR/language switches, and it's why each type has a
+ * `pending*SubscriberActor` sibling slot — old and new overlap during the handoff.
  *
- * ```
- * 'preconditions-unmet' → 'session-ready'
- * ```
+ *     'preconditions-unmet' → 'session-ready'
  *
- * `'session-ready'` requires the session actor to be ready, the load
- * gate to be open (`loadActivated || preload === 'auto'` — the same gate
- * as HLS `load-segments`' full-range loading), *and* media delivery not
- * suspended (`mediaSuspended`, set by `suspend-media-while-paused` when a
- * pause outlives its hold window). The audio variant reads one further
- * gate: `audioSuspended`, the adapter's autoplay-policy deferral — while
- * a playback that began without a user gesture cannot resume its
- * AudioContext, audio delivery waits (video keeps playing on the
- * self-clock) and the unlock rejoins at the live edge. Catalog resolution
- * stays ungated in `resolve-catalog`, so `preload: 'metadata'` still
- * resolves tracks without downloading media — and a suspended pause keeps
- * receiving catalog updates. Closing any gate exits the state and tears
- * both subscribers down; reopening re-subscribes the current selection
+ * `'session-ready'` requires the session actor to be ready, the load gate to be open (`loadActivated || preload ===
+ * 'auto'` — the same gate as HLS `load-segments`' full-range loading), _and_ media delivery not suspended
+ * (`mediaSuspended`, set by `suspend-media-while-paused` when a pause outlives its hold window). The audio variant
+ * reads one further gate: `audioSuspended`, the adapter's autoplay-policy deferral — while a playback that began
+ * without a user gesture cannot resume its AudioContext, audio delivery waits (video keeps playing on the self-clock)
+ * and the unlock rejoins at the live edge. Catalog resolution stays ungated in `resolve-catalog`, so `preload:
+ * 'metadata'` still resolves tracks without downloading media — and a suspended pause keeps receiving catalog updates.
+ * Closing any gate exits the state and tears both subscribers down; reopening re-subscribes the current selection
  * through the initial-join filters (a live-edge rejoin, not a handoff).
  *
- * Dead-subscription recovery: a subscription can die while its selection
- * stands — the publisher ended it (PUBLISH_DONE on a broadcaster blip),
- * the relay refused it, or the subscriber's stall watchdog gave up. The
- * actor reports that as a terminal snapshot status (`'ended'`/`'error'`);
- * this behavior destroys the dead actor(s) and re-subscribes the same
- * selection at the live edge (the initial-join filter, exactly the
- * suspend/rejoin path) after a capped backoff (`subscribeRetry`). An
- * `'ended'` subscription first plays out its buffered tail — late
- * subgroups keep arriving after PUBLISH_DONE by design — where an
- * `'error'`/stall death has nothing worth draining. Deaths the actor
- * marks `unrecoverable` (permanent rejections, spent auth) are not
- * rejoined at all: the corpse holds its slot until the selection moves.
- * Replacing the actor rides the renderers' existing swap path — decoder
- * reconfigure, clock re-anchor — so a broadcaster restart with reset
- * timestamps re-anchors instead of stalling.
+ * Dead-subscription recovery: a subscription can die while its selection stands — the publisher ended it (PUBLISH_DONE
+ * on a broadcaster blip), the relay refused it, or the subscriber's stall watchdog gave up. The actor reports that as a
+ * terminal snapshot status (`'ended'`/`'error'`); this behavior destroys the dead actor(s) and re-subscribes the same
+ * selection at the live edge (the initial-join filter, exactly the suspend/rejoin path) after a capped backoff
+ * (`subscribeRetry`). An `'ended'` subscription first plays out its buffered tail — late subgroups keep arriving after
+ * PUBLISH_DONE by design — where an `'error'`/stall death has nothing worth draining. Deaths the actor marks
+ * `unrecoverable` (permanent rejections, spent auth) are not rejoined at all: the corpse holds its slot until the
+ * selection moves. Replacing the actor rides the renderers' existing swap path — decoder reconfigure, clock re-anchor —
+ * so a broadcaster restart with reset timestamps re-anchors instead of stalling.
  *
- * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor`
- * slots (renderers and latency/bandwidth behaviors only read). Slot reads
- * inside the effect use `peek` — the effect re-fires on selection/session/
- * pending-snapshot changes, plus status *transitions* of its own actors
- * (equality-gated `computed`s over the slots) and the rejoin timer's tick,
- * not on its own slot writes.
+ * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor` slots (renderers and latency/bandwidth
+ * behaviors only read). Slot reads inside the effect use `peek` — the effect re-fires on selection/session/
+ * pending-snapshot changes, plus status _transitions_ of its own actors (equality-gated `computed`s over the slots) and
+ * the rejoin timer's tick, not on its own slot writes.
  */
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
@@ -94,10 +72,9 @@ export interface SubscribeSelectedTracksState {
   /** Sustained-pause gate written by `suspend-media-while-paused`. */
   mediaSuspended?: boolean;
   /**
-   * Adapter-written autoplay-policy gate, read by the audio variant only:
-   * set while playback started without a user gesture and the suspended
-   * AudioContext cannot render audio yet. Same release/rejoin semantics
-   * as `mediaSuspended`, scoped to the audio subscription.
+   * Adapter-written autoplay-policy gate, read by the audio variant only: set while playback started without a user
+   * gesture and the suspended AudioContext cannot render audio yet. Same release/rejoin semantics as `mediaSuspended`,
+   * scoped to the audio subscription.
    */
   audioSuspended?: boolean;
   /** Playout clock (media seconds) — gates make-before-break promotion. */
@@ -116,16 +93,11 @@ export interface SubscribeSelectedTracksConfig {
   /** Subscriber factory seam for tests. */
   createTrackSubscriber?: typeof createTrackSubscriberActor;
   /**
-   * Backoff for re-subscribing a media track whose subscription died
-   * (publisher ended it, relay error, data stall). Defaults to
-   * {@link DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG}; `maxAttempts: 0`
-   * disables recovery.
+   * Backoff for re-subscribing a media track whose subscription died (publisher ended it, relay error, data stall).
+   * Defaults to {@link DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG}; `maxAttempts: 0` disables recovery.
    */
   subscribeRetry?: Partial<RetryBackoffConfig>;
-  /**
-   * Data-starvation deadline threaded into each track subscriber — see
-   * `CreateTrackSubscriberOptions.stallTimeoutMs`.
-   */
+  /** Data-starvation deadline threaded into each track subscriber — see `CreateTrackSubscriberOptions.stallTimeoutMs`. */
   subscribeStallTimeoutMs?: number;
 }
 
@@ -136,9 +108,8 @@ type PendingKey = 'pendingVideoSubscriberActor' | 'pendingAudioSubscriberActor';
 type FsmState = 'preconditions-unmet' | 'session-ready';
 
 /**
- * Promotion slack: one ~30fps frame in microseconds. The pending
- * subscriber's oldest frame counts as "due" this close to the playout
- * clock so promotion doesn't wait a full clock tick past the boundary.
+ * Promotion slack: one ~30fps frame in microseconds. The pending subscriber's oldest frame counts as "due" this close
+ * to the playout clock so promotion doesn't wait a full clock tick past the boundary.
  */
 const PROMOTION_EPSILON_US = 33_000;
 
@@ -147,7 +118,7 @@ interface VariantWiring {
   selectionKey: SelectionKey;
   subscriberKey: SubscriberKey;
   pendingKey: PendingKey;
-  /** Filter for the *initial* subscription of this type (no handoff). */
+  /** Filter for the _initial_ subscription of this type (no handoff). */
   joinFilter: LocationFilter;
 }
 
@@ -175,10 +146,9 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     config?: SubscribeSelectedTracksConfig;
   },
   /**
-   * Extra suspension gate the audio variant threads in (`audioSuspended`).
-   * Passed explicitly rather than probed off the state map: every behavior
-   * receives the composition's full signal map at runtime, so an optional
-   * read here would silently subscribe the video variant to the slot too.
+   * Extra suspension gate the audio variant threads in (`audioSuspended`). Passed explicitly rather than probed off the
+   * state map: every behavior receives the composition's full signal map at runtime, so an optional read here would
+   * silently subscribe the video variant to the slot too.
    */
   audioSuspended?: ReadonlySignal<boolean | undefined>
 ): Reactor<FsmState | 'destroying' | 'destroyed'> {
@@ -207,6 +177,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
     // only): release the subscription (the catalog stays subscribed);
     // reopening rejoins at the live edge via the initial filters.
     const suspended = state.mediaSuspended.get() === true || audioSuspended?.get() === true;
+
     return sessionReady && loadGateOpen && !suspended ? 'session-ready' : 'preconditions-unmet';
   });
 
@@ -240,58 +211,54 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempts = 0;
   /**
-   * The subscriber the last recovery created, until it proves healthy.
-   * The backoff may only reset on *that* actor going `'active'` — a
-   * healthy current is exactly what keeps playing while a handoff retry
-   * fails over and over, so any reset keyed on the steady state (rather
-   * than on the replacement itself) re-runs every handoff retry at
-   * attempt 0 and never spends a finite budget.
+   * The subscriber the last recovery created, until it proves healthy. The backoff may only reset on _that_ actor going
+   * `'active'` — a healthy current is exactly what keeps playing while a handoff retry fails over and over, so any
+   * reset keyed on the steady state (rather than on the replacement itself) re-runs every handoff retry at attempt 0
+   * and never spends a finite budget.
    */
   let recoveryTarget: TrackSubscriberActor | undefined;
 
   /**
-   * The selection an armed rejoin timer is recovering. A retry belongs to
-   * the track that died — a selection that changes mid-backoff must not
-   * wait it out, and by then the slots are empty, so the timer itself has
-   * to carry the identity the corpse no longer can.
+   * The selection an armed rejoin timer is recovering. A retry belongs to the track that died — a selection that
+   * changes mid-backoff must not wait it out, and by then the slots are empty, so the timer itself has to carry the
+   * identity the corpse no longer can.
    */
   let retryTrackId: string | undefined;
 
   const clearRetryTimer = (): void => {
     if (retryTimer === undefined) return;
+
     clearTimeout(retryTimer);
     retryTimer = undefined;
     retryTrackId = undefined;
   };
 
   /**
-   * The Retry Interval a REQUEST_ERROR death carried, when it did — an
-   * overloaded relay's stated pacing outranks the local backoff, same as
-   * the catalog retry path.
+   * The Retry Interval a REQUEST_ERROR death carried, when it did — an overloaded relay's stated pacing outranks the
+   * local backoff, same as the catalog retry path.
    */
   const serverRetryIntervalMs = (actor: TrackSubscriberActor): number => {
     const error = peek(actor.snapshot).context.error as { retryInterval?: unknown } | undefined;
+
     return typeof error?.retryInterval === 'number' ? error.retryInterval : 0;
   };
 
   /**
-   * Died in a way an identical replacement would repeat — spent auth
-   * refresh, permanent request rejection, auth-shaped PUBLISH_DONE (see
-   * `TrackSubscriberContext.unrecoverable`). Recovery must not loop on
-   * it: with the default infinite budget it would rebuild the same
-   * failure forever. The corpse stays in its slot (the spent-budget
-   * shape); a selection change still moves past it.
+   * Died in a way an identical replacement would repeat — spent auth refresh, permanent request rejection, auth-shaped
+   * PUBLISH_DONE (see `TrackSubscriberContext.unrecoverable`). Recovery must not loop on it: with the default infinite
+   * budget it would rebuild the same failure forever. The corpse stays in its slot (the spent-budget shape); a
+   * selection change still moves past it.
    */
   const isUnrecoverable = (actor: TrackSubscriberActor): boolean => peek(actor.snapshot).context.unrecoverable === true;
 
   /**
-   * Arm the rejoin backoff for `trackId`, honoring a server-stated Retry
-   * Interval above the local delay. Returns false when the retry budget is
-   * spent.
+   * Arm the rejoin backoff for `trackId`, honoring a server-stated Retry Interval above the local delay. Returns false
+   * when the retry budget is spent.
    */
   const armRejoinTimer = (trackId: string, retryIntervalMs = 0): boolean => {
     const delay = retryDelayMs(retryAttempts, retryConfig);
     if (delay === undefined) return false;
+
     retryAttempts++;
     retryTrackId = trackId;
     retryTimer = setTimeout(
@@ -335,11 +302,13 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
 
             if (!selectedId || !session || !presentation) {
               if (current || pending) clearSlots();
+
               return;
             }
 
             const currentStatus = currentStatusSignal.get();
             const pendingStatus = pendingStatusSignal.get();
+
             // The outage is over only when the recovery's own replacement
             // reaches the relay (SUBSCRIBE_OK / a first frame) — see
             // `recoveryTarget`. It may sit in either slot: a live-edge
@@ -348,6 +317,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             if (recoveryTarget !== undefined) {
               const recoveredStatus =
                 recoveryTarget === current ? currentStatus : recoveryTarget === pending ? pendingStatus : undefined;
+
               if (recoveredStatus === 'active') {
                 recoveryTarget = undefined;
                 retryAttempts = 0;
@@ -397,6 +367,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               if (currentStatus === 'ended' && current.snapshot.get().context.frameCount > 0) {
                 return;
               }
+
               // NOTE(tail-completeness): frameCount === 0 approximates "the
               // tail played out" — subgroup streams still in flight after
               // PUBLISH_DONE and frames the renderers already own are not
@@ -405,6 +376,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // against PublishDone.streamCount and the renderers to report
               // drained pipelines; not worth that machinery yet.
               if (isUnrecoverable(current)) return;
+
               // The subscription is dead and drained; whatever it buffered
               // has played. Drop it (and any in-flight handoff — promotion
               // gates on a playout clock this dead track would stall) and
@@ -414,8 +386,10 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               if (retryTimer === undefined && armRejoinTimer(selectedId, serverRetryIntervalMs(current))) {
                 clearSlots();
               }
+
               return;
             }
+
             // A backoff armed for a selection that no longer stands is the
             // dead track's, not the new one's — cancel it with the rest of
             // the retry state and let this pass subscribe the new track.
@@ -424,6 +398,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               retryAttempts = 0;
               recoveryTarget = undefined;
             }
+
             // While a rejoin backoff runs, nothing may (re)subscribe — the
             // timer's tick re-runs this effect and the normal creation path
             // below performs the live-edge join.
@@ -435,6 +410,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
                 pending.destroy();
                 pendingSlot.set(undefined);
               }
+
               return;
             }
 
@@ -443,6 +419,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // the corpse holds the slot (spent-budget shape) instead of
               // rebuilding the same failure forever.
               if (isUnrecoverable(pending)) return;
+
               // A handoff target died before promoting (e.g. the relay
               // refused the new track). Keep playing the current track,
               // drop the dead pending, and let the backoff pace the retry.
@@ -452,6 +429,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // would let the creation path below re-subscribe the same
               // dead track with no delay at all.
               if (!armRejoinTimer(selectedId, serverRetryIntervalMs(pending))) return;
+
               pending.destroy();
               pendingSlot.set(undefined);
               return;
@@ -462,6 +440,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // new subscription has a decodable keyframe buffered.
               const pendingContext = pending.snapshot.get().context;
               if (!pendingContext.hasDecodableFrame) return;
+
               // The pending subscription joined at the live edge, but the
               // playout clock runs ~targetLatency behind it — promoting
               // before its frames are due freezes video / gaps audio for
@@ -477,11 +456,13 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
                 currentTime === undefined ||
                 oldestTimestampUs === undefined ||
                 oldestTimestampUs <= currentTime * 1e6 + PROMOTION_EPSILON_US;
+
               if (due) {
                 current?.destroy();
                 subscriberSlot.set(pending);
                 pendingSlot.set(undefined);
               }
+
               return;
             }
 
@@ -499,9 +480,11 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               refreshAuth: () => actor.refreshAuthToken(),
               stallTimeoutMs: config?.subscribeStallTimeoutMs,
             });
+
             // Tracked read: subscribing this effect to the new actor's
             // snapshot is what re-fires the handoff check as frames land.
             subscriber.snapshot.get();
+
             // A creation while attempts are outstanding IS the recovery's
             // replacement — the one whose health resets the backoff.
             if (retryAttempts > 0) recoveryTarget = subscriber;
@@ -527,7 +510,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
  * Video: joins at the next group boundary so decode starts on a keyframe.
  *
  * @example
- * const reactor = subscribeSelectedVideoTrack.setup({ state, context });
+ *   const reactor = subscribeSelectedVideoTrack.setup({ state, context });
  */
 export const subscribeSelectedVideoTrack = defineBehavior({
   stateKeys: ['presentation', 'selectedVideoTrackId', 'preload', 'loadActivated', 'mediaSuspended', 'currentTime'],
@@ -550,13 +533,12 @@ export const subscribeSelectedVideoTrack = defineBehavior({
 });
 
 /**
- * Audio: every frame is independently decodable, so the initial join
- * starts straight at the live edge. Also the only reader of the
- * `audioSuspended` autoplay-policy gate — deferred-audio playback keeps
- * video subscribed while audio waits for the user-gesture unlock.
+ * Audio: every frame is independently decodable, so the initial join starts straight at the live edge. Also the only
+ * reader of the `audioSuspended` autoplay-policy gate — deferred-audio playback keeps video subscribed while audio
+ * waits for the user-gesture unlock.
  *
  * @example
- * const reactor = subscribeSelectedAudioTrack.setup({ state, context });
+ *   const reactor = subscribeSelectedAudioTrack.setup({ state, context });
  */
 export const subscribeSelectedAudioTrack = defineBehavior({
   stateKeys: [

@@ -1,5 +1,296 @@
 # Changelog
 
+## [10.0.0-beta.32](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.31...@videojs/html@10.0.0-beta.32) (2026-08-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **html:** make preset and UI registration explicit ([#2247](https://github.com/videojs/v10/issues/2247))
+* **packages:** separate controls content and backdrop surfaces ([#2436](https://github.com/videojs/v10/issues/2436))
+* **packages:** separate dialog popup and backdrop surfaces ([#2435](https://github.com/videojs/v10/issues/2435))
+* **html:** return PlayerElement from createPlayer ([#2180](https://github.com/videojs/v10/issues/2180))
+* **html:** rename MediaElement to UIElement ([#2245](https://github.com/videojs/v10/issues/2245))
+* **html:** replace ContainerMixin with ContainerElement ([#2280](https://github.com/videojs/v10/issues/2280))
+
+### Features
+
+* **packages:** add backdrop component parts ([#2343](https://github.com/videojs/v10/issues/2343)) ([81bb99a](https://github.com/videojs/v10/commit/81bb99abbce0af138d8dcfd04d456a3d654424ca))
+* **packages:** add dialog component ([#2379](https://github.com/videojs/v10/issues/2379)) ([108b8fd](https://github.com/videojs/v10/commit/108b8fda826a870bf29453289a0081ebd7df890c))
+* **packages:** add volume popover compound ([#2378](https://github.com/videojs/v10/issues/2378)) ([a23fdd9](https://github.com/videojs/v10/commit/a23fdd93e56c07aab53cad0e66672926b1582411))
+* **packages:** expose container controls state ([#2376](https://github.com/videojs/v10/issues/2376)) ([30065dd](https://github.com/videojs/v10/commit/30065dd1980c35484b41b3a4925a6ef049aae6a0))
+* **packages:** separate controls content and backdrop surfaces ([#2436](https://github.com/videojs/v10/issues/2436)) ([7a6ccb0](https://github.com/videojs/v10/commit/7a6ccb0058c0a15fa30fd07cef3f662ac121d90c))
+* **packages:** separate dialog popup and backdrop surfaces ([#2435](https://github.com/videojs/v10/issues/2435)) ([0065e9f](https://github.com/videojs/v10/commit/0065e9f77ced3a5f9878e135c5a1bcd1825f229d))
+* **site:** generate component event references ([#2404](https://github.com/videojs/v10/issues/2404)) ([1fec07c](https://github.com/videojs/v10/commit/1fec07c1c5a0cd7a899c103eeb44d9401f24526d))
+
+
+### Bug Fixes
+
+* **element:** preserve props across late registration ([#2400](https://github.com/videojs/v10/issues/2400)) ([8b96602](https://github.com/videojs/v10/commit/8b966029325470f49c028f8d19242ac5100373c7))
+* **html:** handle detached popup roots ([#2348](https://github.com/videojs/v10/issues/2348)) ([9c76a99](https://github.com/videojs/v10/commit/9c76a9976a5aa4fa3b76bbc24f1057815e770953))
+* **i18n:** preserve registered translation overrides ([#2354](https://github.com/videojs/v10/issues/2354)) ([c6307e9](https://github.com/videojs/v10/commit/c6307e9830262441fa557da43984ef428a86f57f))
+* **packages:** add audio playback rate tooltips ([#2389](https://github.com/videojs/v10/issues/2389)) ([bc9fd5f](https://github.com/videojs/v10/commit/bc9fd5f81d1b50300f50ae9a71d1e5bb4b7a0e85))
+* **packages:** improve menu behavior and sizing ([#2440](https://github.com/videojs/v10/issues/2440)) ([0d90572](https://github.com/videojs/v10/commit/0d9057268c59d17a4c91f1f84a60333cf082fd38))
+* **packages:** make html entries server importable ([#2428](https://github.com/videojs/v10/issues/2428)) ([33f4de1](https://github.com/videojs/v10/commit/33f4de15b6d73fdba5f1d7aeb6b94b469f6c1487))
+* **packages:** restore minimal volume controls ([#2386](https://github.com/videojs/v10/issues/2386)) ([2e9c1e2](https://github.com/videojs/v10/commit/2e9c1e221e4eca5dbc76e01718fabf82c433a483))
+
+
+### Performance Improvements
+
+* **packages:** enable native MagicString ([#2311](https://github.com/videojs/v10/issues/2311)) ([599007f](https://github.com/videojs/v10/commit/599007f72461b51eb4a4ad28049bb7bbc3e207d7))
+
+
+### Code Refactoring
+
+* **html:** make preset and UI registration explicit ([#2247](https://github.com/videojs/v10/issues/2247)) ([2fe8b79](https://github.com/videojs/v10/commit/2fe8b79b1fa5ccbc83b460523c9e610ea5beabde))
+* **html:** rename MediaElement to UIElement ([#2245](https://github.com/videojs/v10/issues/2245)) ([761dcf3](https://github.com/videojs/v10/commit/761dcf382b5c2fc37f1d1ce892e82910e6113910))
+* **html:** replace ContainerMixin with ContainerElement ([#2280](https://github.com/videojs/v10/issues/2280)) ([76fa285](https://github.com/videojs/v10/commit/76fa285c3e91143d6776dfce4562147116036751))
+* **html:** return PlayerElement from createPlayer ([#2180](https://github.com/videojs/v10/issues/2180)) ([2007d18](https://github.com/videojs/v10/commit/2007d18f72f2f28a5b45b071c921281751e2b208))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-beta.32
+    * @videojs/element bumped to 10.0.0-beta.32
+    * @videojs/media bumped to 10.0.0-beta.32
+    * @videojs/spf bumped to 10.0.0-beta.32
+    * @videojs/store bumped to 10.0.0-beta.32
+    * @videojs/utils bumped to 10.0.0-beta.32
+  * devDependencies
+    * @videojs/icons bumped to 10.0.0-beta.32
+    * @videojs/skins bumped to 10.0.0-beta.32
+
+## [10.0.0-beta.31](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.30...@videojs/html@10.0.0-beta.31) (2026-08-21)
+
+
+### Features
+
+* **packages:** add live presets to installation and skin tools ([#1919](https://github.com/videojs/v10/issues/1919)) ([44a398c](https://github.com/videojs/v10/commit/44a398c3a0c7084bedabd77123742f9521d2b052))
+* **packages:** add right-to-left player support ([#2281](https://github.com/videojs/v10/issues/2281)) ([caf179b](https://github.com/videojs/v10/commit/caf179b83260a242a7ff284d1d474f97a91988a9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-beta.31
+    * @videojs/element bumped to 10.0.0-beta.31
+    * @videojs/media bumped to 10.0.0-beta.31
+    * @videojs/spf bumped to 10.0.0-beta.31
+    * @videojs/store bumped to 10.0.0-beta.31
+    * @videojs/utils bumped to 10.0.0-beta.31
+  * devDependencies
+    * @videojs/icons bumped to 10.0.0-beta.31
+    * @videojs/skins bumped to 10.0.0-beta.31
+
+## [10.0.0-beta.30](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.29...@videojs/html@10.0.0-beta.30) (2026-08-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** configure orientation lock through providers ([#1999](https://github.com/videojs/v10/issues/1999))
+* **packages:** remove built-in poster placeholders ([#2063](https://github.com/videojs/v10/issues/2063))
+
+### Features
+
+* **packages:** add shaka player media ([#2276](https://github.com/videojs/v10/issues/2276)) ([c5895ec](https://github.com/videojs/v10/commit/c5895ecb0887369badffb19d4798207185c02e4e))
+* **packages:** add title component ([#1997](https://github.com/videojs/v10/issues/1997)) ([0841131](https://github.com/videojs/v10/commit/0841131c293a77662ab3417b8ccbb9839d69fb12))
+* **packages:** configure orientation lock through providers ([#1999](https://github.com/videojs/v10/issues/1999)) ([e8829a2](https://github.com/videojs/v10/commit/e8829a2ccf95c0a244bd40134b4f244ad6ccdeaf))
+
+
+### Bug Fixes
+
+* **packages:** load posters and storyboard thumbnails in cross-origin-isolated pages ([#2273](https://github.com/videojs/v10/issues/2273)) ([459fddb](https://github.com/videojs/v10/commit/459fddb7282770963bd28d42ed6c7a572845b88b))
+
+
+### Code Refactoring
+
+* **packages:** remove built-in poster placeholders ([#2063](https://github.com/videojs/v10/issues/2063)) ([e7de7a7](https://github.com/videojs/v10/commit/e7de7a78c4806403a2416926bdbeddb171de1fed))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-beta.30
+    * @videojs/element bumped to 10.0.0-beta.30
+    * @videojs/media bumped to 10.0.0-beta.30
+    * @videojs/spf bumped to 10.0.0-beta.30
+    * @videojs/store bumped to 10.0.0-beta.30
+    * @videojs/utils bumped to 10.0.0-beta.30
+  * devDependencies
+    * @videojs/icons bumped to 10.0.0-beta.30
+    * @videojs/skins bumped to 10.0.0-beta.30
+
+## [10.0.0-beta.29](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.28...@videojs/html@10.0.0-beta.29) (2026-08-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** resolve the poster in the store, and set src on img from it ([#2039](https://github.com/videojs/v10/issues/2039))
+* **packages:** name the resolved title `title`, and take it from config only ([#2176](https://github.com/videojs/v10/issues/2176))
+* **spf:** cap renditions to the screen and surface unplayable sources ([#2135](https://github.com/videojs/v10/issues/2135))
+
+### Features
+
+* **packages:** name the resolved title `title`, and take it from config only ([#2176](https://github.com/videojs/v10/issues/2176)) ([969cf56](https://github.com/videojs/v10/commit/969cf567b3125e437d8f68982f655ee4255409ae))
+* **packages:** resolve the poster in the store, and set src on img from it ([#2039](https://github.com/videojs/v10/issues/2039)) ([7a902db](https://github.com/videojs/v10/commit/7a902db20e9ec335eb27a6cee6aaa6a7c0d0e29d))
+* **skin:** add canonical buffering indicator ([#2189](https://github.com/videojs/v10/issues/2189)) ([4055cd5](https://github.com/videojs/v10/commit/4055cd5cd93fbeb902159701c74d8839d05737fc))
+* **skin:** add canonical captions button ([#2191](https://github.com/videojs/v10/issues/2191)) ([6a6d8a6](https://github.com/videojs/v10/commit/6a6d8a669afb24299ffd745fe60b937e0c1a2b1f))
+* **skin:** add canonical error dialog ([#2190](https://github.com/videojs/v10/issues/2190)) ([fdfa869](https://github.com/videojs/v10/commit/fdfa869edaf42989194f18c33c8e438257220518))
+* **skin:** add canonical input indicators ([#2193](https://github.com/videojs/v10/issues/2193)) ([549f65c](https://github.com/videojs/v10/commit/549f65c88411279fd1e3153efbe6c3d541648bb6))
+* **skin:** add canonical minimal video skin ([#2199](https://github.com/videojs/v10/issues/2199)) ([87b2eb3](https://github.com/videojs/v10/commit/87b2eb3c949235e3612a0a00e6bb23c8f721f98f))
+* **skin:** add canonical remote playback controls ([#2192](https://github.com/videojs/v10/issues/2192)) ([ec0572d](https://github.com/videojs/v10/commit/ec0572d9af57752e28befbc07ba57440aa209a15))
+* **skin:** add canonical styling and registry output ([#2202](https://github.com/videojs/v10/issues/2202)) ([8982d8d](https://github.com/videojs/v10/commit/8982d8d88e09827ad14ed406864c1db14d66c9c8))
+* **skin:** add canonical time slider chapters ([#2195](https://github.com/videojs/v10/issues/2195)) ([44ba4e9](https://github.com/videojs/v10/commit/44ba4e97be5e792680bb8f53edd44492a043459b))
+* **skin:** add canonical video input bindings ([#2197](https://github.com/videojs/v10/issues/2197)) ([885eb82](https://github.com/videojs/v10/commit/885eb824c0a5b38443a8a750c8d9f8b4a6ba23ee))
+* **skin:** add canonical video settings menu ([#2196](https://github.com/videojs/v10/issues/2196)) ([db7e1c3](https://github.com/videojs/v10/commit/db7e1c31c44385119aa6a9d119d422ea982c1a7f))
+* **skin:** complete canonical default video skin ([#2198](https://github.com/videojs/v10/issues/2198)) ([941a6bf](https://github.com/videojs/v10/commit/941a6bfa485bb717522233fb6065ad4d811fb81f))
+* **skin:** complete canonical volume popover ([#2194](https://github.com/videojs/v10/issues/2194)) ([6fd0684](https://github.com/videojs/v10/commit/6fd068423062b42a2ea6c4cd93ffadafe58dfb96))
+* **skin:** share settings menu composition ([#2203](https://github.com/videojs/v10/issues/2203)) ([9b109ba](https://github.com/videojs/v10/commit/9b109ba01230ff166dbd02ba1bbb7e652f94402f))
+* **spf:** cap renditions to the screen and surface unplayable sources ([#2135](https://github.com/videojs/v10/issues/2135)) ([20c1464](https://github.com/videojs/v10/commit/20c14648b8342aec91c07e4a743949488ff62939))
+
+
+### Bug Fixes
+
+* **skin:** align canonical poster and default controls ([#2181](https://github.com/videojs/v10/issues/2181)) ([58db042](https://github.com/videojs/v10/commit/58db04269f0683055e557d2df5b9ab5f6508088b))
+* **skin:** style fixes ([#2257](https://github.com/videojs/v10/issues/2257)) ([ae1ca50](https://github.com/videojs/v10/commit/ae1ca50920e6a7db143c524b4808998e32ed83c5))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-beta.29
+    * @videojs/element bumped to 10.0.0-beta.29
+    * @videojs/media bumped to 10.0.0-beta.29
+    * @videojs/spf bumped to 10.0.0-beta.29
+    * @videojs/store bumped to 10.0.0-beta.29
+    * @videojs/utils bumped to 10.0.0-beta.29
+  * devDependencies
+    * @videojs/icons bumped to 10.0.0-beta.29
+    * @videojs/skins bumped to 10.0.0-beta.29
+
+## [10.0.0-beta.28](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.27...@videojs/html@10.0.0-beta.28) (2026-08-19)
+
+
+### Features
+
+* **ci:** publish the sandbox as a stackblitz preview template ([#2229](https://github.com/videojs/v10/issues/2229)) ([19b017b](https://github.com/videojs/v10/commit/19b017b66e492014638cf5fba85f7efdfd912b4f))
+* **media:** add maxAutoResolution cap to hls.js sources ([#2061](https://github.com/videojs/v10/issues/2061)) ([414513f](https://github.com/videojs/v10/commit/414513f03db856e860a882921927a12e7d57c470))
+* **media:** cap hls.js renditions to the player size ([#2243](https://github.com/videojs/v10/issues/2243)) ([e5dd81a](https://github.com/videojs/v10/commit/e5dd81ad6c255a0203a731a03985e44c91ae1bc3))
+
+
+### Bug Fixes
+
+* **core:** include menu triggers in tab order ([#2238](https://github.com/videojs/v10/issues/2238)) ([8eebaef](https://github.com/videojs/v10/commit/8eebaefc1b2438ea45b1b28df09ef6aef2b2bde6))
+* **html:** ship a cdn bundle for every media element ([#2252](https://github.com/videojs/v10/issues/2252)) ([6999a35](https://github.com/videojs/v10/commit/6999a35d59a020a9c1920010eba4bae295374364))
+* **packages:** make the TikTok embed answer the player's controls ([#2218](https://github.com/videojs/v10/issues/2218)) ([0882e1a](https://github.com/videojs/v10/commit/0882e1a232da5438a312ac09ba522d7eb489573f))
+* **packages:** restore menu trigger keyboard interaction ([#2235](https://github.com/videojs/v10/issues/2235)) ([0b193a5](https://github.com/videojs/v10/commit/0b193a5d365a200d045dd8b306affde919ad6ac7))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-beta.28
+    * @videojs/element bumped to 10.0.0-beta.28
+    * @videojs/media bumped to 10.0.0-beta.28
+    * @videojs/spf bumped to 10.0.0-beta.28
+    * @videojs/store bumped to 10.0.0-beta.28
+    * @videojs/utils bumped to 10.0.0-beta.28
+  * devDependencies
+    * @videojs/icons bumped to 10.0.0-beta.28
+    * @videojs/skins bumped to 10.0.0-beta.28
+
+## [10.0.0-beta.27](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.26...@videojs/html@10.0.0-beta.27) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** normalize time slider chapters ([#2204](https://github.com/videojs/v10/issues/2204))
+* **packages:** remove containers from createPlayer ([#2154](https://github.com/videojs/v10/issues/2154))
+* **packages:** simplify menus ([#2029](https://github.com/videojs/v10/issues/2029))
+* **skin:** css clean up and API stabilization ([#2094](https://github.com/videojs/v10/issues/2094))
+* **packages:** rename the SPF background-video Media to hls-background-video ([#2097](https://github.com/videojs/v10/issues/2097))
+* **packages:** rename SimpleHls* to Hls* (video + audio) ([#2096](https://github.com/videojs/v10/issues/2096))
+* **packages:** add <mux-background-video> over the SPF background-video engine ([#2062](https://github.com/videojs/v10/issues/2062))
+* **spf:** add the SPF-backed Mux Media, elements, and components ([#2045](https://github.com/videojs/v10/issues/2045))
+* **packages:** separate input indicator components ([#2046](https://github.com/videojs/v10/issues/2046))
+* **packages:** normalize radio group option state ([#2047](https://github.com/videojs/v10/issues/2047))
+* **packages:** relocate spf media facades ([#2033](https://github.com/videojs/v10/issues/2033))
+* **packages:** restructure media source, engine, and Mux image APIs ([#1903](https://github.com/videojs/v10/issues/1903))
+* **core:** centralize popup positioning ([#1904](https://github.com/videojs/v10/issues/1904))
+
+### Features
+
+* **build:** include distribution files as a release asset ([#2122](https://github.com/videojs/v10/issues/2122)) ([755a766](https://github.com/videojs/v10/commit/755a7666835190d154e3387c772ce9e3a37d7d67))
+* **i18n:** add Lithuanian locale pack ([#1917](https://github.com/videojs/v10/issues/1917)) ([aa14c87](https://github.com/videojs/v10/commit/aa14c879aed88e3e95fef8a27067cab77c5c11ff))
+* **media:** support DRM protected native HLS playback ([#2014](https://github.com/videojs/v10/issues/2014)) ([1afed11](https://github.com/videojs/v10/commit/1afed1164c98b341f3104cd287cbc55ae20dc2a4))
+* **packages:** add &lt;mux-background-video&gt; over the SPF background-video engine ([#2062](https://github.com/videojs/v10/issues/2062)) ([8dc9562](https://github.com/videojs/v10/commit/8dc9562906e9fb05a56267899a005882d3167d40))
+* **packages:** add chaptered time sliders ([#2043](https://github.com/videojs/v10/issues/2043)) ([6490051](https://github.com/videojs/v10/commit/6490051ac8b991f8c9c47e2cb424b9ffb676230c))
+* **packages:** add cloudflare stream media ([#2168](https://github.com/videojs/v10/issues/2168)) ([cfb4b65](https://github.com/videojs/v10/commit/cfb4b6571f0086c557c5b4683c4ced396067a0d2))
+* **packages:** add spotify audio media ([#2169](https://github.com/videojs/v10/issues/2169)) ([8993ab1](https://github.com/videojs/v10/commit/8993ab1db3cd4ff7569b29c197efdabd8fd18364))
+* **packages:** add tiktok video media ([#2170](https://github.com/videojs/v10/issues/2170)) ([7ff13b4](https://github.com/videojs/v10/commit/7ff13b426d92d5d19aaff8e1d074de05649abf7b))
+* **packages:** add twitch video media ([#2171](https://github.com/videojs/v10/issues/2171)) ([cde01ce](https://github.com/videojs/v10/commit/cde01ceabfc090e4b713d30d5b25115a9fbaed63))
+* **packages:** add youtube media with html and react components ([#1853](https://github.com/videojs/v10/issues/1853)) ([f7571e3](https://github.com/videojs/v10/commit/f7571e3d1fbfbcabf8cba319fb498bb052afb376))
+* **packages:** hide unavailable radio groups ([#2069](https://github.com/videojs/v10/issues/2069)) ([b7fe79e](https://github.com/videojs/v10/commit/b7fe79e2632cc1beda613944eec8bfbd15f9f8e8))
+* **packages:** normalize volume slider availability ([#2072](https://github.com/videojs/v10/issues/2072)) ([5704678](https://github.com/videojs/v10/commit/5704678b1daadcf73636047b2f3772d8c4780996))
+* **packages:** resolve feature state from user and media values ([#1946](https://github.com/videojs/v10/issues/1946)) ([4751abb](https://github.com/videojs/v10/commit/4751abb75bd6febf5ccbccdd9061379c8f384430))
+* **react:** add captions radio group ([#2127](https://github.com/videojs/v10/issues/2127)) ([979458f](https://github.com/videojs/v10/commit/979458fccd6127eff7da74cf528e2f4bc26d2297))
+* **react:** add quality radio group ([#2132](https://github.com/videojs/v10/issues/2132)) ([29171b7](https://github.com/videojs/v10/commit/29171b79ff282efe355864ea18d95382ae9bc9a6))
+* **skin:** add canonical container, poster, and overlay ([#2179](https://github.com/videojs/v10/issues/2179)) ([4f72ee7](https://github.com/videojs/v10/commit/4f72ee7092f7b909c8c892af1f94a10297c97338))
+* **skin:** build pipeline ([#2021](https://github.com/videojs/v10/issues/2021)) ([9381a34](https://github.com/videojs/v10/commit/9381a34025848812325f47634c4e745ba9103f11))
+* **skin:** setup html compiler plugin ([#2007](https://github.com/videojs/v10/issues/2007)) ([cd9cf01](https://github.com/videojs/v10/commit/cd9cf016e18e5c3bdb1a107f06169d8edcb21f66))
+* **spf:** add the SPF-backed Mux Media, elements, and components ([#2045](https://github.com/videojs/v10/issues/2045)) ([d1d1673](https://github.com/videojs/v10/commit/d1d1673ecd17e1ca1492abc5b396296bb8c7b176))
+
+
+### Bug Fixes
+
+* **build:** make cdn bundles self-contained ([#2121](https://github.com/videojs/v10/issues/2121)) ([45c43e9](https://github.com/videojs/v10/commit/45c43e9008875aa7daa7bba10c5842e91bbda2bd))
+* **html:** stabilize ejected element registration ([#2031](https://github.com/videojs/v10/issues/2031)) ([43b83f8](https://github.com/videojs/v10/commit/43b83f8167f30a82f33b3e2c7eed6b98345c1818))
+* **i18n:** improve locale translations ([#1914](https://github.com/videojs/v10/issues/1914)) ([12cc939](https://github.com/videojs/v10/commit/12cc939f58f4ad2db7218374d96c5aa690ca49e5))
+* **i18n:** improve time inversion labels ([#2028](https://github.com/videojs/v10/issues/2028)) ([eeb216a](https://github.com/videojs/v10/commit/eeb216ad2f7dbfe83ec214cb49fc7fb990ff1a7f))
+* **media:** hook the media's actual playback engine in mux data ([#2040](https://github.com/videojs/v10/issues/2040)) ([501af91](https://github.com/videojs/v10/commit/501af9168c92a3ef757ff6de010c86a495df11f4))
+* **packages:** add settings tooltip ([#1915](https://github.com/videojs/v10/issues/1915)) ([96d2e05](https://github.com/videojs/v10/commit/96d2e05147cd973900bb88b5ac5abf8e93fdbe8d))
+* **packages:** build iframe media embeds when the source arrives after attach ([#2118](https://github.com/videojs/v10/issues/2118)) ([b8bffc5](https://github.com/videojs/v10/commit/b8bffc54ab00d731fdf7b9194bc4d50e022059de))
+* **packages:** improve ui motion ([#2208](https://github.com/videojs/v10/issues/2208)) ([42f934e](https://github.com/videojs/v10/commit/42f934e9bea4e4961d63d6de1e2eebcc520f8237))
+* **packages:** keep controls visible during active interactions ([#1900](https://github.com/videojs/v10/issues/1900)) ([35616db](https://github.com/videojs/v10/commit/35616db5a38d193f1fc114da4af68a79f08093f1))
+* **packages:** menu keyboard navigation ([#2214](https://github.com/videojs/v10/issues/2214)) ([15e3ba6](https://github.com/videojs/v10/commit/15e3ba6af98d104739904192afaacccd37014216))
+* **packages:** scope popup groups to containers ([#2083](https://github.com/videojs/v10/issues/2083)) ([453d949](https://github.com/videojs/v10/commit/453d949c7f80c39194170883a6d6ce240d827e46))
+* **skins:** update submenu transitions ([#2130](https://github.com/videojs/v10/issues/2130)) ([c3de3d4](https://github.com/videojs/v10/commit/c3de3d4ff368c2ea1626151a25ff143f3ddc528a))
+
+
+### Code Refactoring
+
+* **core:** centralize popup positioning ([#1904](https://github.com/videojs/v10/issues/1904)) ([d27eda2](https://github.com/videojs/v10/commit/d27eda2a25bd90841d24da0a3fee67d7d3d586c7))
+* **packages:** normalize radio group option state ([#2047](https://github.com/videojs/v10/issues/2047)) ([e91f38c](https://github.com/videojs/v10/commit/e91f38cbcea36d2ab5f138fb178eb7a09b57be3b))
+* **packages:** normalize time slider chapters ([#2204](https://github.com/videojs/v10/issues/2204)) ([12656e0](https://github.com/videojs/v10/commit/12656e01e274c65dd9fd87b3e36ab4c47e9c0949))
+* **packages:** relocate spf media facades ([#2033](https://github.com/videojs/v10/issues/2033)) ([7ee7fa5](https://github.com/videojs/v10/commit/7ee7fa549777378c5e30cc6c151ab0d501538b83))
+* **packages:** remove containers from createPlayer ([#2154](https://github.com/videojs/v10/issues/2154)) ([940037e](https://github.com/videojs/v10/commit/940037e11a45a25ec282d1734e43c33bc6fb355d))
+* **packages:** rename SimpleHls* to Hls* (video + audio) ([#2096](https://github.com/videojs/v10/issues/2096)) ([f1c22a5](https://github.com/videojs/v10/commit/f1c22a5bbfd90e3ce219b8ac5de441c8fba60b8d))
+* **packages:** rename the SPF background-video Media to hls-background-video ([#2097](https://github.com/videojs/v10/issues/2097)) ([729261a](https://github.com/videojs/v10/commit/729261abbfa1cbc9ac882cd8a2f4456b14e685a3))
+* **packages:** restructure media source, engine, and Mux image APIs ([#1903](https://github.com/videojs/v10/issues/1903)) ([99180ff](https://github.com/videojs/v10/commit/99180ff4d5eee9ff9cc3982217fb21877c2e3fd7))
+* **packages:** separate input indicator components ([#2046](https://github.com/videojs/v10/issues/2046)) ([5bdb870](https://github.com/videojs/v10/commit/5bdb87088e6c60b1a4e6838ea38944a7cf125d12))
+* **packages:** simplify menus ([#2029](https://github.com/videojs/v10/issues/2029)) ([cf23269](https://github.com/videojs/v10/commit/cf23269f87250d7a2deadee5dad58b935f5e8c0f))
+* **skin:** css clean up and API stabilization ([#2094](https://github.com/videojs/v10/issues/2094)) ([39a0291](https://github.com/videojs/v10/commit/39a0291be7cad177e09bf7b4c8e74592a17b3744))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-beta.27
+    * @videojs/element bumped to 10.0.0-beta.27
+    * @videojs/media bumped to 10.0.0-beta.27
+    * @videojs/spf bumped to 10.0.0-beta.27
+    * @videojs/store bumped to 10.0.0-beta.27
+    * @videojs/utils bumped to 10.0.0-beta.27
+  * devDependencies
+    * @videojs/icons bumped to 10.0.0-beta.27
+    * @videojs/skins bumped to 10.0.0-beta.27
+
 ## [10.0.0-beta.26](https://github.com/videojs/v10/compare/@videojs/html@10.0.0-beta.25...@videojs/html@10.0.0-beta.26) (2026-08-02)
 
 

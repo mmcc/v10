@@ -1,13 +1,11 @@
-// Adapted from `youtube-video-element` from `muxinc/media-elements`,
-// ported to TypeScript and reshaped as a media host to fit the v10
-// media-host architecture (mirrors `dom/vimeo`).
-//
+// Adapted from `youtube-video-element` in `muxinc/media-elements` (MIT), ported to
+// TypeScript and reshaped as a media host (mirrors `dom/vimeo`).
 // Source: https://github.com/muxinc/media-elements
-// License: MIT
 
-import { createPublicPromise, type PublicPromise } from '@videojs/utils/function';
+import { createPublicPromise, noop, type PublicPromise, tryCall } from '@videojs/utils/function';
 import { deepEqual } from '@videojs/utils/object';
 import { isNumber, isUndefined } from '@videojs/utils/predicate';
+
 import { EMPTY_TEXT_TRACKS, EMPTY_TIME_RANGES } from '../../core/constants';
 import { MediaError } from '../../core/media-error';
 import type { TextTrackListLike, Video } from '../../core/types';
@@ -33,14 +31,14 @@ const YouTubeMediaBase = MediaPlayedRangesMixin(EventTarget);
 export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   #target: HTMLIFrameElement | null = null;
   #player: YouTubePlayerApi | null = null;
-  /** The iframe API rejects `cueVideoById`/`loadVideoById` before `onReady`. */
+  // The iframe API rejects `cueVideoById`/`loadVideoById` before `onReady`.
   #playerReady = false;
-  /** A load was requested before the player was ready; replay it on `onReady`. */
+  // A load was requested before the player was ready; replay it on `onReady`.
   #pendingLoad = false;
-  /** Player creation is in flight; the API load makes it span more than a tick. */
+  // Player creation is in flight; the API load makes it span more than a tick.
   #creatingPlayer = false;
   #loadComplete = createPublicPromise<void>();
-  /** Guards async player creation across attach/detach cycles. */
+  // Guards async player creation across attach/detach cycles.
   #attachId = 0;
 
   #src = youtubeMediaDefaultProps.src;
@@ -83,14 +81,14 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   }
 
   /**
-   * Bind the iframe hosting the embed. The iframe API and its player follow as
-   * soon as an embed URL can be resolved, which is not always now: a framework
-   * that creates the element before setting `src` attaches an iframe with
-   * nothing to embed yet, and `load()` picks it up once a source arrives.
+   * Bind the iframe hosting the embed. The player follows once an embed URL can be resolved, which may not be now: an
+   * iframe attached before `src` is set is picked up by the next `load()`.
    */
   attach(target: HTMLIFrameElement | null): void {
     if (!target || this.#target === target) return;
+
     if (this.#target) this.detach();
+
     this.#target = target;
     this.#beginLoad();
     this.#createPlayer();
@@ -98,14 +96,11 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
 
   detach(): void {
     if (!this.#target) return;
+
     this.#attachId++;
     this.#stopPolling();
     this.#teardownTextTracks();
-    try {
-      this.#player?.destroy();
-    } catch {
-      // The iframe API throws if the iframe was already removed.
-    }
+    tryCall(() => this.#player?.destroy());
     this.#player = null;
     this.#playerReady = false;
     this.#pendingLoad = false;
@@ -129,14 +124,12 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
     const { engine } = this.#source ?? {};
     const next: YouTubeSource = { ...(engine && { engine }), ...(value && { src: value }) };
 
-    // Everything happens in the `source` setter, so there is one path for storing
-    // it, deciding on a load, and dispatching `sourcechange`.
+    // The `source` setter is the one path for storing, loading, and announcing a source.
     this.source = Object.keys(next).length > 0 ? next : null;
   }
 
   get currentSrc() {
-    // The `src` property resolves an empty attribute to the document URL, so only
-    // the attribute can report an embed that hasn't been built yet as empty.
+    // The `src` property resolves an empty attribute to the document URL; only the attribute reads empty.
     return this.#target?.getAttribute('src') ?? '';
   }
 
@@ -147,45 +140,44 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   /** Reload the current source via the iframe API; deferred until the player is ready. */
   async load() {
     if (!this.#player || !this.#playerReady) {
-      // `cueVideoById`/`loadVideoById` fail before `onReady`; replay the load then.
-      // A cleared src replays too, so the barrier below always gets settled.
+      // Loading before `onReady` fails, so replay it there. A cleared src replays too, settling the barrier.
       this.#pendingLoad = !!this.#target;
-      // The target can be attached before it has anything to embed, in which case
-      // this load is what finally builds it.
+
+      // A target attached with nothing to embed yet: this load is what finally builds it.
       if (this.#target && !this.#player && !this.#creatingPlayer) {
-        // The barrier `attach()` opened was settled when there was nothing to
-        // embed, so this load needs one of its own — otherwise `play()` runs
-        // before the player it is waiting for exists.
+        // `attach()` settled its barrier when there was nothing to embed, so `play()` needs a new one.
         const load = this.#beginLoad();
-        // Wait a microtask: a framework sets `src` and the props that shape the
-        // embed in whatever order it likes, and the embed URL is only built once,
-        // so it has to see all of them.
+
+        // Wait a microtask so the one-shot embed URL sees every prop a framework set alongside `src`.
         await Promise.resolve();
+
         // A later load took over while waiting; building the embed is its job now.
         if (load !== this.#loadComplete) return;
+
         this.#createPlayer();
       }
+
       return;
     }
+
     const load = this.#beginLoad();
-    // Reset before bailing on an empty src: a cleared source has nothing to load,
-    // but what we report about the old video still has to go.
+
+    // Reset and announce before the empty-src bail: a cleared source reports nothing further, so
+    // anything listening would keep the last video's duration and buffer forever.
     this.#resetState();
+    this.dispatchEvent(new Event('emptied'));
+
     if (!this.#src) {
-      // The embed has to stop too. Left running it keeps playing, and the poll
-      // writes the state just cleared straight back.
+      // Stop the embed too; left running it keeps playing and the poll rewrites the cleared state.
       load.resolve();
       this.#stopPolling();
-      try {
-        this.#player.stopVideo();
-      } catch {
-        // The iframe API throws if the player was destroyed mid-flight.
-      }
+      tryCall(() => this.#player?.stopVideo());
       return;
     }
-    this.dispatchEvent(new Event('emptied'));
+
     this.dispatchEvent(new Event('loadstart'));
     const parsed = parseYouTubeSource(this.#src);
+
     if (!parsed) {
       this.#error = new MediaError(`Unrecognized YouTube source: ${this.#src}`, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED);
       this.dispatchEvent(new Event('error'));
@@ -193,23 +185,24 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
       load.resolve();
       return;
     }
+
     if (parsed.kind === 'playlist' && parsed.listId) {
       const options = { list: parsed.listId, listType: 'playlist' };
+
       if (this.#autoplay) this.#player.loadPlaylist(options);
       else this.#player.cuePlaylist(options);
     } else if (parsed.id) {
       const options: { videoId: string; startSeconds?: number } = { videoId: parsed.id };
+
       if (parsed.startTime != null) options.startSeconds = parsed.startTime;
+
       if (this.#autoplay) this.#player.loadVideoById(options);
       else this.#player.cueVideoById(options);
     }
   }
 
-  /**
-   * Take over as the current load, returning its barrier. Settling the outgoing
-   * one is what keeps a superseded load from stranding callers that are already
-   * waiting; every exit from `load()` settles the barrier it was handed.
-   */
+  // Take over as the current load; settling the outgoing barrier releases its waiters, and every
+  // exit from `load()` settles the barrier it was handed.
   #beginLoad(): PublicPromise<void> {
     this.#loadComplete.resolve();
     this.#loadComplete = createPublicPromise<void>();
@@ -230,9 +223,10 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
 
   async play() {
     await this.#loadComplete;
-    // The embed still holds the stopped video, so playing it would resume a
-    // source that was cleared.
+
+    // The embed still holds the stopped video, so playing it would resume a cleared source.
     if (!this.#src) return;
+
     this.#player?.playVideo();
   }
 
@@ -245,6 +239,7 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   }
   set currentTime(value) {
     if (this.#currentTime === value) return;
+
     this.#currentTime = value;
     // `seekTo` keeps the player paused when called from a paused state.
     this.#afterLoad((p) => p.seekTo(value, true));
@@ -259,6 +254,7 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   }
   set volume(value) {
     if (this.#volume === value) return;
+
     this.#volume = value;
     this.#afterLoad((p) => p.setVolume(value * 100));
   }
@@ -268,6 +264,7 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   }
   set muted(value) {
     if (this.#muted === value) return;
+
     this.#muted = value;
     this.#afterLoad((p) => (value ? p.mute() : p.unMute()));
   }
@@ -277,6 +274,7 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   }
   set playbackRate(value) {
     if (this.#playbackRate === value) return;
+
     this.#playbackRate = value;
     this.#afterLoad((p) => p.setPlaybackRate(value));
   }
@@ -331,24 +329,18 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
     this.#poster = value;
   }
 
-  /**
-   * Structured source: the YouTube URL or ID in `src`, plus player parameters
-   * under `engine.youtube`. Replacing it re-derives `src`; assigning an
-   * equivalent source is a no-op.
-   */
+  /** YouTube URL or id in `src`, plus player parameters under `engine.youtube`. Replacing it re-derives `src`. */
   get source(): YouTubeSource | null {
     return this.#source;
   }
   set source(value: YouTubeSource | null) {
     const source = value ?? null;
-    // Changing anything takes a new object, so handing the same one back costs
-    // nothing.
+    // Any change takes a new object, so handing the same one back is a no-op.
     if (source === this.#source) return;
 
     const src = source?.src ?? '';
     const srcChanged = this.#src !== src;
-    // Player parameters are read when the embed is built, so a change to them
-    // needs a reload of its own even though the URL is the same.
+    // Player parameters are read when the embed is built, so changing them reloads even a matching URL.
     const engineChanged = !deepEqual(this.#source?.engine?.youtube ?? null, source?.engine?.youtube ?? null);
 
     this.#source = source;
@@ -385,42 +377,37 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
 
   // The iframe API exposes no fullscreen controls, so fullscreen targets the iframe itself.
   async requestFullscreen() {
-    // Nothing entered fullscreen if there is no element to request it on, so the
-    // flag must not claim otherwise.
+    // With no element to request it on, nothing entered fullscreen and the flag must not say otherwise.
     if (!this.#target?.requestFullscreen) return;
+
     await this.#target.requestFullscreen();
     this.#isFullscreen = true;
   }
 
   async exitFullscreen() {
     const doc = globalThis.document;
-    if (doc?.fullscreenElement && doc.fullscreenElement === this.#target) {
-      await doc.exitFullscreen();
-    }
+
+    if (doc?.fullscreenElement && doc.fullscreenElement === this.#target) await doc.exitFullscreen();
+
     this.#isFullscreen = false;
   }
 
-  /**
-   * Build the embed and start player creation once a source can be resolved. The
-   * iframe API only talks to an iframe that already holds a YouTube embed, so a
-   * target that cannot be resolved yet leaves the player null and settles the
-   * load it was given; the next `load()` retries.
-   *
-   * @returns Whether player creation started.
-   */
+  // Build the embed and start player creation, returning whether it started. The iframe API only talks
+  // to an iframe that already holds an embed, so an unresolvable target settles its load and retries later.
   #createPlayer(): boolean {
     const target = this.#target;
     if (!target || this.#player || this.#creatingPlayer) return false;
 
-    // The `src` property resolves an empty attribute to the document URL, so it
-    // cannot tell an embed apart from a placeholder; the attribute can.
+    // Only the attribute tells an embed apart from a placeholder; `src` resolves empty to the document URL.
     if (!target.getAttribute('src')) {
       const initialSrc = buildYouTubeIframeSrc(this.#src, this.#snapshotProps());
+
       // No embed means no player is coming to settle this load.
       if (!initialSrc) {
         this.#loadComplete.resolve();
         return false;
       }
+
       target.src = initialSrc;
     }
 
@@ -433,12 +420,13 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   async #createPlayerApi(target: HTMLIFrameElement) {
     const attachId = this.#attachId;
     let api: YouTubeApi;
+
     try {
       api = await loadYouTubeApi();
     } catch {
-      // A failed API load belongs to the attach that started it; a newer one must
-      // not be marked failed or have its load unblocked.
+      // A failed API load belongs to the attach that started it; a newer one must not be marked failed.
       if (this.#isStale(attachId)) return;
+
       this.#creatingPlayer = false;
       this.#error = new MediaError('Failed to load the YouTube iframe API', MediaError.MEDIA_ERR_NETWORK);
       this.dispatchEvent(new Event('error'));
@@ -446,48 +434,43 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
       this.#loadComplete.resolve();
       return;
     }
+
     if (this.#isStale(attachId) || this.#target !== target) return;
+
     const player = new api.Player(target, {
       events: {
         onReady: () => {
           if (this.#isStale(attachId)) return;
+
           this.#onPlayerReady();
         },
         onError: (event) => {
           if (this.#isStale(attachId)) return;
+
           this.#onError(event.data);
         },
       },
     });
+
     this.#player = player;
     this.#creatingPlayer = false;
     this.#bindPlayerEvents(player, attachId);
     this.#setupTextTracks(player);
   }
 
-  /**
-   * Whether a callback belongs to a superseded attach. `destroy()` does not stop
-   * the iframe API from invoking callbacks it already scheduled, so anything a
-   * player reports has to be matched against the attach that created it before
-   * it is allowed to touch state.
-   */
+  // Whether a callback belongs to a superseded attach: `destroy()` does not stop the iframe API from
+  // running callbacks it already scheduled, so a player's reports must match its attach to touch state.
   #isStale(attachId: number) {
     return attachId !== this.#attachId;
   }
 
-  /** Defer a player call until `loadComplete` resolves, swallowing failures. */
+  // Defer a player call until `loadComplete` resolves, swallowing failures.
   #afterLoad(fn: (player: YouTubePlayerApi) => void) {
-    this.#loadComplete.then(
-      () => {
-        if (!this.#player) return;
-        try {
-          fn(this.#player);
-        } catch {
-          // The iframe API throws if the player was destroyed mid-flight.
-        }
-      },
-      () => {}
-    );
+    this.#loadComplete.then(() => {
+      const player = this.#player;
+
+      if (player) tryCall(() => fn(player));
+    }, noop);
   }
 
   #snapshotProps() {
@@ -521,30 +504,37 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
 
   #onPlayerReady() {
     this.#playerReady = true;
+
     if (this.#pendingLoad) {
-      // The iframe was built from a stale src; skip its metadata and reload.
-      // The post-cue state change completes the load (see `#bindPlayerEvents`).
+      // The iframe was built from a stale src; skip its metadata and reload. The post-cue state
+      // change completes that load (see `#bindPlayerEvents`).
       this.#pendingLoad = false;
       void this.load();
       return;
     }
+
     this.#onLoaded();
   }
 
   #onLoaded() {
     if (this.#loaded) return;
+
     this.#loaded = true;
     this.#readyState = READY_STATE_HAVE_METADATA;
+
     const player = this.#player;
+
     if (player) {
       this.#duration = player.getDuration() || Number.NaN;
       this.#muted = player.isMuted();
       this.#volume = player.getVolume() / 100;
       this.#playbackRate = player.getPlaybackRate();
     }
+
     for (const type of ['loadedmetadata', 'durationchange', 'volumechange', 'loadcomplete']) {
       this.dispatchEvent(new Event(type));
     }
+
     this.#loadComplete.resolve();
     this.#startPolling();
   }
@@ -555,6 +545,7 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
       youtubeErrorCodeToMediaErrorCode[code] ?? MediaError.MEDIA_ERR_CUSTOM,
       true
     );
+
     error.data = { youtubeErrorCode: code };
     this.#error = error;
     this.dispatchEvent(new Event('error'));
@@ -567,10 +558,9 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
 
     player.addEventListener('onStateChange', ({ data: state }) => {
       if (this.#isStale(attachId)) return;
-      // Subsequent loads (`cueVideoById`/`loadVideoById`) never re-fire
-      // `onReady`, so any post-load state transition completes the load. With no
-      // src there is no load to complete, and `stopVideo()` reports a transition
-      // of its own — completing on that would put the cleared state right back.
+
+      // Later loads never re-fire `onReady`, so a post-load transition completes them. With no src there
+      // is no load to complete, and completing on the transition `stopVideo()` reports would undo the reset.
       if (this.#src && !this.#loaded && state !== STATE_UNSTARTED) this.#onLoaded();
 
       if (state === STATE_PLAYING || state === STATE_BUFFERING) {
@@ -580,6 +570,7 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
           this.#ended = false;
           emit('play');
         }
+
         this.#syncTextTracks(player);
       }
 
@@ -590,15 +581,18 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
           this.#seeking = false;
           emit('seeked');
         }
+
         this.#readyState = READY_STATE_HAVE_FUTURE_DATA;
         this.#paused = false;
         emit('playing');
       } else if (state === STATE_PAUSED) {
         const diff = Math.abs(player.getCurrentTime() - this.#currentTime);
+
         if (!this.#seeking && diff > 0.1) {
           this.#seeking = true;
           emit('seeking');
         }
+
         this.#playFired = false;
         this.#paused = true;
         emit('pause');
@@ -608,26 +602,28 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
         emit('pause');
         this.#ended = true;
         emit('ended');
+
         if (this.#loop) void this.play();
       }
     });
 
     player.addEventListener('onPlaybackRateChange', () => {
       if (this.#isStale(attachId)) return;
+
       this.#playbackRate = player.getPlaybackRate();
       emit('ratechange');
     });
 
     player.addEventListener('onVolumeChange', () => {
       if (this.#isStale(attachId)) return;
+
       this.#volume = player.getVolume() / 100;
       this.#muted = player.isMuted();
       emit('volumechange');
     });
   }
 
-  // The iframe API pushes no timeupdate/progress/seek events, so poll like the
-  // original `youtube-video-element` does.
+  // The iframe API pushes no timeupdate/progress/seek events, so poll like `youtube-video-element` does.
   #startPolling() {
     this.#stopPolling();
     this.#pollInterval = setInterval(() => this.#poll(), 50);
@@ -668,9 +664,11 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
 
     if (bufferedEnd !== this.#progress) {
       this.#progress = bufferedEnd;
+
       if (duration > 0 && bufferedEnd >= duration) {
         this.#readyState = READY_STATE_HAVE_ENOUGH_DATA;
       }
+
       this.dispatchEvent(new Event('progress'));
     }
   }
@@ -678,37 +676,37 @@ export class YouTubeMedia extends YouTubeMediaBase implements Partial<Video> {
   #setupTextTracks(player: YouTubePlayerApi) {
     const doc = globalThis.document;
     if (isUndefined(doc)) return;
+
     this.#teardownTextTracks();
     const host = doc.createElement('video');
+
     this.#textTracksHost = host;
     this.#textTracksDisconnect = new AbortController();
     host.textTracks?.addEventListener?.(
       'change',
       () => {
         const showing = Array.from(host.textTracks).find((t) => t.mode === 'showing');
-        try {
-          player.setOption('captions', 'track', showing ? { languageCode: showing.language } : {});
-        } catch {
-          // The iframe API throws if the player was destroyed mid-flight.
-        }
+
+        tryCall(() => player.setOption('captions', 'track', showing ? { languageCode: showing.language } : {}));
       },
       { signal: this.#textTracksDisconnect.signal }
     );
   }
 
-  /** Caption metadata is only available once playback starts. */
+  // Caption metadata is only available once playback starts.
   #syncTextTracks(player: YouTubePlayerApi) {
     const host = this.#textTracksHost;
     if (!host) return;
+
     const trackList = (player.getOption('captions', 'tracklist') ?? []) as YouTubeCaptionTrack[];
+
     for (const track of trackList) {
       if (!track.languageCode) continue;
+
       if (Array.from(host.textTracks).some((t) => t.language === track.languageCode)) continue;
-      try {
-        host.addTextTrack?.('subtitles', track.displayName ?? '', track.languageCode);
-      } catch {
-        // jsdom or unsupported environments.
-      }
+
+      // Throws in jsdom and other environments without text-track support.
+      tryCall(() => host.addTextTrack?.('subtitles', track.displayName ?? '', track.languageCode));
     }
   }
 

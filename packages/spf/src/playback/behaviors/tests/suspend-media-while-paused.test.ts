@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import { suspendMediaWhilePaused } from '../suspend-media-while-paused';
 
@@ -98,6 +99,7 @@ describe('suspendMediaWhilePaused', () => {
 
   it('derives the hold window from the consumer target latency', async () => {
     const deps = makeDeps();
+
     deps.state.targetLatency.set(2); // hold = 2s + 3s catch-up threshold
     const reactor = suspendMediaWhilePaused.setup(deps);
 
@@ -115,6 +117,7 @@ describe('suspendMediaWhilePaused', () => {
   // controller is actually holding — not from an input it is ignoring.
   it('derives the hold window from the adaptive target where the consumer set none', async () => {
     const deps = makeDeps();
+
     deps.state.adaptiveTargetLatency.set(0.2); // hold = 0.2s + 3s catch-up threshold
     const reactor = suspendMediaWhilePaused.setup(deps);
 
@@ -129,6 +132,7 @@ describe('suspendMediaWhilePaused', () => {
 
   it('keeps the consumer target ahead of the adaptive one', async () => {
     const deps = makeDeps();
+
     deps.state.targetLatency.set(2);
     deps.state.adaptiveTargetLatency.set(0.2);
     const reactor = suspendMediaWhilePaused.setup(deps);
@@ -144,6 +148,7 @@ describe('suspendMediaWhilePaused', () => {
 
   it('honors an explicit pauseHoldSeconds over the derived default', async () => {
     const deps = makeDeps();
+
     deps.state.targetLatency.set(10);
     const reactor = suspendMediaWhilePaused.setup({ ...deps, config: { pauseHoldSeconds: 1 } });
 
@@ -172,6 +177,7 @@ describe('suspendMediaWhilePaused', () => {
 
   it('falls back to the default hold when the consumer target latency is invalid', async () => {
     const deps = makeDeps();
+
     // setTimeout would coerce the NaN-derived delay to zero — an invalid
     // consumer value must not turn every pause into an immediate suspend.
     deps.state.targetLatency.set(Number.NaN);
@@ -188,6 +194,7 @@ describe('suspendMediaWhilePaused', () => {
 
   it('ignores an invalid pauseHoldSeconds and derives the hold window instead', async () => {
     const deps = makeDeps();
+
     deps.state.targetLatency.set(2); // derived hold = 2s + 3s catch-up threshold
     const reactor = suspendMediaWhilePaused.setup({ ...deps, config: { pauseHoldSeconds: -1 } });
 

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
@@ -75,9 +76,8 @@ interface FakeSubscriber extends TrackSubscriberActor {
   /** Simulate an unrecoverable death (see `TrackSubscriberContext.unrecoverable`). */
   dieUnrecoverable(): void;
   /**
-   * Simulate the subscription dying: the publisher ended it (`'ended'`) or
-   * the request failed / the stall watchdog gave up (`'error'`, optionally
-   * carrying the RequestError the wire delivered).
+   * Simulate the subscription dying: the publisher ended it (`'ended'`) or the request failed / the stall watchdog gave
+   * up (`'error'`, optionally carrying the RequestError the wire delivered).
    */
   die(status: 'ended' | 'error', error?: unknown): void;
 }
@@ -127,9 +127,11 @@ function createFakeSubscriberFactory({
         subscriber.destroyed = true;
       },
     };
+
     created.push(subscriber);
     return subscriber;
   }) as unknown as typeof import('../../actors/track-subscriber').createTrackSubscriberActor;
+
   return { factory, created: created as FakeSubscriber[] };
 }
 
@@ -139,6 +141,7 @@ function makeSessionActor(): MoqSessionActor {
     value: 'active' as const,
     context: { status: 'ready', session } as MoqSessionActorContext,
   });
+
   return {
     snapshot: sessionSnapshot as MoqSessionActor['snapshot'],
     getAuthParameters: () => ({}),
@@ -241,6 +244,7 @@ describe('subscribeSelectedVideoTrack', () => {
 
   it('waits for the playout clock to reach the pending track before completing the swap', async () => {
     const deps = makeDeps();
+
     deps.state.currentTime.set(10);
     const { factory, created } = createFakeSubscriberFactory();
     const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
@@ -269,6 +273,7 @@ describe('subscribeSelectedVideoTrack', () => {
 
   it('does not subscribe under default preload until load activation', async () => {
     const deps = makeDeps();
+
     deps.state.loadActivated.set(false);
     const { factory, created } = createFakeSubscriberFactory();
     const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
@@ -287,6 +292,7 @@ describe('subscribeSelectedVideoTrack', () => {
 
   it('subscribes without load activation when preload is auto', async () => {
     const deps = makeDeps();
+
     deps.state.loadActivated.set(false);
     deps.state.preload.set('auto');
     const { factory, created } = createFakeSubscriberFactory();
@@ -441,6 +447,7 @@ describe('subscribeSelectedVideoTrack', () => {
     // The handoff target arms the same watchdog as the initial join.
     deps.state.selectedVideoTrackId.set(SD.id);
     await vi.waitFor(() => expect(created).toHaveLength(2));
+
     for (const subscriber of created) expect(subscriber.options.stallTimeoutMs).toBe(1234);
 
     reactor.destroy();
@@ -852,6 +859,7 @@ describe('subscribeSelectedAudioTrack', () => {
 
   it('does not subscribe while audio starts out suspended', async () => {
     const deps = makeAudioDeps();
+
     deps.state.audioSuspended.set(true);
     const { factory, created } = createFakeSubscriberFactory();
     const reactor = subscribeSelectedAudioTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });

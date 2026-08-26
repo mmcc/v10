@@ -1,5 +1,3 @@
-'use client';
-
 import type { IndicatorVisibilityHandle } from '@videojs/core';
 import { getIndicatorVisibilityCoordinator } from '@videojs/core/dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -19,6 +17,7 @@ export function useIndicatorVisibility(close: () => void): () => void {
     if (!container) return;
 
     const coordinator = getIndicatorVisibilityCoordinator(container);
+
     coordinatorRef.current = coordinator;
 
     return coordinator.register(handle);

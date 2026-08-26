@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
 import type { TrackSubscriberActor, TrackSubscriberContext } from '../../actors/track-subscriber';
@@ -10,10 +11,8 @@ import {
 import type { PlayoutState } from '../sync-latency';
 
 /**
- * `performance.now()` drives every rate limit and every window in this
- * behavior, and vitest's default fake-timer set leaves it real — which
- * would make each evaluation see zero elapsed time and no correction at
- * all.
+ * `performance.now()` drives every rate limit and every window in this behavior, and vitest's default fake-timer set
+ * leaves it real — which would make each evaluation see zero elapsed time and no correction at all.
  */
 const FAKE_CLOCKS = ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] as const;
 
@@ -50,9 +49,8 @@ function fakeSubscriber(catalog?: { jitterMs?: number; targetLatencyMs?: number 
   };
 
   /**
-   * What `resetArrivalBaseline` does to the published envelope: the bounds
-   * and the count restart, and the epoch moves. Subsequent
-   * `setArrivalJitter` calls describe the new measurement.
+   * What `resetArrivalBaseline` does to the published envelope: the bounds and the count restart, and the epoch moves.
+   * Subsequent `setArrivalJitter` calls describe the new measurement.
    */
   const restartArrivalEnvelope = () => {
     arrivalEpoch++;
@@ -66,6 +64,7 @@ function fakeSubscriber(catalog?: { jitterMs?: number; targetLatencyMs?: number 
     skipToLatestGroup: () => 0,
     destroy: () => {},
   };
+
   return { subscriber, setArrivalJitter, restartArrivalEnvelope };
 }
 
@@ -100,10 +99,12 @@ describe('adaptLatencyTarget', () => {
   it('stays inactive and registers no timer while adaptation is off', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.adaptiveLatencyEnabled.set(undefined); // defer to config, which is off
     setArrivalJitter(40);
 
     const reactor = adaptLatencyTarget.setup(deps);
+
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(reactor.snapshot.get().value).toBe('inactive');
@@ -118,6 +119,7 @@ describe('adaptLatencyTarget', () => {
   it('publishes nothing until the arrival window has warmed up', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40, 10); // far short of minArrivalSamples
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -137,6 +139,7 @@ describe('adaptLatencyTarget', () => {
   it('proposes the floor plus the observed arrival spread', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(200); // 0.1 + 0.2 × 1.5
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -149,6 +152,7 @@ describe('adaptLatencyTarget', () => {
   it('adds the catalog jitter the publisher declared', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber({ jitterMs: 34 });
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -161,6 +165,7 @@ describe('adaptLatencyTarget', () => {
   it('clamps the proposal into the configured bounds', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(10_000); // absurd spread
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -175,11 +180,13 @@ describe('adaptLatencyTarget', () => {
   it('widens promptly after an audio underrun', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
     await vi.advanceTimersByTimeAsync(WARM_MS);
     const settled = deps.state.adaptiveTargetLatency.get()!;
+
     expect(settled).toBeCloseTo(0.16, 3);
 
     deps.state.audioUnderruns.set(1);
@@ -201,6 +208,7 @@ describe('adaptLatencyTarget', () => {
   it('narrows four times slower than it widens, and never inside the quiet window', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
     const cadence = DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs;
@@ -212,24 +220,29 @@ describe('adaptLatencyTarget', () => {
     deps.state.catchUpSkips.set(1);
     await vi.advanceTimersByTimeAsync(cadence);
     const widenStep = sample() - settled;
+
     expect(widenStep).toBeCloseTo(DEFAULT_ADAPTIVE_LATENCY_CONFIG.maxWidenRatePerSecond * (cadence / 1000), 4);
 
     // Inside the quiet window the bias does not bleed off, so the target
     // only ever moves one way.
     let previous = sample();
+
     for (let i = 0; i < 3; i++) {
       await vi.advanceTimersByTimeAsync(cadence);
       expect(sample()).toBeGreaterThanOrEqual(previous);
       previous = sample();
     }
+
     const peak = previous;
 
     // Past it the bias decays and the target gives the excess back — one
     // quarter as fast, which is the whole point of the asymmetry.
     await vi.advanceTimersByTimeAsync(20_000);
     const before = sample();
+
     await vi.advanceTimersByTimeAsync(cadence);
     const narrowStep = before - sample();
+
     expect(narrowStep).toBeCloseTo(widenStep / 4, 4);
     expect(before).toBeLessThan(peak);
 
@@ -245,6 +258,7 @@ describe('adaptLatencyTarget', () => {
   it('ignores a handful of late frames and reacts to a burst of them', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -270,6 +284,7 @@ describe('adaptLatencyTarget', () => {
   it('accumulates late-frame drops that arrive below the budget per window', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -279,11 +294,13 @@ describe('adaptLatencyTarget', () => {
     // Four drops per evaluation against a budget of ten: no single window
     // reaches an event, and three windows carry past it.
     let dropped = 0;
+
     for (let window = 0; window < 3; window++) {
       dropped += 4;
       deps.state.framesDropped.set(dropped);
       await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
     }
+
     expect(dropped).toBeGreaterThanOrEqual(DEFAULT_ADAPTIVE_LATENCY_CONFIG.dropsPerEvent);
     expect(deps.state.adaptiveTargetLatency.get()).toBeGreaterThan(settled);
 
@@ -295,6 +312,7 @@ describe('adaptLatencyTarget', () => {
   it('baselines the failure counters at activation instead of replaying them', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     deps.state.catchUpSkips.set(12);
     deps.state.audioUnderruns.set(4);
@@ -310,6 +328,7 @@ describe('adaptLatencyTarget', () => {
   it('holds the setpoint still while the latency controller is not stable', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -337,6 +356,7 @@ describe('adaptLatencyTarget', () => {
   it('holds the last proposal across a subscriber handoff', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -344,6 +364,7 @@ describe('adaptLatencyTarget', () => {
     const settled = deps.state.adaptiveTargetLatency.get()!;
 
     const next = fakeSubscriber();
+
     next.setArrivalJitter(40, 0);
     deps.context.audioSubscriberActor.set(next.subscriber);
     await vi.advanceTimersByTimeAsync(DEFAULT_ADAPTIVE_LATENCY_CONFIG.intervalMs);
@@ -364,10 +385,12 @@ describe('adaptLatencyTarget', () => {
     const audio = fakeSubscriber();
     const video = fakeSubscriber();
     const deps = makeDeps(audio.subscriber);
+
     deps.context.videoSubscriberActor.set(video.subscriber);
     video.setArrivalJitter(40);
 
     const reactor = adaptLatencyTarget.setup(deps);
+
     await vi.advanceTimersByTimeAsync(60_000);
     expect(deps.state.adaptiveTargetLatency.get()).toBeUndefined();
 
@@ -390,11 +413,13 @@ describe('adaptLatencyTarget', () => {
   it('re-baselines the observation window when the arrival envelope restarts', async () => {
     const { subscriber, setArrivalJitter, restartArrivalEnvelope } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(200);
     const reactor = adaptLatencyTarget.setup(deps);
 
     await vi.advanceTimersByTimeAsync(WARM_MS);
     const settled = deps.state.adaptiveTargetLatency.get()!;
+
     expect(settled).toBeCloseTo(0.4, 3);
 
     // Reconnected: one frame establishes the new baseline, and a jitter-free
@@ -412,6 +437,7 @@ describe('adaptLatencyTarget', () => {
     // itself, narrowing from the held proposal rather than stepping to it.
     await vi.advanceTimersByTimeAsync(20_000);
     const narrowed = deps.state.adaptiveTargetLatency.get()!;
+
     expect(narrowed).toBeLessThan(settled);
     expect(narrowed).toBeGreaterThan(DEFAULT_ADAPTIVE_LATENCY_CONFIG.minTargetLatency);
 
@@ -430,6 +456,7 @@ describe('adaptLatencyTarget', () => {
   it('re-baselines when the restarted count overtakes the last one it read', async () => {
     const { subscriber, setArrivalJitter, restartArrivalEnvelope } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     // Two seconds into the subscription, with a real spread behind it.
     setArrivalJitter(200, 94);
     const reactor = adaptLatencyTarget.setup(deps);
@@ -466,6 +493,7 @@ describe('adaptLatencyTarget', () => {
   it('clears its proposal when the last subscriber goes away', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -483,6 +511,7 @@ describe('adaptLatencyTarget', () => {
   it('switches off at runtime through the state slot', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup(deps);
 
@@ -500,6 +529,7 @@ describe('adaptLatencyTarget', () => {
   it('honours a config-level enable with no state override', async () => {
     const { subscriber, setArrivalJitter } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.adaptiveLatencyEnabled.set(undefined);
     setArrivalJitter(40);
     const reactor = adaptLatencyTarget.setup({ ...deps, config: { adaptiveLatency: { enabled: true } } });
@@ -516,9 +546,11 @@ describe('resolveAdaptiveLatencyConfig', () => {
     // A parked controller (a test harness disabling the inner loop) must
     // not make this behavior's presence in the composition a hazard.
     const parked = resolveAdaptiveLatencyConfig({ latency: { intervalMs: 60_000 } });
+
     expect(parked.adaptive.intervalMs).toBe(240_000);
 
     const slowSlew = resolveAdaptiveLatencyConfig({ latency: { clockSlewRate: 0.01 } });
+
     expect(slowSlew.adaptive.maxWidenRatePerSecond).toBeLessThan(0.01 / 2);
     expect(slowSlew.adaptive.maxNarrowRatePerSecond).toBeLessThan(slowSlew.adaptive.maxWidenRatePerSecond);
   });

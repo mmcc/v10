@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
+
 import type { JitterFrame } from '../../track-subscriber';
 import { type AudioContextLike, type AudioFrameSource, createAudioRendererActor } from '../audio-renderer';
 
@@ -12,6 +13,7 @@ async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
   const encoder = new AudioEncoder({
     output: (chunk) => {
       const payload = new Uint8Array(chunk.byteLength);
+
       chunk.copyTo(payload);
       frames.push({
         groupId: 0,
@@ -25,11 +27,14 @@ async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
       throw error;
     },
   });
+
   encoder.configure({ codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1, bitrate: 32_000 });
 
   for (let i = 0; i < count; i++) {
     const samples = new Float32Array(FRAME_SAMPLES);
+
     for (let s = 0; s < FRAME_SAMPLES; s++) samples[s] = Math.sin((2 * Math.PI * 440 * s) / SAMPLE_RATE) * 0.5;
+
     const data = new AudioData({
       format: 'f32',
       sampleRate: SAMPLE_RATE,
@@ -38,9 +43,11 @@ async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
       timestamp: i * FRAME_DURATION_US,
       data: samples,
     });
+
     encoder.encode(data);
     data.close();
   }
+
   await encoder.flush();
   encoder.close();
   return frames;
@@ -48,6 +55,7 @@ async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
 
 function arraySource(frames: JitterFrame[]): AudioFrameSource {
   const queue = [...frames];
+
   return {
     peek: () => queue[0],
     dequeue: () => queue.shift(),
@@ -55,8 +63,8 @@ function arraySource(frames: JitterFrame[]): AudioFrameSource {
 }
 
 /**
- * `AudioContextLike` with a hand-cranked clock: scheduling is a no-op, so
- * tests can place `currentTime` anywhere and read the media clock back.
+ * `AudioContextLike` with a hand-cranked clock: scheduling is a no-op, so tests can place `currentTime` anywhere and
+ * read the media clock back.
  */
 function createFakeAudioContext(): AudioContextLike & { currentTime: number } {
   return {
@@ -92,6 +100,7 @@ describe('createAudioRendererActor', () => {
       timeout: 5000,
     });
     const context = renderer.snapshot.get().context;
+
     expect(context.status).toBe('rendering');
     expect(context.scheduledUntilUs).toBeGreaterThan(0);
 
@@ -185,6 +194,7 @@ describe('createAudioRendererActor', () => {
 
     await vi.waitFor(() => expect(renderer.snapshot.get().context.status).toBe('error'), { timeout: 5000 });
     const remaining = queue.length;
+
     expect(remaining).toBeGreaterThan(0);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(queue).toHaveLength(remaining);
@@ -194,6 +204,7 @@ describe('createAudioRendererActor', () => {
 
   it('decodes a live-edge join whose first frame is mid-group (isKey: false)', async () => {
     const frames = await encodeTestFrames(3);
+
     // A `largest-object` subscribe joins live, so the first delivered frame
     // is whatever object is newest right now — essentially never a LOC
     // group's object 0 (`isKey: true`). The regression: decode() gated the
@@ -234,6 +245,7 @@ describe('createAudioRendererActor', () => {
     // 30ms into playback (the timeline starts at the 50ms schedule margin).
     audioContext.currentTime = 0.08;
     const before = renderer.getClockTimeUs()!;
+
     expect(before).toBeGreaterThan(0);
     expect(before).toBeLessThan(5 * FRAME_DURATION_US);
 
@@ -247,6 +259,7 @@ describe('createAudioRendererActor', () => {
     // segments regardless of the current rate setting.
     audioContext.currentTime = 0.09;
     const later = renderer.getClockTimeUs()!;
+
     expect(later).toBeGreaterThan(before);
     expect(later).toBeLessThanOrEqual(before + 10_001);
 
@@ -270,6 +283,7 @@ describe('createAudioRendererActor', () => {
     // at the end of scheduled audio instead of drifting ahead.
     audioContext.currentTime = 0.5;
     const held = renderer.getClockTimeUs()!;
+
     audioContext.currentTime = 0.6;
     expect(renderer.getClockTimeUs()).toBe(held);
     expect(held).toBeGreaterThanOrEqual(FRAME_DURATION_US);
@@ -285,6 +299,7 @@ describe('createAudioRendererActor', () => {
     );
     audioContext.currentTime = 0.61;
     const resumed = renderer.getClockTimeUs()!;
+
     expect(resumed).toBeGreaterThanOrEqual(held);
     expect(resumed).toBeLessThan(held + FRAME_DURATION_US);
 
@@ -298,9 +313,11 @@ describe('createAudioRendererActor', () => {
     // flush can emit one more output than was fed) — a real skip relocates
     // the stream, it does not interleave two timelines.
     const JUMP_US = 5_000_000;
+
     for (let i = 2; i < frames.length; i++) {
       frames[i] = { ...frames[i]!, timestampUs: JUMP_US + (i - 2) * FRAME_DURATION_US };
     }
+
     const audioContext = createFakeAudioContext();
     const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
 
@@ -405,6 +422,7 @@ describe('createAudioRendererActor', () => {
       .slice(15)
       .map((frame, i) => ({ ...frame, timestampUs: SKIP_US + i * FRAME_DURATION_US }));
     const newestUs = survivingGroup[survivingGroup.length - 1]!.timestampUs;
+
     anchorUs = newestUs - 100_000;
     queue.length = 0;
     queue.push(...survivingGroup);
@@ -467,6 +485,7 @@ describe('createAudioRendererActor', () => {
     await vi.waitFor(
       () => {
         const clock = renderer.getClockTimeUs();
+
         expect(clock).toBeDefined();
         expect(clock!).toBeLessThan(BASE_US);
         expect(clock!).toBeGreaterThanOrEqual(edgeUs - TARGET_US);
@@ -519,6 +538,7 @@ describe('createAudioRendererActor', () => {
     await vi.waitFor(
       () => {
         const clock = renderer.getClockTimeUs();
+
         expect(clock).toBeDefined();
         expect(clock!).toBeGreaterThanOrEqual(anchorUs);
         expect(clock!).toBeLessThan(fresh[0]!.timestampUs);

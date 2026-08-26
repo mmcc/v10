@@ -1,5 +1,3 @@
-'use client';
-
 import type { IndicatorLifecycleState, InputActionEvent, MediaSnapshot } from '@videojs/core';
 import type { State as StoreState } from '@videojs/store';
 import { useState, useSyncExternalStore } from 'react';
@@ -23,6 +21,7 @@ export function useInputIndicatorRoot<IndicatorState extends IndicatorLifecycleS
   options?: RenderedIndicatorOptions
 ) {
   const [core] = useState(createCore);
+
   useDestroy(core);
   core.setProps(props);
   const showIndicator = useIndicatorVisibility(() => core.close());

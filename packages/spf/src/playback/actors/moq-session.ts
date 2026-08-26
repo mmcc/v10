@@ -1,39 +1,26 @@
 /**
- * Actor owning the WebTransport connection + MOQT session for one MoQ
- * source.
+ * Actor owning the WebTransport connection + MOQT session for one MoQ source.
  *
- * Wraps the callback-shaped `network/moqt` session driver in a reactive
- * snapshot: behaviors read `snapshot.context.status` for the connection
- * lifecycle (`'connecting' → 'ready'`, terminal `'closed'`/`'failed'`)
- * and `snapshot.context.session` for the live `MoqtSession` once ready.
- * A reducer-shaped `TransitionActor` fits — the interesting state is all
- * context; the finite `value` is just the universal active/destroyed
- * lifecycle marker.
+ * Wraps the callback-shaped `network/moqt` session driver in a reactive snapshot: behaviors read
+ * `snapshot.context.status` for the connection lifecycle (`'connecting' → 'ready'`, terminal `'closed'`/`'failed'`) and
+ * `snapshot.context.session` for the live `MoqtSession` once ready. A reducer-shaped `TransitionActor` fits — the
+ * interesting state is all context; the finite `value` is just the universal active/destroyed lifecycle marker.
  *
- * **Unexpected session loss reconnects rather than terminating.** A
- * transport drop, relay restart, or failed connect cycles the status
- * through `'reconnecting'` and retries with capped, jittered backoff
- * (`reconnect` config). Each recovered connection is a *new*
- * `MoqtSession` published on a `'ready'` snapshot — behaviors keyed on
- * `status === 'ready'` tear their subscriptions down on the drop and
- * re-issue them against the fresh session, which is what rejoins the
- * catalog and media tracks at the live edge. `'failed'` now means the
- * retry budget is spent (or the failure is permanent, like the QUIC
- * mandate below); `'closed'` remains the deliberate local teardown.
+ * **Unexpected session loss reconnects rather than terminating.** A transport drop, relay restart, or failed connect
+ * cycles the status through `'reconnecting'` and retries with capped, jittered backoff (`reconnect` config). Each
+ * recovered connection is a _new_ `MoqtSession` published on a `'ready'` snapshot — behaviors keyed on `status ===
+ * 'ready'` tear their subscriptions down on the drop and re-issue them against the fresh session, which is what rejoins
+ * the catalog and media tracks at the live edge. `'failed'` now means the retry budget is spent (or the failure is
+ * permanent, like the QUIC mandate below); `'closed'` remains the deliberate local teardown.
  *
- * Also the home of the MSF §11.4 auth seam: `authProvider` supplies the
- * initial authorization token (defaulting to the source's `c4m` fragment
- * token), composed onto the connect URL's `?jwt=` query parameter — the
- * only carriage the known relay fleet (moq-lite-rs lineage) accepts; see
- * `composePlaybackConnectUrl`. `getAuthParameters()` always resolves empty
- * — nothing rides a request's parameters. `refreshAuthToken()` always
- * rejects: this actor connects once and never reconnects (a `goaway` is
- * only recorded, see `SessionMessage`'s `'goaway'` case), so a refreshed
- * token has nowhere left to attach — the jwt is fixed at connect time.
- * Both stay on the interface (with `MoqAuthProvider.refreshToken`) for a
- * future relay generation that accepts draft-19 AUTHORIZATION_TOKEN
- * request parameters, at which point a token could ride a request
- * instead of only the connect URL.
+ * Also the home of the MSF §11.4 auth seam: `authProvider` supplies the initial authorization token (defaulting to the
+ * source's `c4m` fragment token), composed onto the connect URL's `?jwt=` query parameter — the only carriage the known
+ * relay fleet (moq-lite-rs lineage) accepts; see `composePlaybackConnectUrl`. `getAuthParameters()` always resolves
+ * empty — nothing rides a request's parameters. `refreshAuthToken()` always rejects: this actor connects once and never
+ * reconnects (a `goaway` is only recorded, see `SessionMessage`'s `'goaway'` case), so a refreshed token has nowhere
+ * left to attach — the jwt is fixed at connect time. Both stay on the interface (with `MoqAuthProvider.refreshToken`)
+ * for a future relay generation that accepts draft-19 AUTHORIZATION_TOKEN request parameters, at which point a token
+ * could ride a request instead of only the connect URL.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import type { MoqSource } from '../../media/moq/parse-source';
@@ -68,30 +55,24 @@ type SessionMessage =
   | { type: 'closed' }
   | { type: 'failed'; error: unknown };
 
-/**
- * Transport factory seam. A browser passes the `WebTransport`-backed
- * default; tests inject an in-memory fake.
- */
+/** Transport factory seam. A browser passes the `WebTransport`-backed default; tests inject an in-memory fake. */
 export type CreateMoqTransport = (
   connectUrl: string,
   protocols: string[]
 ) => { transport: MoqtTransport; ready: Promise<void> };
 
 /**
- * Supplies/refreshes the authorization token *value* for the connection
- * (MSF §11.4). The actor composes it onto the connect URL's `?jwt=` query
- * parameter (`composePlaybackConnectUrl`).
+ * Supplies/refreshes the authorization token _value_ for the connection (MSF §11.4). The actor composes it onto the
+ * connect URL's `?jwt=` query parameter (`composePlaybackConnectUrl`).
  */
 export interface MoqAuthProvider {
   getToken(): Promise<Uint8Array | string | undefined> | Uint8Array | string | undefined;
   /**
-   * Unused today: `MoqSessionActor.refreshAuthToken()` rejects before ever
-   * calling this — see its doc. A refreshed token has no connection left
-   * to attach to (the jwt rides only the connect URL, fixed at connect
-   * time), so calling this here would mint a token from the provider that
-   * no code could ever use. Kept on the interface for a future relay
-   * generation that accepts draft-19 AUTHORIZATION_TOKEN request
-   * parameters, at which point a mid-session refresh becomes meaningful.
+   * Unused today: `MoqSessionActor.refreshAuthToken()` rejects before ever calling this — see its doc. A refreshed
+   * token has no connection left to attach to (the jwt rides only the connect URL, fixed at connect time), so calling
+   * this here would mint a token from the provider that no code could ever use. Kept on the interface for a future
+   * relay generation that accepts draft-19 AUTHORIZATION_TOKEN request parameters, at which point a mid-session refresh
+   * becomes meaningful.
    */
   refreshToken?(): Promise<Uint8Array | string | undefined> | Uint8Array | string | undefined;
   /** MOQT auth Token Type codepoint. Default 0. */
@@ -105,27 +86,23 @@ export interface CreateMoqSessionActorOptions {
   /** Forwarded to the session driver (alias buffering timeout, etc.). */
   unknownAliasTimeoutMs?: number;
   /**
-   * Reconnect policy for unexpected session loss (transport drop, relay
-   * restart, connect failure). Defaults to
-   * {@link DEFAULT_RECONNECT_BACKOFF_CONFIG} — retry forever with capped,
-   * jittered backoff. `maxAttempts: 0` disables reconnection entirely
-   * (the pre-resilience terminal behavior).
+   * Reconnect policy for unexpected session loss (transport drop, relay restart, connect failure). Defaults to
+   * {@link DEFAULT_RECONNECT_BACKOFF_CONFIG} — retry forever with capped, jittered backoff. `maxAttempts: 0` disables
+   * reconnection entirely (the pre-resilience terminal behavior).
    */
   reconnect?: Partial<RetryBackoffConfig>;
 }
 
 export interface MoqSessionActor extends Pick<TransitionActor<MoqSessionActorContext, SessionMessage>, 'snapshot'> {
   /**
-   * Request parameters carrying the current auth token — currently always
-   * empty; the token rides the connect URL instead (see the module doc).
+   * Request parameters carrying the current auth token — currently always empty; the token rides the connect URL
+   * instead (see the module doc).
    */
   getAuthParameters(): MessageParameters;
   /**
-   * Always rejects — see the implementation's doc comment for why. Kept
-   * on the interface (and called by callers' one-shot EXPIRED_AUTH_TOKEN
-   * retries, e.g. `resolve-catalog.ts`/`track-subscriber.ts`) so that
-   * retry path gives up cleanly on rejection instead of needing removal
-   * now and reinstatement once a future relay generation supports
+   * Always rejects — see the implementation's doc comment for why. Kept on the interface (and called by callers'
+   * one-shot EXPIRED_AUTH_TOKEN retries, e.g. `resolve-catalog.ts`/`track-subscriber.ts`) so that retry path gives up
+   * cleanly on rejection instead of needing removal now and reinstatement once a future relay generation supports
    * mid-session auth refresh.
    */
   refreshAuthToken(): Promise<MessageParameters>;
@@ -141,6 +118,7 @@ function createWebTransport(
   protocols: string[]
 ): { transport: MoqtTransport; ready: Promise<void> } {
   const transport = new WebTransport(connectUrl, { protocols });
+
   return { transport, ready: transport.ready.then(() => undefined) };
 }
 
@@ -154,7 +132,9 @@ const fatalTokenDecoder = new TextDecoder('utf-8', { fatal: true });
 
 function toTokenString(token: Uint8Array | string | undefined): string | undefined {
   if (token === undefined) return undefined;
+
   if (typeof token === 'string') return token;
+
   try {
     return fatalTokenDecoder.decode(token);
   } catch {
@@ -170,18 +150,15 @@ function toTokenString(token: Uint8Array | string | undefined): string | undefin
 }
 
 /**
- * Whether resolving an auth token for this URL would be wasted work — the
- * exact complement of the two cases where {@link composePlaybackConnectUrl}
- * discards the token it is handed:
+ * Whether resolving an auth token for this URL would be wasted work — the exact complement of the two cases where
+ * {@link composePlaybackConnectUrl} discards the token it is handed:
  *
- *   - the URL already carries an explicit `jwt` param, which wins;
- *   - the URL is unparseable, so it goes to WebTransport verbatim.
+ * - The URL already carries an explicit `jwt` param, which wins;
+ * - The URL is unparseable, so it goes to WebTransport verbatim.
  *
- * The two must agree. When they disagree, the actor mints a token that is
- * then thrown away — and a *throwing* provider surfaces its own error
- * instead of the canonical `new WebTransport(url)` failure the malformed
- * URL should have produced, which reads as an auth outage rather than the
- * typo it is.
+ * The two must agree. When they disagree, the actor mints a token that is then thrown away — and a _throwing_ provider
+ * surfaces its own error instead of the canonical `new WebTransport(url)` failure the malformed URL should have
+ * produced, which reads as an auth outage rather than the typo it is.
  */
 function skipTokenResolution(url: string): boolean {
   try {
@@ -192,23 +169,21 @@ function skipTokenResolution(url: string): boolean {
 }
 
 /**
- * Compose the WebTransport connect URL for a source. moq-lite-rs lineage
- * relays (Mux's relay-rs fleet, the Varnish lab relays) authenticate with
- * a JWT `?jwt=` query parameter on the connect URL and close the
- * connection right after CLIENT_SETUP when auth is required but missing
- * — the same carriage `composePublishConnectUrl` uses on the publish
- * side (`publish/session/publish-session.ts`), for the same reason: this
- * relay fleet hard-closes the session (`5 "invalid value"`) when a
- * draft-19 AUTHORIZATION_TOKEN structure rides a request's parameters
- * instead. An explicit `jwt` param already in the source URL wins, and
- * an unparseable URL is returned verbatim so `new WebTransport(url)`
+ * Compose the WebTransport connect URL for a source. moq-lite-rs lineage relays (Mux's relay-rs fleet, the Varnish lab
+ * relays) authenticate with a JWT `?jwt=` query parameter on the connect URL and close the connection right after
+ * CLIENT_SETUP when auth is required but missing — the same carriage `composePublishConnectUrl` uses on the publish
+ * side (`publish/session/publish-session.ts`), for the same reason: this relay fleet hard-closes the session (`5
+ * "invalid value"`) when a draft-19 AUTHORIZATION_TOKEN structure rides a request's parameters instead. An explicit
+ * `jwt` param already in the source URL wins, and an unparseable URL is returned verbatim so `new WebTransport(url)`
  * raises the canonical error.
  */
 export function composePlaybackConnectUrl(url: string, authToken?: string): string {
   if (!authToken) return url;
+
   try {
     const parsed = new URL(url);
     if (parsed.searchParams.has('jwt')) return url;
+
     parsed.searchParams.set('jwt', authToken);
     return parsed.href;
   } catch {
@@ -217,9 +192,8 @@ export function composePlaybackConnectUrl(url: string, authToken?: string): stri
 }
 
 /**
- * Connect to the source's relay and drive the session lifecycle. The
- * connection starts immediately — composition-level gating (preload /
- * load-activation) belongs to the behavior that creates this actor.
+ * Connect to the source's relay and drive the session lifecycle. The connection starts immediately — composition-level
+ * gating (preload / load-activation) belongs to the behavior that creates this actor.
  */
 export function createMoqSessionActor(options: CreateMoqSessionActorOptions): MoqSessionActor {
   const { source, authProvider } = options;
@@ -228,10 +202,9 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
   let destroyed = false;
   let session: MoqtSession | undefined;
   /**
-   * The transport of a connect attempt still in flight — the handshake
-   * has not settled, so no session owns it yet. destroy() closes it
-   * directly: waiting on `created.ready` to settle would leave a hung
-   * handshake's connection open indefinitely.
+   * The transport of a connect attempt still in flight — the handshake has not settled, so no session owns it yet.
+   * destroy() closes it directly: waiting on `created.ready` to settle would leave a hung handshake's connection open
+   * indefinitely.
    */
   let pendingTransport: MoqtTransport | undefined;
 
@@ -246,6 +219,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       // Terminal states are sticky: a transport-closed callback after a
       // failure must not soften 'failed' back to 'closed'.
       if (context.status === 'closed' || context.status === 'failed') return context;
+
       switch (message.type) {
         case 'connected':
           // A fresh context, not a merge: a GOAWAY or error left behind by
@@ -281,21 +255,27 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       });
       return;
     }
+
     let transport: MoqtTransport | undefined;
     let attemptSession: MoqtSession | undefined;
+
     try {
       let authToken: string | undefined;
+
       // Skip token resolution whenever the token would be discarded by
       // `composePlaybackConnectUrl` (see `skipTokenResolution`): minting one
       // would be pointless work, and a provider failure must not block —
       // or mis-report — a connect whose URL was never going to carry it.
       if (!skipTokenResolution(source.connectUrl)) {
         let providerToken: Uint8Array | string | undefined;
+
         if (authProvider) {
           providerToken = await authProvider.getToken();
+
           // destroy() during a pending getToken() must not open a connection.
           if (destroyed) return;
         }
+
         try {
           // Decoded inside start() so a binary (non-UTF-8) token — from
           // the source's `c4m` fragment or the auth provider — lands as a
@@ -305,21 +285,26 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
           // catch takes for *transient* failures would loop on a config
           // error forever.
           const c4mToken = toTokenString(source.c4mToken);
+
           authToken = toTokenString(providerToken) ?? c4mToken;
         } catch (error) {
           inner.send({ type: 'failed', error });
           return;
         }
       }
+
       const created = createTransport(composePlaybackConnectUrl(source.connectUrl, authToken), [MOQT_PROTOCOL_ID]);
+
       transport = created.transport;
       pendingTransport = transport;
       await created.ready;
       pendingTransport = undefined;
+
       // No close here: a destroy() that ran while the handshake was in
       // flight already closed the pending transport, and a second close
       // may throw on custom MoqtTransport implementations.
       if (destroyed) return;
+
       attemptSession = createMoqtSession(transport, {
         unknownAliasTimeoutMs: options.unknownAliasTimeoutMs,
         callbacks: {
@@ -333,6 +318,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       });
       session = attemptSession;
       await attemptSession.ready;
+
       // The transport can drop in the gap between `ready` resolving and
       // this continuation running. `scheduleReconnect` has then already
       // published 'reconnecting' and cleared `session` — a late
@@ -340,6 +326,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       // already gone, and downstream behaviors treat 'ready' as a
       // guarantee that a session exists.
       if (destroyed || session !== attemptSession) return;
+
       readySinceMs = performance.now();
       inner.send({ type: 'connected', session: attemptSession });
     } catch (error) {
@@ -349,6 +336,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
       // scheduled mid-attempt clears the shared slot, and the attempt's
       // own session still has to be torn down.
       pendingTransport = undefined;
+
       if (attemptSession) {
         attemptSession.destroy();
       } else {
@@ -358,15 +346,15 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
           // an already-failed transport throws on close()
         }
       }
+
       if (!destroyed) scheduleReconnect(error);
     }
   };
 
   /**
-   * How long a connection must stay ready before a later drop counts as a
-   * *new* outage (resetting the backoff) rather than a continuation of the
-   * last one. Keeps a connect-then-immediately-drop flap escalating toward
-   * the backoff ceiling instead of hammering the relay at the initial delay.
+   * How long a connection must stay ready before a later drop counts as a _new_ outage (resetting the backoff) rather
+   * than a continuation of the last one. Keeps a connect-then-immediately-drop flap escalating toward the backoff
+   * ceiling instead of hammering the relay at the initial delay.
    */
   const STABLE_CONNECTION_RESET_MS = 30_000;
 
@@ -376,18 +364,23 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
     // onClosed synchronously), and a stray late callback after the retry
     // budget is spent must not revive a terminal actor.
     if (destroyed || reconnectTimer !== undefined) return;
+
     const status = inner.snapshot.get().context.status;
     if (status === 'closed' || status === 'failed') return;
+
     if (readySinceMs !== undefined && performance.now() - readySinceMs >= STABLE_CONNECTION_RESET_MS) {
       reconnectAttempts = 0;
     }
+
     readySinceMs = undefined;
     session = undefined;
     const delay = retryDelayMs(reconnectAttempts, reconnectConfig);
+
     if (delay === undefined) {
       inner.send({ type: 'failed', error: error ?? new Error('MoQ session closed and the reconnect budget is spent') });
       return;
     }
+
     reconnectAttempts++;
     inner.send({ type: 'reconnecting', error });
     reconnectTimer = setTimeout(() => {
@@ -433,16 +426,20 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
 
     destroy(): void {
       if (destroyed) return;
+
       destroyed = true;
+
       if (reconnectTimer !== undefined) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
       }
+
       try {
         pendingTransport?.close();
       } catch {
         // an already-failed transport throws on close()
       }
+
       pendingTransport = undefined;
       session?.destroy();
       // Published explicitly: the session's own onClosed callback bails on

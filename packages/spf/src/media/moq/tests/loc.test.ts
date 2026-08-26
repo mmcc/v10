@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { LOC_PROPERTY, locTimestampToMicroseconds, parseLocProperties, parseTrackTimescale, toLocFrame } from '../loc';
 
 describe('parseLocProperties', () => {
@@ -9,6 +10,7 @@ describe('parseLocProperties', () => {
       { type: LOC_PROPERTY.TIMESCALE, value: 90_000 },
       { type: LOC_PROPERTY.VIDEO_CONFIG, value: config },
     ]);
+
     expect(parsed).toEqual({ timestamp: 90_000, timescale: 90_000, videoConfig: config });
   });
 
@@ -19,6 +21,7 @@ describe('parseLocProperties', () => {
   it('prefers the draft-04 timestamp when both ids are present, in either order', () => {
     const draft04 = { type: LOC_PROPERTY.TIMESTAMP, value: 100 };
     const draft03 = { type: LOC_PROPERTY.TIMESTAMP_DRAFT03, value: 7 };
+
     expect(parseLocProperties([draft03, draft04])).toEqual({ timestamp: 100 });
     expect(parseLocProperties([draft04, draft03])).toEqual({ timestamp: 100 });
   });
@@ -52,6 +55,7 @@ describe('toLocFrame', () => {
   it('builds a frame with the group-start keyframe rule', () => {
     const key = toLocFrame({ objectId: 0, properties: [{ type: LOC_PROPERTY.TIMESTAMP, value: 5 }], payload });
     const delta = toLocFrame({ objectId: 3, properties: [{ type: LOC_PROPERTY.TIMESTAMP, value: 6 }], payload });
+
     expect(key).toMatchObject({ isKey: true, timestampUs: 5, payload });
     expect(delta).toMatchObject({ isKey: false, timestampUs: 6 });
   });
@@ -61,6 +65,7 @@ describe('toLocFrame', () => {
       { objectId: 0, properties: [{ type: LOC_PROPERTY.TIMESTAMP, value: 90_000 }], payload },
       { timescale: 90_000 }
     );
+
     expect(frame?.timestampUs).toBe(1_000_000);
   });
 
@@ -76,6 +81,7 @@ describe('toLocFrame', () => {
       },
       { timescale: 90_000 }
     );
+
     expect(frame?.timestampUs).toBe(1_000_000);
   });
 
@@ -90,6 +96,7 @@ describe('toLocFrame', () => {
       { objectId: 0, properties: [{ type: 0x06, value: 90_000 }], payload },
       { timescale: 90_000 }
     );
+
     expect(draft04).toMatchObject({ isKey: true, timestampUs: 1_000_000, payload });
     expect(draft03).toMatchObject({ isKey: true, timestampUs: 1_000_000, payload });
   });

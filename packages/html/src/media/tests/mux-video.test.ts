@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
+
 import { MuxVideo } from '../mux-video';
 
 customElements.define('test-mux-video', MuxVideo);
 
 function createMuxVideo() {
   const el = new MuxVideo();
+
   document.body.appendChild(el);
   return el;
 }
@@ -21,6 +23,57 @@ describe('MuxVideo', () => {
 
     expect(el.source?.preferPlayback).toBe('native');
     expect(el.hasAttribute('source')).toBe(false);
+  });
+
+  it('carries maxAutoResolution through the source property', () => {
+    const el = createMuxVideo();
+
+    el.source = { playbackId: 'abc123', preferPlayback: 'native', maxAutoResolution: '720p' };
+
+    expect(el.source?.maxAutoResolution).toBe('720p');
+    // Normalized source options ride the property; no attribute is reflected.
+    expect(el.hasAttribute('maxautoresolution')).toBe(false);
+  });
+
+  it('keeps maxAutoResolution when the src attribute changes', () => {
+    const el = createMuxVideo();
+
+    el.source = { playbackId: 'abc123', preferPlayback: 'native', maxAutoResolution: '720p' };
+    el.setAttribute('src', 'https://stream.mux.com/other.m3u8');
+
+    expect(el.source?.maxAutoResolution).toBe('720p');
+  });
+
+  it('carries the player-size caps through the source property', () => {
+    const el = createMuxVideo();
+
+    el.source = {
+      playbackId: 'abc123',
+      preferPlayback: 'native',
+      capRenditionToPlayerSize: false,
+      minAutoResolution: '1080p',
+    };
+
+    expect(el.source?.capRenditionToPlayerSize).toBe(false);
+    expect(el.source?.minAutoResolution).toBe('1080p');
+    // Normalized source options ride the property; no attribute is reflected.
+    expect(el.hasAttribute('caprenditiontoplayersize')).toBe(false);
+    expect(el.hasAttribute('minautoresolution')).toBe(false);
+  });
+
+  it('keeps the player-size caps when the src attribute changes', () => {
+    const el = createMuxVideo();
+
+    el.source = {
+      playbackId: 'abc123',
+      preferPlayback: 'native',
+      capRenditionToPlayerSize: false,
+      minAutoResolution: '1080p',
+    };
+    el.setAttribute('src', 'https://stream.mux.com/other.m3u8');
+
+    expect(el.source?.capRenditionToPlayerSize).toBe(false);
+    expect(el.source?.minAutoResolution).toBe('1080p');
   });
 
   it('keeps engine options when the src attribute changes', () => {
@@ -60,6 +113,7 @@ describe('MuxVideo', () => {
     el.source = { playbackId: 'abc123', customDomain: 'example.com', playback: { maxResolution: '1080p' } };
 
     const url = new URL(el.host.src);
+
     expect(url.host).toBe('stream.example.com');
     expect(url.searchParams.get('max_resolution')).toBe('1080p');
   });
@@ -70,6 +124,7 @@ describe('MuxVideo', () => {
     el.setAttribute('src', 'https://stream.mux.com/abc123.m3u8');
 
     const track = el.querySelector('track');
+
     expect(track?.kind).toBe('metadata');
     expect(track?.getAttribute('src')).toBe('https://image.mux.com/abc123/storyboard.vtt?format=webp');
   });
@@ -128,6 +183,7 @@ describe('MuxVideo', () => {
     el.setAttribute('src', 'https://stream.mux.com/xyz789.m3u8');
 
     const tracks = el.querySelectorAll('track');
+
     expect(tracks.length).toBe(1);
     expect(tracks[0]?.getAttribute('src')).toBe('https://image.mux.com/xyz789/storyboard.vtt?format=webp');
   });

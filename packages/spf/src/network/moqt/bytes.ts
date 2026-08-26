@@ -1,11 +1,9 @@
 /**
  * Byte-level readers/writers shared by the MOQT wire codecs.
  *
- * `ByteReader`/`ByteWriter` are synchronous cursors over in-memory buffers,
- * used for control-message bodies (always fully buffered — the 16-bit
- * message length bounds them). `StreamReader` is the asynchronous
- * counterpart for unidirectional data streams, where headers and objects
- * arrive incrementally over a WebTransport `ReadableStream`.
+ * `ByteReader`/`ByteWriter` are synchronous cursors over in-memory buffers, used for control-message bodies (always
+ * fully buffered — the 16-bit message length bounds them). `StreamReader` is the asynchronous counterpart for
+ * unidirectional data streams, where headers and objects arrive incrementally over a WebTransport `ReadableStream`.
  */
 import { decodeVarint, encodeVarintInto, varintByteLength, varintLengthFromFirstByte } from './varint';
 
@@ -40,18 +38,22 @@ export class ByteReader {
 
   readVarint(): number {
     const { value, byteLength } = decodeVarint(this.#bytes, this.#offset);
+
     this.#offset += byteLength;
     return value;
   }
 
   readUint8(): number {
     if (this.remaining < 1) throw new RangeError('read past end of buffer');
+
     return this.#bytes[this.#offset++]!;
   }
 
   readUint16(): number {
     if (this.remaining < 2) throw new RangeError('read past end of buffer');
+
     const value = this.#bytes[this.#offset]! * 256 + this.#bytes[this.#offset + 1]!;
+
     this.#offset += 2;
     return value;
   }
@@ -59,7 +61,9 @@ export class ByteReader {
   /** Returns a view (not a copy) of the next `length` bytes. */
   readBytes(length: number): Uint8Array {
     if (length < 0 || this.remaining < length) throw new RangeError('read past end of buffer');
+
     const view = this.#bytes.subarray(this.#offset, this.#offset + length);
+
     this.#offset += length;
     return view;
   }
@@ -81,7 +85,9 @@ export class ByteWriter {
   #ensure(extra: number): void {
     const needed = this.#length + extra;
     if (needed <= this.#buffer.length) return;
+
     const grown = new Uint8Array(Math.max(needed, this.#buffer.length * 2));
+
     grown.set(this.#buffer.subarray(0, this.#length));
     this.#buffer = grown;
   }
@@ -123,9 +129,8 @@ export class ByteWriter {
 /**
  * Buffered asynchronous reader over a `ReadableStream<Uint8Array>`.
  *
- * Reads never split a varint or byte run: each method pulls chunks until it
- * can satisfy the request. A clean end-of-stream mid-read throws
- * `RangeError`; use `atEnd()` to probe for a clean boundary first.
+ * Reads never split a varint or byte run: each method pulls chunks until it can satisfy the request. A clean
+ * end-of-stream mid-read throws `RangeError`; use `atEnd()` to probe for a clean boundary first.
  */
 export class StreamReader {
   #reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -139,15 +144,19 @@ export class StreamReader {
 
   async #pull(): Promise<boolean> {
     if (this.#done) return false;
+
     const { done, value } = await this.#reader.read();
+
     if (done) {
       this.#done = true;
       return false;
     }
+
     if (value.length > 0) {
       this.#chunks.push(value);
       this.#buffered += value.length;
     }
+
     return true;
   }
 
@@ -160,17 +169,22 @@ export class StreamReader {
   #take(length: number): Uint8Array {
     const out = new Uint8Array(length);
     let copied = 0;
+
     while (copied < length) {
       const head = this.#chunks[0]!;
       const take = Math.min(head.length, length - copied);
+
       out.set(head.subarray(0, take), copied);
+
       if (take === head.length) {
         this.#chunks.shift();
       } else {
         this.#chunks[0] = head.subarray(take);
       }
+
       copied += take;
     }
+
     this.#buffered -= length;
     return out;
   }
@@ -180,6 +194,7 @@ export class StreamReader {
     while (this.#buffered === 0) {
       if (!(await this.#pull())) return true;
     }
+
     return false;
   }
 
@@ -197,6 +212,7 @@ export class StreamReader {
     await this.#fill(1);
     const firstByte = this.#chunks[0]![0]!;
     const byteLength = varintLengthFromFirstByte(firstByte);
+
     await this.#fill(byteLength);
     return decodeVarint(this.#take(byteLength)).value;
   }

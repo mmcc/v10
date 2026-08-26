@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import {
   bufferDepthSeconds,
   estimateLatencySeconds,
@@ -45,11 +46,13 @@ describe('templateMediaTimeForGroup', () => {
   it('returns null before the template start or for object-indexed templates', () => {
     expect(templateMediaTimeForGroup(template, -1)).toBeNull();
     const objectIndexed = parseMediaTimelineTemplate([0, 20, [0, 0], [0, 1], 0, 0])!;
+
     expect(templateMediaTimeForGroup(objectIndexed, 5)).toBeNull();
   });
 
   it('returns null for groups between stride entries', () => {
     const strided = parseMediaTimelineTemplate([0, 2002, [0, 0], [2, 0], 0, 0])!;
+
     expect(templateMediaTimeForGroup(strided, 3)).toBeNull();
     expect(templateMediaTimeForGroup(strided, 4)).toBe(4004);
   });
@@ -88,6 +91,7 @@ describe('estimateLatencySeconds', () => {
   it('measures capture-to-now distance for wallclock-anchored timestamps', () => {
     const nowMs = 1_700_000_001_000;
     const capturedUs = 1_700_000_000_000_000; // one second earlier
+
     expect(estimateLatencySeconds(capturedUs, nowMs)).toBeCloseTo(1);
   });
 });
@@ -150,6 +154,7 @@ describe('resolveTargetLatencySeconds', () => {
   // what keeps the self-clock finite.
   it('resolves to a target that keeps the join anchor finite', () => {
     const newestUs = 10_000_000;
+
     expect(joinAnchorUs(newestUs, resolveTargetLatencySeconds(Number.NaN, undefined, 0.5))).toBe(9_500_000);
     expect(Number.isFinite(joinAnchorUs(newestUs, resolveTargetLatencySeconds(Number.NaN, Number.NaN, 0.5)))).toBe(
       true

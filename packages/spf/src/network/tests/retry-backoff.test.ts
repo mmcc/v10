@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import {
   DEFAULT_RECONNECT_BACKOFF_CONFIG,
   type RetryBackoffConfig,
@@ -12,6 +13,7 @@ describe('retryDelayMs', () => {
   it('doubles from the initial delay and clamps at the ceiling', () => {
     // random = 0.5 → jitter factor exactly 1.
     const noJitter = () => 0.5;
+
     expect(retryDelayMs(0, config, noJitter)).toBe(500);
     expect(retryDelayMs(1, config, noJitter)).toBe(1000);
     expect(retryDelayMs(2, config, noJitter)).toBe(2000);

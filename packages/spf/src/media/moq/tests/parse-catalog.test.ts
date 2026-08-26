@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { isLiveTrack, isResolvedPresentation } from '../../types';
 import { getTracksByType } from '../../utils/tracks';
 import {
@@ -56,10 +57,12 @@ describe('parseMoqCatalog', () => {
     expect(isResolvedPresentation(presentation)).toBe(true);
     const videoTracks = getTracksByType(presentation, 'video');
     const audioTracks = getTracksByType(presentation, 'audio');
+
     expect(videoTracks).toHaveLength(1);
     expect(audioTracks).toHaveLength(1);
 
     const video = videoTracks[0] as MoqVideoTrack;
+
     expect(isLiveTrack(video)).toBe(true);
     expect(video).toMatchObject({
       type: 'video',
@@ -77,6 +80,7 @@ describe('parseMoqCatalog', () => {
     });
 
     const audio = audioTracks[0] as MoqAudioTrack;
+
     expect(audio).toMatchObject({
       type: 'audio',
       deliveryMode: 'push',
@@ -112,12 +116,14 @@ describe('parseMoqCatalog', () => {
     });
     const presentation = parseMoqCatalog(catalog, { url: SOURCE_URL });
     const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+
     expect(video.moq.jitter).toBe(34);
   });
 
   it('leaves jitter absent when the catalog declares none', () => {
     const presentation = parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL });
     const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+
     expect(video.moq.jitter).toBeUndefined();
   });
 
@@ -166,6 +172,7 @@ describe('parseMoqCatalog', () => {
     });
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
     const audio = getTracksByType(presentation, 'audio')[0] as MoqAudioTrack;
+
     expect(audio.channels).toBe(2);
     expect(audio.moq.channelConfig).toBe('JOC');
   });
@@ -173,6 +180,7 @@ describe('parseMoqCatalog', () => {
   it('derives stable track ids from full track names', () => {
     const first = parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL });
     const second = parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL });
+
     expect(getTracksByType(first, 'video')[0]!.id).toBe(getTracksByType(second, 'video')[0]!.id);
     expect(first.id).toBe(second.id);
   });
@@ -184,6 +192,7 @@ describe('parseMoqCatalog', () => {
     });
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
     const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+
     expect(video.moq.namespace).toEqual(['conference', 'alice']);
     expect(video.id).toBe(moqTrackId(['conference', 'alice'], 'video'));
   });
@@ -199,6 +208,7 @@ describe('parseMoqCatalog', () => {
     });
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
     const textTracks = getTracksByType(presentation, 'text');
+
     expect(textTracks).toHaveLength(1);
     expect(textTracks[0]).toMatchObject({ type: 'text', kind: 'subtitles', label: 'English', language: 'en' });
     expect(presentation.selectionSets).toHaveLength(1);
@@ -214,6 +224,7 @@ describe('parseMoqCatalog', () => {
     });
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
     const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+
     expect(video.moq.initData).toEqual(new Uint8Array([1, 2, 3]));
   });
 
@@ -233,6 +244,7 @@ describe('parseMoqCatalog', () => {
     });
     const presentation = parseMoqCatalog(text, { url: `${SOURCE_URL}&token=XYZ789` });
     const video = getTracksByType(presentation, 'video')[0] as MoqVideoTrack;
+
     expect(video.moq.authInfo).toEqual({ cat: 'XYZ789' });
   });
 
@@ -253,6 +265,7 @@ describe('parseMoqCatalog', () => {
       tracks: [{ name: 'video', packaging: 'loc', isLive: true, role: 'video', codec: 'avc1.64001f' }],
     });
     const presentation = parseMoqCatalog(text, { url: SOURCE_URL });
+
     expect(getTracksByType(presentation, 'video')).toHaveLength(1);
   });
 });
@@ -262,6 +275,7 @@ describe('applyMoqCatalogUpdate', () => {
 
   it('applies add and remove delta operations in order', () => {
     const initial = applyMoqCatalogUpdate(undefined, SIMPLE_CATALOG, options);
+
     expect(initial.tracks).toHaveLength(2);
 
     const delta = JSON.stringify({
@@ -284,6 +298,7 @@ describe('applyMoqCatalogUpdate', () => {
       ],
     });
     const updated = applyMoqCatalogUpdate(initial, delta, options);
+
     expect(updated.tracks.map((track) => track.name)).toEqual(['1080p-video', '720p-video']);
   });
 
@@ -312,6 +327,7 @@ describe('applyMoqCatalogUpdate', () => {
     });
     const updated = applyMoqCatalogUpdate(initial, delta, cloneOptions);
     const clone = updated.tracks.find((track) => track.name === '540p-video');
+
     expect(clone).toMatchObject({
       name: '540p-video',
       namespace: ['conference.example.com', 'conference123', 'alice'], // inherited
@@ -330,6 +346,7 @@ describe('applyMoqCatalogUpdate', () => {
     const videoIds = presentation.selectionSets
       .filter((set) => set.type === 'video')
       .flatMap((set) => set.switchingSets.flatMap((switchingSet) => switchingSet.tracks.map((track) => track.id)));
+
     expect(videoIds).toContain(moqTrackId(['conference.example.com', 'conference123', 'alice'], '540p-video'));
   });
 
@@ -346,6 +363,7 @@ describe('applyMoqCatalogUpdate', () => {
       ],
     });
     const updated = applyMoqCatalogUpdate(initial, delta, options);
+
     // Position held, and every undeclared attribute survived.
     expect(updated.tracks.map((track) => track.name)).toEqual(['1080p-video', 'audio']);
     expect(updated.tracks[0]).toMatchObject({
@@ -377,6 +395,7 @@ describe('applyMoqCatalogUpdate', () => {
       ],
     });
     const updated = applyMoqCatalogUpdate(initial, delta, updateOptions);
+
     expect(updated.tracks).toHaveLength(2);
     expect(updated.tracks.find((track) => track.name === 'audio')).toMatchObject({
       bitrate: 64000,
@@ -396,6 +415,7 @@ describe('applyMoqCatalogUpdate', () => {
       generatedAt: 1746104606044,
       deltaUpdate: [{ op: 'update', tracks: [{ bitrate: 1 }] }],
     });
+
     expect(() => applyMoqCatalogUpdate(initial, delta, options)).toThrow(/parentName \(or name\)/);
   });
 
@@ -405,6 +425,7 @@ describe('applyMoqCatalogUpdate', () => {
       generatedAt: 1746104606044,
       deltaUpdate: [{ op: 'update', tracks: [{ parentName: 'no-such-track', bitrate: 1 }] }],
     });
+
     expect(() => applyMoqCatalogUpdate(initial, delta, options)).toThrow(/unknown track/);
   });
 
@@ -431,6 +452,7 @@ describe('applyMoqCatalogUpdate', () => {
     });
     const updated = applyMoqCatalogUpdate(initial, delta, options);
     const added = updated.tracks.find((track) => track.name === '720p-video');
+
     expect(added).toMatchObject({
       namespace: ['conference', 'alice'], // catalog namespace, from the add
       bitrate: 900000,
@@ -456,6 +478,7 @@ describe('applyMoqCatalogUpdate', () => {
     });
     const updated = applyMoqCatalogUpdate(initial, delta, options);
     const added = updated.tracks.find((track) => track.name === 'hevc');
+
     expect(added?.initData).toEqual(new Uint8Array([0x0a, 0x0b]));
   });
 
@@ -481,11 +504,13 @@ describe('applyMoqCatalogUpdate', () => {
     });
     const updated = applyMoqCatalogUpdate(initial, delta, options);
     const added = updated.tracks.find((track) => track.name === 'video-2');
+
     expect(added?.initData).toEqual(new Uint8Array([1, 2, 3]));
   });
 
   it('rejects a delta update with no prior catalog', () => {
     const delta = JSON.stringify({ version: '1', deltaUpdate: [] });
+
     expect(() => applyMoqCatalogUpdate(undefined, delta, options)).toThrow();
   });
 
@@ -496,6 +521,7 @@ describe('applyMoqCatalogUpdate', () => {
       tracks: [{ name: 'only', packaging: 'loc', isLive: true, role: 'video', codec: 'avc1.64001f' }],
     });
     const replaced = applyMoqCatalogUpdate(initial, replacement, options);
+
     expect(replaced.tracks.map((track) => track.name)).toEqual(['only']);
   });
 });
@@ -521,6 +547,7 @@ describe('moqCatalogToPresentation', () => {
     // Every catalog in production today. Structural identity with the
     // pre-multi-source projection is the contract, ids included.
     const videoSet = videoSetOf(parseMoqCatalog(SIMPLE_CATALOG, { url: SOURCE_URL }));
+
     expect(videoSet.id).toBe('moq-video');
     expect(videoSet.switchingSets).toHaveLength(1);
     expect(videoSet.switchingSets[0]!.id).toBe('moq-video-main');
@@ -701,6 +728,7 @@ describe('moqCatalogToPresentation', () => {
 
     const beforeIds = getTracksByType(before, 'video').map((track) => track.id);
     const afterIds = getTracksByType(after, 'video').map((track) => track.id);
+
     expect(afterIds.slice(0, beforeIds.length)).toEqual(beforeIds);
   });
 });

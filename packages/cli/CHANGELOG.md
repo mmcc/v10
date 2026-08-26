@@ -1,5 +1,51 @@
 # Changelog
 
+## [10.0.0-beta.32](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.31...@videojs/cli@10.0.0-beta.32) (2026-08-26)
+
+
+### Miscellaneous Chores
+
+* **@videojs/cli:** Synchronize videojs versions
+
+## [10.0.0-beta.31](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.30...@videojs/cli@10.0.0-beta.31) (2026-08-21)
+
+
+### Features
+
+* **packages:** add live presets to installation and skin tools ([#1919](https://github.com/videojs/v10/issues/1919)) ([44a398c](https://github.com/videojs/v10/commit/44a398c3a0c7084bedabd77123742f9521d2b052))
+
+## [10.0.0-beta.30](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.29...@videojs/cli@10.0.0-beta.30) (2026-08-20)
+
+
+### Miscellaneous Chores
+
+* **@videojs/cli:** Synchronize videojs versions
+
+## [10.0.0-beta.29](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.28...@videojs/cli@10.0.0-beta.29) (2026-08-19)
+
+
+### Miscellaneous Chores
+
+* **@videojs/cli:** Synchronize videojs versions
+
+## [10.0.0-beta.28](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.27...@videojs/cli@10.0.0-beta.28) (2026-08-19)
+
+
+### Miscellaneous Chores
+
+* **@videojs/cli:** Synchronize videojs versions
+
+## [10.0.0-beta.27](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.26...@videojs/cli@10.0.0-beta.27) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** rename SimpleHls* to Hls* (video + audio) ([#2096](https://github.com/videojs/v10/issues/2096))
+
+### Code Refactoring
+
+* **packages:** rename SimpleHls* to Hls* (video + audio) ([#2096](https://github.com/videojs/v10/issues/2096)) ([f1c22a5](https://github.com/videojs/v10/commit/f1c22a5bbfd90e3ce219b8ac5de441c8fba60b8d))
+
 ## [10.0.0-beta.26](https://github.com/videojs/v10/compare/@videojs/cli@10.0.0-beta.25...@videojs/cli@10.0.0-beta.26) (2026-08-02)
 
 

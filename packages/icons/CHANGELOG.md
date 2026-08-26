@@ -1,5 +1,98 @@
 # Changelog
 
+## [10.0.0-beta.32](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.31...@videojs/icons@10.0.0-beta.32) (2026-08-26)
+
+
+### Bug Fixes
+
+* **packages:** harden vjsc vite workflow ([#2355](https://github.com/videojs/v10/issues/2355)) ([8da1f84](https://github.com/videojs/v10/commit/8da1f84e22db027e447535c9f61004c7159fd142))
+* **packages:** make html entries server importable ([#2428](https://github.com/videojs/v10/issues/2428)) ([33f4de1](https://github.com/videojs/v10/commit/33f4de15b6d73fdba5f1d7aeb6b94b469f6c1487))
+* **packages:** restore vjsc skin visual parity ([#2344](https://github.com/videojs/v10/issues/2344)) ([d157a63](https://github.com/videojs/v10/commit/d157a63f0b725239752746b87bb7c41dd3af8e53))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.0-beta.32
+
+## [10.0.0-beta.31](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.30...@videojs/icons@10.0.0-beta.31) (2026-08-21)
+
+
+### Miscellaneous Chores
+
+* **@videojs/icons:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/utils bumped to 10.0.0-beta.31
+
+## [10.0.0-beta.30](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.29...@videojs/icons@10.0.0-beta.30) (2026-08-20)
+
+
+### Miscellaneous Chores
+
+* **@videojs/icons:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/utils bumped to 10.0.0-beta.30
+
+## [10.0.0-beta.29](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.28...@videojs/icons@10.0.0-beta.29) (2026-08-19)
+
+
+### Features
+
+* **skin:** add canonical styling and registry output ([#2202](https://github.com/videojs/v10/issues/2202)) ([8982d8d](https://github.com/videojs/v10/commit/8982d8d88e09827ad14ed406864c1db14d66c9c8))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/utils bumped to 10.0.0-beta.29
+
+## [10.0.0-beta.28](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.27...@videojs/icons@10.0.0-beta.28) (2026-08-19)
+
+
+### Miscellaneous Chores
+
+* **@videojs/icons:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/utils bumped to 10.0.0-beta.28
+
+## [10.0.0-beta.27](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.26...@videojs/icons@10.0.0-beta.27) (2026-08-17)
+
+
+### Features
+
+* **skin:** add canonical PlayButton source ([#1991](https://github.com/videojs/v10/issues/1991)) ([de5f2bb](https://github.com/videojs/v10/commit/de5f2bbcc153ac0da0b9969f693ee732a8e6f196))
+* **skin:** build pipeline ([#2021](https://github.com/videojs/v10/issues/2021)) ([9381a34](https://github.com/videojs/v10/commit/9381a34025848812325f47634c4e745ba9103f11))
+
+
+### Bug Fixes
+
+* **icons:** remove complex masks ([#2027](https://github.com/videojs/v10/issues/2027)) ([fd87b3e](https://github.com/videojs/v10/commit/fd87b3e9c291c4eb85c39c84a0c7e4e5c49c5aa0))
+* **packages:** improve ui motion ([#2208](https://github.com/videojs/v10/issues/2208)) ([42f934e](https://github.com/videojs/v10/commit/42f934e9bea4e4961d63d6de1e2eebcc520f8237))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/utils bumped to 10.0.0-beta.27
+
 ## [10.0.0-beta.26](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-beta.25...@videojs/icons@10.0.0-beta.26) (2026-08-02)
 
 

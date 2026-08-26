@@ -1,5 +1,6 @@
 import type { MoqAudioContext } from '@videojs/spf/moq';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { SimpleMoqVideo } from '../index';
 
 function createFakeAudioContext(initialState: AudioContextState) {
@@ -28,6 +29,7 @@ function createFakeAudioContext(initialState: AudioContextState) {
       fake.state = 'closed';
     }),
   };
+
   return fake;
 }
 
@@ -35,6 +37,7 @@ let tagCounter = 0;
 
 function defineElement(createAudioContext: () => MoqAudioContext = () => createFakeAudioContext('suspended')) {
   const tag = `test-simple-moq-video-${++tagCounter}`;
+
   customElements.define(
     tag,
     class extends SimpleMoqVideo {
@@ -48,6 +51,7 @@ function defineElement(createAudioContext: () => MoqAudioContext = () => createF
 
 function createConnectedElement(createAudioContext?: () => MoqAudioContext) {
   const el = document.createElement(defineElement(createAudioContext)) as SimpleMoqVideo;
+
   document.body.append(el);
   return el;
 }
@@ -59,9 +63,11 @@ function flushEffects() {
 
 function recordEvents(el: EventTarget, types: string[]) {
   const events: string[] = [];
+
   for (const type of types) {
     el.addEventListener(type, () => events.push(type));
   }
+
   return events;
 }
 
@@ -92,6 +98,7 @@ describe('SimpleMoqVideo', () => {
     // call isn't mistaken for one made by the element under test.
     const existingRoot = document.createElement('div').attachShadow({ mode: 'open' });
     const existingCanvas = document.createElement('canvas');
+
     existingRoot.append(existingCanvas);
 
     const attachShadowSpy = vi.spyOn(Element.prototype, 'attachShadow');
@@ -99,10 +106,12 @@ describe('SimpleMoqVideo', () => {
     // Baseline: proves the spy actually observes real calls — a normal
     // element with no pre-existing root attaches exactly one.
     const baseline = document.createElement(defineElement()) as SimpleMoqVideo;
+
     expect(attachShadowSpy).toHaveBeenCalledTimes(1);
     attachShadowSpy.mockClear();
 
     const tag = `test-simple-moq-video-${++tagCounter}`;
+
     customElements.define(
       tag,
       class extends SimpleMoqVideo {
@@ -130,6 +139,7 @@ describe('SimpleMoqVideo', () => {
 
   it('keeps the engine alive across disconnect when keep-alive is set', async () => {
     const el = createConnectedElement();
+
     el.setAttribute('keep-alive', '');
     const engine = el.engine;
 
@@ -171,12 +181,14 @@ describe('SimpleMoqVideo', () => {
     // styled by the sheet, and the host must generate no box so the canvas
     // fills the skin's media container like a slotted `<video>` does.
     const canvas = el.shadowRoot!.querySelector('canvas')!;
+
     expect(canvas.getAttribute('style')).toBeNull();
 
     // `applyShadowStyles` prefers a constructable sheet over a `<style>` tag.
     const styles = el
       .shadowRoot!.adoptedStyleSheets.flatMap((sheet) => Array.from(sheet.cssRules).map((rule) => rule.cssText))
       .join('\n');
+
     expect(styles).toContain('display: contents');
     expect(styles).toContain('object-fit: var(--media-object-fit, contain)');
     expect(styles).toContain('border-radius: var(--media-video-border-radius)');
@@ -186,6 +198,7 @@ describe('SimpleMoqVideo', () => {
     const el = createConnectedElement();
 
     const canvas = el.shadowRoot!.querySelector('canvas');
+
     expect((el as any).engine.context.renderSurface.get()).toBe(canvas);
   });
 
@@ -270,6 +283,7 @@ describe('SimpleMoqVideo', () => {
     const el = createConnectedElement();
 
     const destroy = vi.spyOn(el, 'destroy');
+
     el.remove();
     await new Promise((resolve) => queueMicrotask(resolve as () => void));
 
@@ -384,6 +398,7 @@ describe('SimpleMoqVideo', () => {
       // Simulates what the moq video-renderer actor does on first decode:
       // it sets the canvas's backing-store dimensions to the frame size.
       const canvas = el.shadowRoot!.querySelector('canvas')!;
+
       canvas.width = 640;
       canvas.height = 360;
       await vi.advanceTimersByTimeAsync(250);
@@ -450,8 +465,10 @@ describe('SimpleMoqVideo', () => {
       // only settle through the gesture listeners.
       let allowResume = false;
       const audioContext = createFakeAudioContext('suspended');
+
       audioContext.resume.mockImplementation(async () => {
         if (!allowResume) throw new Error('NotAllowedError');
+
         audioContext.state = 'running';
       });
       const el = createConnectedElement(() => audioContext);
@@ -471,11 +488,14 @@ describe('SimpleMoqVideo', () => {
     it('leaves a pause during deferral alone and stops listening once unlocked', async () => {
       let allowResume = false;
       const audioContext = createFakeAudioContext('suspended');
+
       audioContext.resume.mockImplementation(async () => {
         if (!allowResume) throw new Error('NotAllowedError');
+
         audioContext.state = 'running';
       });
       const el = createConnectedElement(() => audioContext);
+
       el.setAttribute('autoplay', '');
       el.src = 'moqt://relay.example.com/live#msf:live--catalog';
       await flushEffects();
@@ -483,6 +503,7 @@ describe('SimpleMoqVideo', () => {
       // Paused during deferral: a stray gesture must not restart playback.
       el.pause();
       const play = vi.spyOn(el, 'play');
+
       document.dispatchEvent(new Event('pointerdown'));
       expect(play).not.toHaveBeenCalled();
       expect(el.engine.state.audioSuspended.get()).toBe(true);
@@ -545,6 +566,7 @@ describe('SimpleMoqVideo', () => {
     // element the user muted.
     it('does not unmute when the muted attribute is removed', () => {
       const el = createConnectedElement();
+
       el.setAttribute('muted', '');
 
       el.removeAttribute('muted');

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import {
   composeMoqSource,
   decodeNamespaceName,
@@ -10,6 +11,7 @@ import {
 describe('parseMoqSource', () => {
   it('parses the msf-01 §11.1.3 catalog example', () => {
     const source = parseMoqSource('moqt://example.com/server/config?a=1&b=2#msf:customer-livestream-123--catalog');
+
     expect(source).toMatchObject({
       connectUrl: 'https://example.com/server/config?a=1&b=2',
       sessionUri: 'moqt://example.com/server/config?a=1&b=2',
@@ -22,6 +24,7 @@ describe('parseMoqSource', () => {
     const source = parseMoqSource(
       'moqt://relay.example.com/live#msf:ns--catalog&connection=wt&c4m=abc123&wallclock-range=100-200&location-range=16.24'
     );
+
     expect(source.connection).toBe('webtransport');
     expect(source.c4mToken).toBe('abc123');
     expect(source.wallclockRanges).toEqual([{ start: 100, end: 200 }]);
@@ -30,11 +33,13 @@ describe('parseMoqSource', () => {
 
   it('parses connection=q as native QUIC', () => {
     const source = parseMoqSource('moqt://example.com/relay#msf:a-b--catalog&connection=q');
+
     expect(source.connection).toBe('quic');
   });
 
   it('collects free parameters for variable substitution', () => {
     const source = parseMoqSource('moqt://example.com/live#msf:ns--catalog&token=XYZ789&userId=42');
+
     expect(source.fragmentParams).toMatchObject({ token: 'XYZ789', userId: '42' });
   });
 
@@ -48,6 +53,7 @@ describe('parseMoqSource', () => {
     const source = parseMoqSource(
       'moqt://h/p#msf:n--catalog&mediatime-range=982&location-range=34.0-2145.16&location-range=16-24'
     );
+
     expect(source.mediatimeRanges).toEqual([{ start: 982 }]);
     expect(source.locationRanges).toEqual([
       { start: { group: 34, object: 0 }, end: { group: 2145, object: 16 } },
@@ -91,6 +97,7 @@ describe('decodeNamespaceName', () => {
 describe('encodeNamespaceName', () => {
   it('round-trips names containing reserved characters', () => {
     const encoded = encodeNamespaceName(['example.net', 'team-2'], 'hi res');
+
     expect(decodeNamespaceName(encoded)).toEqual({
       namespace: ['example.net', 'team-2'],
       trackName: 'hi res',
@@ -116,6 +123,7 @@ describe('isMoqSourceUrl', () => {
 describe('composeMoqSource', () => {
   it('composes a catalog source that round-trips through parseMoqSource', () => {
     const url = composeMoqSource('https://relay.example.com', 'customer/room/42', { token: 'tok.abc_1-2' });
+
     expect(url).toBe('moqt://relay.example.com/#msf:customer-room-42--catalog&c4m=tok.abc_1-2');
     expect(parseMoqSource(url)).toMatchObject({
       connectUrl: 'https://relay.example.com/',
@@ -139,6 +147,7 @@ describe('composeMoqSource', () => {
 
   it('escapes namespace fields and tracks outside the literal set', () => {
     const url = composeMoqSource('relay.example.com', 'customer/room-2', { trackName: 'hi res' });
+
     expect(url).toBe('moqt://relay.example.com/#msf:customer-room.2d2--hi.20res');
     expect(parseMoqSource(url)).toMatchObject({
       namespace: ['customer', 'room-2'],
@@ -148,6 +157,7 @@ describe('composeMoqSource', () => {
 
   it('accepts a pre-split tuple for fields containing a literal slash', () => {
     const url = composeMoqSource('relay.example.com', ['a/b', 'c']);
+
     expect(parseMoqSource(url).namespace).toEqual(['a/b', 'c']);
   });
 
@@ -167,6 +177,7 @@ describe('composeMoqSource', () => {
 
   it('percent-encodes token characters the fragment parser decodes back', () => {
     const url = composeMoqSource('relay.example.com', 'a', { token: 'a&b=c#d' });
+
     expect(parseMoqSource(url).c4mToken).toBe('a&b=c#d');
   });
 });

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import type { MoqSource } from '../../../media/moq/parse-source';
 import { encodeSetup } from '../../../network/moqt/control-messages';
 import type { MoqtTransport } from '../../../network/moqt/session';
@@ -41,13 +42,13 @@ function createFakeTransport() {
     transport,
     sendServerSetup() {
       const pipe = new TransformStream<Uint8Array, Uint8Array>();
+
       void pipe.writable.getWriter().write(encodeSetup([]));
       uniController.enqueue(pipe.readable);
     },
     /**
-     * The peer or the network dropped the connection: `closed` settles
-     * without anyone calling `close()` locally, which is how the session
-     * driver learns about an outage.
+     * The peer or the network dropped the connection: `closed` settles without anyone calling `close()` locally, which
+     * is how the session driver learns about an outage.
      */
     drop() {
       resolveClosed(undefined);
@@ -143,7 +144,9 @@ describe('createMoqSessionActor', () => {
     // MSF §11.1.1: connection=q means native QUIC MUST be used, which the
     // WebTransport default cannot provide.
     const webTransportSpy = vi.fn();
+
     vi.stubGlobal('WebTransport', webTransportSpy);
+
     try {
       const actor = createMoqSessionActor({ source: makeSource({ connection: 'quic' }) });
 
@@ -331,6 +334,7 @@ describe('createMoqSessionActor', () => {
   it('destroy tears the session down', async () => {
     const fake = createFakeTransport();
     const actor = createMoqSessionActor({ source: makeSource(), createTransport: makeCreateTransport(fake) });
+
     fake.sendServerSetup();
     await vi.waitFor(() => expect(actor.snapshot.get().context.status).toBe('ready'));
 
@@ -405,6 +409,7 @@ describe('createMoqSessionActor', () => {
       );
 
       const actor = createMoqSessionActor({ source: makeSource(), createTransport });
+
       await settle();
 
       // Default policy retries forever: a first failure is an outage, not the end.
@@ -442,6 +447,7 @@ describe('createMoqSessionActor', () => {
       const getToken = vi.fn(() => (attempts === 0 ? 'first' : 'second'));
 
       const actor = createMoqSessionActor({ source: makeSource(), createTransport, authProvider: { getToken } });
+
       await settle();
       expect(getToken).toHaveBeenCalledTimes(1);
 
@@ -464,6 +470,7 @@ describe('createMoqSessionActor', () => {
       }));
 
       const actor = createMoqSessionActor({ source: makeSource(), createTransport });
+
       first.sendServerSetup();
       await settle();
       expect(actor.snapshot.get().context.status).toBe('ready');
@@ -502,6 +509,7 @@ describe('createMoqSessionActor', () => {
         createTransport,
         reconnect: { maxAttempts: 1, initialDelayMs: 10 },
       });
+
       await settle();
       expect(actor.snapshot.get().context.status).toBe('reconnecting');
       expect(createTransport).toHaveBeenCalledTimes(1);
@@ -526,6 +534,7 @@ describe('createMoqSessionActor', () => {
       }));
 
       const actor = createMoqSessionActor({ source: makeSource(), createTransport });
+
       await settle();
       expect(actor.snapshot.get().context.status).toBe('reconnecting');
 

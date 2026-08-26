@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+
 import { signal } from '../../../core/signals/primitives';
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
 import type { TrackSubscriberActor, TrackSubscriberContext } from '../../actors/track-subscriber';
@@ -35,9 +36,8 @@ function fakeSubscriber(targetLatencyMs?: number) {
     destroy: () => {},
   };
   /**
-   * Buffer whose newest frame is `seconds` ahead of playout position 0,
-   * with `bufferedBehindSeconds` of already-consumed media still in the
-   * jitter buffer behind it.
+   * Buffer whose newest frame is `seconds` ahead of playout position 0, with `bufferedBehindSeconds` of
+   * already-consumed media still in the jitter buffer behind it.
    */
   const setBufferDepth = (seconds: number, bufferedBehindSeconds = seconds) => {
     snapshot.set({
@@ -50,6 +50,7 @@ function fakeSubscriber(targetLatencyMs?: number) {
       },
     });
   };
+
   return { subscriber, setBufferDepth, skipToLatestGroup };
 }
 
@@ -90,6 +91,7 @@ describe('syncLatency', () => {
     const audio = fakeSubscriber();
     const video = fakeSubscriber();
     const deps = makeDeps(audio.subscriber);
+
     deps.context.videoSubscriberActor.set(video.subscriber);
     deps.state.targetLatency.set(1.3);
 
@@ -98,6 +100,7 @@ describe('syncLatency', () => {
     video.setBufferDepth(0.3);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(500);
 
     // The audio clock's own reality — not video's 0.3, which reads a second
@@ -121,6 +124,7 @@ describe('syncLatency', () => {
     const audio = fakeSubscriber();
     const video = fakeSubscriber();
     const deps = makeDeps(audio.subscriber, 'video');
+
     deps.context.videoSubscriberActor.set(video.subscriber);
     deps.state.targetLatency.set(1.4);
 
@@ -132,6 +136,7 @@ describe('syncLatency', () => {
     video.setBufferDepth(1.4);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(500);
 
     expect(deps.state.measuredLatency.get()).toBeCloseTo(1.4, 3);
@@ -148,6 +153,7 @@ describe('syncLatency', () => {
     const audio = fakeSubscriber();
     const video = fakeSubscriber();
     const deps = makeDeps(audio.subscriber, 'video');
+
     deps.context.videoSubscriberActor.set(video.subscriber);
     deps.state.targetLatency.set(1.4);
 
@@ -155,6 +161,7 @@ describe('syncLatency', () => {
     video.setBufferDepth(1.4);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(500);
     expect(deps.state.measuredLatency.get()).toBeCloseTo(1.4, 3);
 
@@ -176,6 +183,7 @@ describe('syncLatency', () => {
   it('idles while no clock owns the playout position', async () => {
     const audio = fakeSubscriber();
     const deps = makeDeps(audio.subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -211,10 +219,12 @@ describe('syncLatency', () => {
   it('resolves a setpoint with no clock owner yet', async () => {
     const audio = fakeSubscriber(2_000);
     const deps = makeDeps(audio.subscriber, undefined);
+
     deps.state.currentTime = signal<number | undefined>(undefined);
     audio.setBufferDepth(2);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(500);
 
     expect(deps.state.effectiveTargetLatency.get()).toBe(2);
@@ -232,6 +242,7 @@ describe('syncLatency', () => {
     const audio = fakeSubscriber();
     const video = fakeSubscriber();
     const deps = makeDeps(audio.subscriber);
+
     deps.context.videoSubscriberActor.set(video.subscriber);
     deps.state.targetLatency.set(1.5);
 
@@ -239,6 +250,7 @@ describe('syncLatency', () => {
     audio.setBufferDepth(0);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(500);
 
     expect(deps.state.measuredLatency.get()).toBeCloseTo(0, 3);
@@ -261,12 +273,14 @@ describe('syncLatency', () => {
     const audio = fakeSubscriber(3_000); // audio declares a 3s target
     const video = fakeSubscriber(1_000); // video declares 1s
     const deps = makeDeps(audio.subscriber);
+
     deps.context.videoSubscriberActor.set(video.subscriber);
 
     audio.setBufferDepth(3);
     video.setBufferDepth(1); // video's edge trails, and declares its own target
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(600);
 
     // Depth comes from audio, so the setpoint does too — and an audio buffer
@@ -288,6 +302,7 @@ describe('syncLatency', () => {
     audio.setBufferDepth(3);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(600);
 
     expect(deps.state.effectiveTargetLatency.get()).toBe(3);
@@ -302,11 +317,13 @@ describe('syncLatency', () => {
   it('resolves the video catalog target for a video-only broadcast', async () => {
     const video = fakeSubscriber(1_000);
     const deps = makeDeps(undefined);
+
     deps.context.videoSubscriberActor.set(video.subscriber);
 
     video.setBufferDepth(1);
 
     const reactor = syncLatency.setup(deps);
+
     await vi.advanceTimersByTimeAsync(600);
 
     expect(deps.state.effectiveTargetLatency.get()).toBe(1);
@@ -319,6 +336,7 @@ describe('syncLatency', () => {
   it('holds rate 1 while depth is inside the deadband', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -335,6 +353,7 @@ describe('syncLatency', () => {
   it('nudges the rate up when the buffer runs deep, down when shallow', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -359,6 +378,7 @@ describe('syncLatency', () => {
   it('holds the drain until latency is back near the target, not at the band edge', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -386,6 +406,7 @@ describe('syncLatency', () => {
   it('holds the refill until latency is back near the target', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -409,6 +430,7 @@ describe('syncLatency', () => {
   it('engages nothing while depth stays inside the deadband from the start', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -428,6 +450,7 @@ describe('syncLatency', () => {
   it('releases a drain that overshoots the target', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -448,6 +471,7 @@ describe('syncLatency', () => {
   it('turns a drain straight into a refill when the overshoot clears the far edge', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -470,6 +494,7 @@ describe('syncLatency', () => {
   it('drops the engaged correction across a catch-up skip', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -497,6 +522,7 @@ describe('syncLatency', () => {
   it('widens the reclaim band with the nudge and the evaluation interval', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     // 2 × 0.1 × 1s = 0.2s of reclaim band, against the same 0.25s deadband.
     const reactor = syncLatency.setup({ ...deps, config: { latency: { rateNudge: 0.1, intervalMs: 1_000 } } });
@@ -520,6 +546,7 @@ describe('syncLatency', () => {
   it('caps the reclaim band at a deadband narrower than it', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup({ ...deps, config: { latency: { deadband: 0.02 } } });
 
@@ -537,6 +564,7 @@ describe('syncLatency', () => {
   it('skips to the latest group when the buffer stays past the catch-up threshold', async () => {
     const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -562,6 +590,7 @@ describe('syncLatency', () => {
   it('does not skip on a single over-threshold reading', async () => {
     const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.3);
     const reactor = syncLatency.setup(deps);
 
@@ -586,6 +615,7 @@ describe('syncLatency', () => {
   it('re-arms from scratch after a reading back inside the threshold', async () => {
     const { subscriber, setBufferDepth, skipToLatestGroup } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -620,6 +650,7 @@ describe('syncLatency', () => {
   it('measures the delivery edge against the playout position, not the buffer', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -642,6 +673,7 @@ describe('syncLatency', () => {
   it('holds rate 1 when latency is on target but the jitter buffer is shallow', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -661,6 +693,7 @@ describe('syncLatency', () => {
   it('idles until a playout position exists', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.currentTime.set(undefined);
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
@@ -683,6 +716,7 @@ describe('syncLatency', () => {
   it('tracks playout as it advances', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -710,6 +744,7 @@ describe('syncLatency', () => {
   it('uses the adaptive target when the consumer set none', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber(2_000); // 2s catalog target
     const deps = makeDeps(subscriber);
+
     deps.state.adaptiveTargetLatency.set(0.3);
     const reactor = syncLatency.setup(deps);
 
@@ -727,6 +762,7 @@ describe('syncLatency', () => {
   it('lets an explicit consumer target beat the adaptive one', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(2);
     deps.state.adaptiveTargetLatency.set(0.2);
     const reactor = syncLatency.setup(deps);
@@ -816,6 +852,7 @@ describe('syncLatency', () => {
   it('does not let a replacement subscriber inherit the catch-up arm', async () => {
     const first = fakeSubscriber();
     const deps = makeDeps(first.subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -825,6 +862,7 @@ describe('syncLatency', () => {
 
     // The replacement's first reading is a join transient of its own.
     const second = fakeSubscriber();
+
     second.setBufferDepth(6);
     deps.context.audioSubscriberActor.set(second.subscriber);
     await vi.advanceTimersByTimeAsync(500);
@@ -846,6 +884,7 @@ describe('syncLatency', () => {
   it('does not let a replacement subscriber inherit a correction direction', async () => {
     const first = fakeSubscriber();
     const deps = makeDeps(first.subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -858,6 +897,7 @@ describe('syncLatency', () => {
     // The replacement sits 0.1s over target: inside `deadband`, but outside
     // the release band, so an inherited direction would hold the nudge.
     const second = fakeSubscriber();
+
     second.setBufferDepth(0.6);
     deps.context.audioSubscriberActor.set(second.subscriber);
     await vi.advanceTimersByTimeAsync(500);
@@ -879,6 +919,7 @@ describe('syncLatency', () => {
   it('parks its outputs when the controlled track changes', async () => {
     const first = fakeSubscriber();
     const deps = makeDeps(first.subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -893,6 +934,7 @@ describe('syncLatency', () => {
     // fill is the opposite of what it needs, and the reported latency belongs
     // to a track that is gone.
     const second = fakeSubscriber();
+
     deps.context.audioSubscriberActor.set(second.subscriber);
     await vi.advanceTimersByTimeAsync(500);
 
@@ -914,6 +956,7 @@ describe('syncLatency', () => {
   it('counts catch-up skips as the cost side of the target it is holding', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -939,6 +982,7 @@ describe('syncLatency', () => {
   it('clears its outputs when the last subscriber goes away', async () => {
     const { subscriber, setBufferDepth } = fakeSubscriber();
     const deps = makeDeps(subscriber);
+
     deps.state.targetLatency.set(0.5);
     const reactor = syncLatency.setup(deps);
 
@@ -975,6 +1019,7 @@ describe('resolveLatencyControlConfig', () => {
         DEFAULT_LATENCY_CONTROL_CONFIG.defaultTargetLatency
       );
     }
+
     // Every other knob is left exactly as stated: this replaces one broken
     // number, it does not vet the config.
     expect(resolveLatencyControlConfig({ defaultTargetLatency: Number.NaN, rateNudge: 0.2 })).toEqual({

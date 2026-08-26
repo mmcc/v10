@@ -1,5 +1,3 @@
-'use client';
-
 import { type VolumeIndicatorCore, VolumeIndicatorCSSVars } from '@videojs/core';
 import { isFunction } from '@videojs/utils/predicate';
 import type { CSSProperties, ForwardedRef } from 'react';
@@ -43,7 +41,6 @@ function getVolumeIndicatorFillStyle(
         [VolumeIndicatorCSSVars.fill]: state.fill,
       } as CSSProperties)
     : undefined;
-
   if (!vars) return style;
 
   if (isFunction(style)) {

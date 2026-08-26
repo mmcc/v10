@@ -1,28 +1,21 @@
 /**
- * Pure MOQT session protocol driver (moq-transport draft-19), subscribe
- * side only.
+ * Pure MOQT session protocol driver (moq-transport draft-19), subscribe side only.
  *
- * Owns the protocol mechanics over an established transport: the SETUP
- * exchange on paired unidirectional control streams (§3.3), request-stream
- * bookkeeping keyed by Request ID (§10.1 — client IDs are even, starting
- * at 0), routing of incoming data streams to subscriptions (by Track
- * Alias) and fetches (by Request ID), GOAWAY handling, and session
+ * Owns the protocol mechanics over an established transport: the SETUP exchange on paired unidirectional control
+ * streams (§3.3), request-stream bookkeeping keyed by Request ID (§10.1 — client IDs are even, starting at 0), routing
+ * of incoming data streams to subscriptions (by Track Alias) and fetches (by Request ID), GOAWAY handling, and session
  * termination.
  *
- * Deliberately callback-shaped with NO signals (like
- * `onMediaSourceReadyStateChange`) — signal awareness enters at the
- * `playback/` layer, where the moq-session actor binds these callbacks to
- * SPF state. The transport is a structural subset of `WebTransport`, so
- * tests drive the driver with an in-memory fake and the DOM layer passes a
- * real `WebTransport` unchanged.
+ * Deliberately callback-shaped with NO signals (like `onMediaSourceReadyStateChange`) — signal awareness enters at the
+ * `playback/` layer, where the moq-session actor binds these callbacks to SPF state. The transport is a structural
+ * subset of `WebTransport`, so tests drive the driver with an in-memory fake and the DOM layer passes a real
+ * `WebTransport` unchanged.
  *
- * Version negotiation happens at connection time (ALPN /
- * `WT-Available-Protocols`, `MOQT_PROTOCOL_ID`), before this driver sees
- * the transport.
+ * Version negotiation happens at connection time (ALPN / `WT-Available-Protocols`, `MOQT_PROTOCOL_ID`), before this
+ * driver sees the transport.
  *
- * Datagram reception is not implemented: MSF maps every object to its own
- * stream, so a subscribe-only MSF engine never legitimately receives
- * OBJECT_DATAGRAMs.
+ * Datagram reception is not implemented: MSF maps every object to its own stream, so a subscribe-only MSF engine never
+ * legitimately receives OBJECT_DATAGRAMs.
  */
 import { StreamReader, utf8Encode } from './bytes';
 import {
@@ -64,9 +57,8 @@ import { type BidirectionalStreamLike, openRequestStream, type RequestStream } f
 // ============================================================================
 
 /**
- * Structural subset of `WebTransport` the session driver needs. A real
- * `WebTransport` instance satisfies this; tests provide an in-memory fake
- * (the same seam pattern as SPF's fetch injection).
+ * Structural subset of `WebTransport` the session driver needs. A real `WebTransport` instance satisfies this; tests
+ * provide an in-memory fake (the same seam pattern as SPF's fetch injection).
  */
 export interface MoqtTransport {
   readonly incomingUnidirectionalStreams: ReadableStream<ReadableStream<Uint8Array>>;
@@ -120,8 +112,8 @@ export interface Subscription {
   /** Modify the subscription (REQUEST_UPDATE, §10.9). */
   update(parameters: MessageParameters): void;
   /**
-   * Tear the subscription down. Draft-19 has no UNSUBSCRIBE message —
-   * teardown is the request stream's lifecycle (§3.3.3).
+   * Tear the subscription down. Draft-19 has no UNSUBSCRIBE message — teardown is the request stream's lifecycle
+   * (§3.3.3).
    */
   cancel(reason?: unknown): void;
 }
@@ -173,8 +165,8 @@ export interface MoqtSessionCallbacks {
   /** GOAWAY on the control stream: stop initiating requests, migrate. */
   onGoaway?(goaway: Goaway): void;
   /**
-   * A server-initiated PUBLISH arrived. Call exactly one of the responders.
-   * Absent, the session rejects with UNINTERESTED (a subscribe-only client).
+   * A server-initiated PUBLISH arrived. Call exactly one of the responders. Absent, the session rejects with
+   * UNINTERESTED (a subscribe-only client).
    */
   onIncomingPublish?(
     publish: IncomingPublish,
@@ -190,17 +182,14 @@ export interface MoqtSessionConfig {
   /** Identifies this implementation in SETUP (§10.3.1.5). */
   implementationName?: string;
   /**
-   * How long to hold an incoming data stream whose Track Alias has no
-   * registered subscription yet (objects can outrace SUBSCRIBE_OK). §11.4.2
-   * allows brief buffering; expired streams are dropped. Default 2000ms.
+   * How long to hold an incoming data stream whose Track Alias has no registered subscription yet (objects can outrace
+   * SUBSCRIBE_OK). §11.4.2 allows brief buffering; expired streams are dropped. Default 2000ms.
    */
   unknownAliasTimeoutMs?: number;
   /**
-   * How long to wait for a request's first response (SUBSCRIBE_OK /
-   * FETCH_OK / REQUEST_OK / REQUEST_ERROR) before failing it. Draft-19
-   * expects implementations to bound control exchanges (§3.5's
-   * CONTROL_MESSAGE_TIMEOUT); without this a relay that accepts the stream
-   * and then goes quiet leaves the request pending forever. Default 10000ms.
+   * How long to wait for a request's first response (SUBSCRIBE_OK / FETCH_OK / REQUEST_OK / REQUEST_ERROR) before
+   * failing it. Draft-19 expects implementations to bound control exchanges (§3.5's CONTROL_MESSAGE_TIMEOUT); without
+   * this a relay that accepts the stream and then goes quiet leaves the request pending forever. Default 10000ms.
    */
   requestTimeoutMs?: number;
   callbacks?: MoqtSessionCallbacks;
@@ -245,10 +234,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_IMPLEMENTATION_NAME = '@videojs/spf moqt';
 
 /**
- * A request failure that arrives as a *stream* event — FIN before any
- * response, a transport reset, or the response timeout — rather than as a
- * REQUEST_ERROR message. Shaped as a `RequestError` so consumers have one
- * failure path regardless of how the request died.
+ * A request failure that arrives as a _stream_ event — FIN before any response, a transport reset, or the response
+ * timeout — rather than as a REQUEST_ERROR message. Shaped as a `RequestError` so consumers have one failure path
+ * regardless of how the request died.
  */
 function streamFailure(reason: string, errorCode: number = REQUEST_ERROR_CODE.INTERNAL_ERROR): RequestError {
   return { errorCode, retryInterval: 0, reason };
@@ -264,9 +252,8 @@ interface RequestRecordBase {
   pendingCancelReason?: unknown;
   stream?: RequestStream;
   /**
-   * The request's first response (an OK or a REQUEST_ERROR) arrived. Until
-   * it does, a FIN / reset / timeout on the stream is a failure; after it,
-   * those are ordinary end-of-request events.
+   * The request's first response (an OK or a REQUEST_ERROR) arrived. Until it does, a FIN / reset / timeout on the
+   * stream is a failure; after it, those are ordinary end-of-request events.
    */
   settled: boolean;
   responseTimer?: ReturnType<typeof setTimeout>;
@@ -350,6 +337,7 @@ class MoqtSessionImpl implements MoqtSession {
 
     try {
       const control = await this.#transport.createUnidirectionalStream();
+
       this.#controlWriter = control.getWriter();
       const options: KeyValuePair[] = [
         {
@@ -358,6 +346,7 @@ class MoqtSessionImpl implements MoqtSession {
         },
         ...(this.#config.setupOptions ?? []),
       ];
+
       await this.#controlWriter.write(encodeSetup(options));
     } catch (error) {
       this.#fatal(error);
@@ -366,28 +355,35 @@ class MoqtSessionImpl implements MoqtSession {
 
   #fatal(error: unknown): void {
     if (this.#destroyed) return;
+
     const closeCode = isMoqtProtocolError(error) ? error.code : SESSION_ERROR.INTERNAL_ERROR;
+
     try {
       this.#transport.close({ closeCode, reason: error instanceof Error ? error.message : 'session error' });
     } catch {
       // transport already gone
     }
+
     this.#handleClosed(error);
   }
 
   #handleClosed(error: unknown, { expected = false }: { expected?: boolean } = {}): void {
     if (this.#destroyed) return;
+
     this.#destroyed = true;
     const setupError = this.#receivedServerSetup
       ? undefined
       : (error ?? new MoqtProtocolError('session closed before server SETUP'));
+
     if (setupError !== undefined) this.#rejectReady(setupError);
+
     for (const waiters of this.#aliasWaiters.values()) {
       for (const waiter of waiters) {
         clearTimeout(waiter.timer);
         waiter.resolve(undefined);
       }
     }
+
     this.#aliasWaiters.clear();
 
     // Requests still awaiting their first response die with the session. An
@@ -397,10 +393,12 @@ class MoqtSessionImpl implements MoqtSession {
     // requests already have their answer.
     const records = [...this.#subscriptions.values(), ...this.#fetches.values(), ...this.#trackStatuses.values()];
     const pending = expected ? [] : records.filter((r) => !r.settled && !r.cancelled);
+
     for (const record of records) {
       this.#settleRequest(record);
       record.stream?.cancel(error);
     }
+
     this.#subscriptions.clear();
     this.#fetches.clear();
     this.#trackStatuses.clear();
@@ -410,6 +408,7 @@ class MoqtSessionImpl implements MoqtSession {
     const failure = streamFailure(
       error instanceof Error ? error.message : 'session closed before the request was answered'
     );
+
     for (const record of pending) record.handlers.onError?.(failure);
 
     // A transport that drops before server SETUP is a session failure even
@@ -417,18 +416,22 @@ class MoqtSessionImpl implements MoqtSession {
     // `onClosed` alone must see the error too. A deliberate local `close()`
     // stays a clean close.
     const closeError = error ?? (expected ? undefined : setupError);
+
     this.#callbacks.onClosed?.(closeError === undefined ? {} : { error: closeError });
   }
 
   close(closeCode = SESSION_ERROR.NO_ERROR, reason = ''): void {
     if (this.#destroyed) return;
+
     // Best-effort GOAWAY so the peer can stop routing to us first.
     this.#controlWriter?.write(encodeGoaway(0)).catch(() => {});
+
     try {
       this.#transport.close({ closeCode, reason });
     } catch {
       // transport already gone
     }
+
     this.#handleClosed(undefined, { expected: true });
   }
 
@@ -442,6 +445,7 @@ class MoqtSessionImpl implements MoqtSession {
 
   #allocateRequestId(): number {
     const id = this.#nextRequestId;
+
     this.#nextRequestId += 2;
     return id;
   }
@@ -449,6 +453,7 @@ class MoqtSessionImpl implements MoqtSession {
   subscribe(options: MoqtSubscribeOptions, handlers: SubscriptionHandlers = {}): Subscription {
     const requestId = this.#allocateRequestId();
     const record: SubscriptionRecord = { requestId, handlers, cancelled: false, settled: false };
+
     this.#subscriptions.set(requestId, record);
 
     const message = encodeSubscribe({
@@ -486,6 +491,7 @@ class MoqtSessionImpl implements MoqtSession {
       cancelled: false,
       settled: false,
     };
+
     this.#fetches.set(requestId, record);
 
     const request: FetchRequest =
@@ -518,6 +524,7 @@ class MoqtSessionImpl implements MoqtSession {
   trackStatus(options: MoqtSubscribeOptions, handlers: TrackStatusHandlers = {}): void {
     const requestId = this.#allocateRequestId();
     const record: TrackStatusRecord = { requestId, handlers, cancelled: false, settled: false };
+
     // Tracked so session teardown fails a still-pending TRACK_STATUS the
     // same way it fails pending subscriptions and fetches. Answered
     // requests leave the map — nothing else arrives on their stream.
@@ -556,13 +563,11 @@ class MoqtSessionImpl implements MoqtSession {
   /**
    * Open a request stream and bind its lifecycle to `record`.
    *
-   * `onFailure` is the caller's "this request died without answering me"
-   * path — `request-stream` deliberately leaves that judgement here, since
-   * only the session knows which messages a given request kind requires. It
-   * fires for a FIN before any response, a non-protocol stream error
-   * (transport reset), and the response timeout; a protocol error still
-   * kills the whole session. Once `record.settled` is set the same events
-   * are ordinary end-of-request signals and are ignored.
+   * `onFailure` is the caller's "this request died without answering me" path — `request-stream` deliberately leaves
+   * that judgement here, since only the session knows which messages a given request kind requires. It fires for a FIN
+   * before any response, a non-protocol stream error (transport reset), and the response timeout; a protocol error
+   * still kills the whole session. Once `record.settled` is set the same events are ordinary end-of-request signals and
+   * are ignored.
    */
   async #openRequest(
     message: Uint8Array,
@@ -572,25 +577,31 @@ class MoqtSessionImpl implements MoqtSession {
   ): Promise<void> {
     const fail = (error: RequestError): void => {
       if (record.settled || record.cancelled || this.#destroyed) return;
+
       this.#settleRequest(record);
       onFailure(error);
     };
 
     let stream: BidirectionalStreamLike;
+
     try {
       stream = await this.#transport.createBidirectionalStream();
     } catch (error) {
       // Losing the ability to open streams is a session-level failure, but
       // this request also has to hear about it.
       fail(streamFailure(error instanceof Error ? error.message : 'failed to open request stream'));
+
       if (!this.#destroyed) this.#fatal(error);
+
       return;
     }
 
     const timeout = this.#config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
     if (timeout > 0 && !record.settled && !record.cancelled) {
       record.responseTimer = setTimeout(() => {
         const failure = streamFailure('no response before the request timeout', REQUEST_ERROR_CODE.TIMEOUT);
+
         // The stream dies with the request: left open, a late SUBSCRIBE_OK
         // would fire onOk after onError and re-register the alias route of
         // a subscription already reported dead.
@@ -607,9 +618,11 @@ class MoqtSessionImpl implements MoqtSession {
           this.#fatal(error);
           return;
         }
+
         fail(streamFailure(error instanceof Error ? error.message : 'request stream failed'));
       },
     });
+
     // A cancel that raced the stream opening lands here.
     if (record.cancelled) record.stream.cancel(record.pendingCancelReason);
   }
@@ -617,6 +630,7 @@ class MoqtSessionImpl implements MoqtSession {
   /** Mark a request answered (or dead) and disarm its response timeout. */
   #settleRequest(record: RequestRecordBase): void {
     record.settled = true;
+
     if (record.responseTimer !== undefined) {
       clearTimeout(record.responseTimer);
       record.responseTimer = undefined;
@@ -630,22 +644,28 @@ class MoqtSessionImpl implements MoqtSession {
           this.#fatal(new MoqtProtocolError('SUBSCRIBE_OK changed track alias'));
           return;
         }
+
         const existing = this.#aliasRoutes.get(message.trackAlias);
+
         if (existing && existing !== record) {
           this.#fatal(new MoqtProtocolError('duplicate track alias', SESSION_ERROR.DUPLICATE_TRACK_ALIAS));
           return;
         }
+
         this.#settleRequest(record);
         record.trackAlias = message.trackAlias;
         this.#aliasRoutes.set(message.trackAlias, record);
         const waiters = this.#aliasWaiters.get(message.trackAlias);
+
         if (waiters) {
           this.#aliasWaiters.delete(message.trackAlias);
+
           for (const waiter of waiters) {
             clearTimeout(waiter.timer);
             waiter.resolve(record);
           }
         }
+
         record.handlers.onOk?.({
           trackAlias: message.trackAlias,
           parameters: message.parameters,
@@ -712,6 +732,7 @@ class MoqtSessionImpl implements MoqtSession {
 
   #cancelSubscription(record: SubscriptionRecord, reason?: unknown): void {
     if (record.cancelled) return;
+
     record.cancelled = true;
     record.pendingCancelReason = reason;
     this.#settleRequest(record);
@@ -721,6 +742,7 @@ class MoqtSessionImpl implements MoqtSession {
 
   #removeSubscription(record: SubscriptionRecord): void {
     this.#subscriptions.delete(record.requestId);
+
     if (record.trackAlias !== undefined && this.#aliasRoutes.get(record.trackAlias) === record) {
       this.#aliasRoutes.delete(record.trackAlias);
     }
@@ -728,6 +750,7 @@ class MoqtSessionImpl implements MoqtSession {
 
   #cancelFetch(record: FetchRecord, reason?: unknown): void {
     if (record.cancelled) return;
+
     record.cancelled = true;
     record.pendingCancelReason = reason;
     this.#settleRequest(record);
@@ -741,10 +764,12 @@ class MoqtSessionImpl implements MoqtSession {
 
   async #acceptUnidirectionalStreams(): Promise<void> {
     const reader = this.#transport.incomingUnidirectionalStreams.getReader();
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
         void this.#handleUnidirectionalStream(value).catch((error) => {
           if (isMoqtProtocolError(error)) this.#fatal(error);
         });
@@ -764,20 +789,26 @@ class MoqtSessionImpl implements MoqtSession {
       await this.#runControlStream(reader);
       return;
     }
+
     if (isSubgroupHeaderType(streamType)) {
       const header = await readSubgroupHeader(reader, streamType);
+
       await this.#runSubgroupStream(reader, header);
       return;
     }
+
     if (streamType === STREAM_TYPE.FETCH_HEADER) {
       const { requestId } = await readFetchHeader(reader);
+
       await this.#runFetchStream(reader, requestId);
       return;
     }
+
     if (streamType === STREAM_TYPE.PADDING) {
       await reader.cancel();
       return;
     }
+
     await reader.cancel();
     throw new MoqtProtocolError(`unknown unidirectional stream type 0x${streamType.toString(16)}`);
   }
@@ -787,18 +818,19 @@ class MoqtSessionImpl implements MoqtSession {
     const high = await reader.readUint8();
     const low = await reader.readUint8();
     const body = await reader.readBytes(high * 256 + low);
+
     return decodeControlMessage({ type, body });
   }
 
   async #runControlStream(reader: StreamReader): Promise<void> {
     // The stream-type varint (0x2F00) doubles as the first message's type.
     const setup = await this.#readControlFrame(reader, MESSAGE_TYPE.SETUP);
-    if (setup.kind !== 'setup') {
-      throw new MoqtProtocolError('control stream did not begin with SETUP');
-    }
+    if (setup.kind !== 'setup') throw new MoqtProtocolError('control stream did not begin with SETUP');
+
     if (this.#receivedServerSetup) {
       throw new MoqtProtocolError('received a second control stream');
     }
+
     this.#receivedServerSetup = true;
     this.#resolveReady();
     this.#callbacks.onReady?.(setup.options);
@@ -807,15 +839,16 @@ class MoqtSessionImpl implements MoqtSession {
     while (!(await reader.atEnd())) {
       const type = await reader.readVarint();
       const message = await this.#readControlFrame(reader, type);
-      if (message.kind !== 'goaway') {
-        throw new MoqtProtocolError(`unexpected ${message.kind} on the control stream`);
-      }
+      if (message.kind !== 'goaway') throw new MoqtProtocolError(`unexpected ${message.kind} on the control stream`);
+
       if (this.#receivedControlGoaway) {
         throw new MoqtProtocolError('received more than one GOAWAY on the control stream');
       }
+
       this.#receivedControlGoaway = true;
       this.#callbacks.onGoaway?.(message);
     }
+
     // A closed control stream ends the session (§3.3).
     if (!this.#destroyed) {
       this.#fatal(new MoqtProtocolError('peer closed its control stream'));
@@ -826,6 +859,7 @@ class MoqtSessionImpl implements MoqtSession {
   #waitForAlias(trackAlias: number): Promise<SubscriptionRecord | undefined> {
     const known = this.#aliasRoutes.get(trackAlias);
     if (known || this.#destroyed) return Promise.resolve(known);
+
     return new Promise((resolve) => {
       const waiters = this.#aliasWaiters.get(trackAlias) ?? [];
       const timeout = this.#config.unknownAliasTimeoutMs ?? DEFAULT_UNKNOWN_ALIAS_TIMEOUT_MS;
@@ -833,11 +867,14 @@ class MoqtSessionImpl implements MoqtSession {
         resolve,
         timer: setTimeout(() => {
           const remaining = this.#aliasWaiters.get(trackAlias)?.filter((w) => w !== waiter);
+
           if (remaining?.length) this.#aliasWaiters.set(trackAlias, remaining);
           else this.#aliasWaiters.delete(trackAlias);
+
           resolve(undefined);
         }, timeout),
       };
+
       waiters.push(waiter);
       this.#aliasWaiters.set(trackAlias, waiters);
     });
@@ -845,20 +882,25 @@ class MoqtSessionImpl implements MoqtSession {
 
   async #runSubgroupStream(reader: StreamReader, header: SubgroupHeader): Promise<void> {
     const record = await this.#waitForAlias(header.trackAlias);
+
     if (!record || record.cancelled) {
       await reader.cancel();
       return;
     }
+
     let lastSubgroupId = header.subgroupIdMode === 'explicit' ? header.subgroupId! : 0;
+
     try {
       for await (const object of readSubgroupObjects(reader, header)) {
         if (record.cancelled) {
           await reader.cancel();
           return;
         }
+
         lastSubgroupId = object.subgroupId;
         record.handlers.onObject?.(object);
       }
+
       record.handlers.onSubgroupEnd?.({
         groupId: header.groupId,
         subgroupId: lastSubgroupId,
@@ -866,6 +908,7 @@ class MoqtSessionImpl implements MoqtSession {
       });
     } catch (error) {
       if (isMoqtProtocolError(error)) throw error;
+
       // A reset stream is a delivery event (timeout, cancellation), not a
       // session error — surface it to the subscription.
       record.handlers.onSubgroupReset?.({ groupId: header.groupId, error });
@@ -874,21 +917,26 @@ class MoqtSessionImpl implements MoqtSession {
 
   async #runFetchStream(reader: StreamReader, requestId: number): Promise<void> {
     const record = this.#fetches.get(requestId);
+
     if (!record || record.cancelled) {
       await reader.cancel();
       return;
     }
+
     try {
       for await (const entry of readFetchEntries(reader, record.groupOrder)) {
         if (record.cancelled) {
           await reader.cancel();
           return;
         }
+
         record.handlers.onEntry?.(entry);
       }
+
       record.handlers.onEnd?.();
     } catch (error) {
       if (isMoqtProtocolError(error)) throw error;
+
       // A reset mid-replay means entries may be missing — never report it
       // as the clean FIN `onEnd` promises.
       record.handlers.onReset?.({ error });
@@ -901,10 +949,12 @@ class MoqtSessionImpl implements MoqtSession {
 
   async #acceptBidirectionalStreams(): Promise<void> {
     const reader = this.#transport.incomingBidirectionalStreams.getReader();
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
         void this.#handleIncomingRequest(value).catch((error) => {
           if (isMoqtProtocolError(error)) this.#fatal(error);
         });
@@ -923,33 +973,40 @@ class MoqtSessionImpl implements MoqtSession {
 
     const respond = async (bytes: Uint8Array) => {
       const writer = stream.writable.getWriter();
+
       try {
         await writer.write(bytes);
         await writer.close();
       } catch {
         // Peer cancelled; nothing to clean up.
       }
+
       await reader.cancel();
     };
 
     if (message.kind === 'publish') {
       const callbacks = this.#callbacks;
+
       if (callbacks.onIncomingPublish) {
         let responded = false;
+
         callbacks.onIncomingPublish(message, {
           accept: (parameters) => {
             if (responded) return;
+
             responded = true;
             void respond(encodeRequestOk(parameters ?? {}));
           },
           reject: (errorCode = REQUEST_ERROR_CODE.UNINTERESTED, reason = '') => {
             if (responded) return;
+
             responded = true;
             void respond(encodeRequestError(errorCode, reason));
           },
         });
         return;
       }
+
       await respond(encodeRequestError(REQUEST_ERROR_CODE.UNINTERESTED, 'subscribe-only client'));
       return;
     }
@@ -963,17 +1020,17 @@ class MoqtSessionImpl implements MoqtSession {
  * Create a MOQT session driver over an established transport.
  *
  * @example
- * ```ts
- * const transport = new WebTransport(url, { protocols: [MOQT_PROTOCOL_ID] });
- * await transport.ready;
- * const session = createMoqtSession(transport, {
- *   callbacks: { onGoaway: (g) => migrate(g.newSessionUri) },
- * });
- * const subscription = session.subscribe(
- *   { trackNamespace: ['live', 'stream1'], trackName: 'catalog' },
- *   { onObject: (object) => handleCatalogObject(object) }
- * );
- * ```
+ *   ```ts
+ *   const transport = new WebTransport(url, { protocols: [MOQT_PROTOCOL_ID] });
+ *   await transport.ready;
+ *   const session = createMoqtSession(transport, {
+ *     callbacks: { onGoaway: (g) => migrate(g.newSessionUri) },
+ *   });
+ *   const subscription = session.subscribe(
+ *     { trackNamespace: ['live', 'stream1'], trackName: 'catalog' },
+ *     { onObject: (object) => handleCatalogObject(object) }
+ *   );
+ *   ```;
  */
 export function createMoqtSession(transport: MoqtTransport, config: MoqtSessionConfig = {}): MoqtSession {
   return new MoqtSessionImpl(transport, config);

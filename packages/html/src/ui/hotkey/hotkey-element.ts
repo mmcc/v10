@@ -1,12 +1,13 @@
-import { createHotkey, type HotkeyActionName, isHotkeyToggleAction, resolveHotkeyAction } from '@videojs/core/dom';
+import type { HotkeyProps } from '@videojs/core';
+import { createHotkey, isHotkeyToggleAction, resolveHotkeyAction } from '@videojs/core/dom';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
 import { ContextConsumer } from '@videojs/element/context';
 
 import { containerContext, playerContext } from '../../player/context';
 import { PlayerController } from '../../player/player-controller';
-import { MediaElement } from '../media-element';
+import { UIElement } from '../ui-element';
 
-export class HotkeyElement extends MediaElement {
+export class HotkeyElement extends UIElement {
   static readonly tagName = 'media-hotkey';
 
   static override properties: PropertyDeclarationMap = {
@@ -17,11 +18,11 @@ export class HotkeyElement extends MediaElement {
     target: { type: String },
   };
 
-  keys = '';
-  action: HotkeyActionName | (string & {}) = '';
-  value: number | undefined = undefined;
-  disabled = false;
-  target: 'player' | 'document' = 'player';
+  keys: HotkeyProps['keys'] = '';
+  action: HotkeyProps['action'] | '' = '';
+  value: HotkeyProps['value'] = undefined;
+  disabled: NonNullable<HotkeyProps['disabled']> = false;
+  target: NonNullable<HotkeyProps['target']> = 'player';
 
   readonly #player = new PlayerController(this, playerContext);
   readonly #container = new ContextConsumer(this, {

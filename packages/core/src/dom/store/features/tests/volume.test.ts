@@ -1,5 +1,6 @@
 import { createStore } from '@videojs/store';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo } from '../../../tests/test-helpers';
 import { volumeFeature } from '../volume';
@@ -13,6 +14,7 @@ describe('volumeFeature', () => {
       });
 
       const store = createStore<PlayerTarget>()(volumeFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.volume).toBe(0.8);
@@ -22,16 +24,42 @@ describe('volumeFeature', () => {
     it('sets volumeAvailability on attach', () => {
       const video = createMockVideo({});
       const store = createStore<PlayerTarget>()(volumeFeature);
+
       store.attach({ media: video, container: null });
 
       // Should be 'available' or 'unsupported' based on browser capability
       expect(['available', 'unsupported']).toContain(store.state.volumeAvailability);
+      expect(store.state.mutedAvailability).toBe('available');
+    });
+
+    it('reports mute available on media that has no volume level', () => {
+      // An embed that takes a mute command but offers no way to set a level.
+      // Reading one availability for both would hide a mute button that works.
+      const media = { muted: false, addEventListener() {}, removeEventListener() {} };
+      const store = createStore<PlayerTarget>()(volumeFeature);
+
+      store.attach({ media: media as unknown as HTMLVideoElement, container: null });
+
+      expect(store.state.mutedAvailability).toBe('available');
+      expect(store.state.volumeAvailability).toBe('unavailable');
+    });
+
+    it('reports both unavailable on media that has neither', () => {
+      // Spotify: the embed takes no volume or mute command and reports neither.
+      const media = { addEventListener() {}, removeEventListener() {} };
+      const store = createStore<PlayerTarget>()(volumeFeature);
+
+      store.attach({ media: media as unknown as HTMLVideoElement, container: null });
+
+      expect(store.state.mutedAvailability).toBe('unavailable');
+      expect(store.state.volumeAvailability).toBe('unavailable');
     });
 
     it('updates on volumechange event', () => {
       const video = createMockVideo({ volume: 1, muted: false });
 
       const store = createStore<PlayerTarget>()(volumeFeature);
+
       store.attach({ media: video, container: null });
 
       expect(store.state.volume).toBe(1);
@@ -51,6 +79,7 @@ describe('volumeFeature', () => {
       it('sets volume on target', async () => {
         const video = createMockVideo({});
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         const result = await store.setVolume(0.7);
@@ -62,6 +91,7 @@ describe('volumeFeature', () => {
       it('clamps volume to min 0', async () => {
         const video = createMockVideo({});
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         await store.setVolume(-0.5);
@@ -72,6 +102,7 @@ describe('volumeFeature', () => {
       it('clamps volume to max 1', async () => {
         const video = createMockVideo({});
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         await store.setVolume(1.5);
@@ -82,6 +113,7 @@ describe('volumeFeature', () => {
       it('unmutes when setting volume above 0 while muted', async () => {
         const video = createMockVideo({ muted: true, volume: 0.5 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         await store.setVolume(0.7);
@@ -93,6 +125,7 @@ describe('volumeFeature', () => {
       it('does not unmute when setting volume to 0', async () => {
         const video = createMockVideo({ muted: true, volume: 0.5 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         await store.setVolume(0);
@@ -104,6 +137,7 @@ describe('volumeFeature', () => {
       it('does not change muted when already unmuted', async () => {
         const video = createMockVideo({ muted: false, volume: 0.5 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         await store.setVolume(0.8);
@@ -117,6 +151,7 @@ describe('volumeFeature', () => {
       it('mutes when unmuted with volume > 0', async () => {
         const video = createMockVideo({ muted: false, volume: 0.8 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         const result = await store.toggleMuted();
@@ -129,6 +164,7 @@ describe('volumeFeature', () => {
       it('unmutes when muted with volume > 0', async () => {
         const video = createMockVideo({ muted: true, volume: 0.6 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         const result = await store.toggleMuted();
@@ -141,6 +177,7 @@ describe('volumeFeature', () => {
       it('restores volume to 0.25 when unmuting at volume 0', async () => {
         const video = createMockVideo({ muted: true, volume: 0 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         await store.toggleMuted();
@@ -152,6 +189,7 @@ describe('volumeFeature', () => {
       it('unmutes and restores volume when volume is 0 and not muted', async () => {
         const video = createMockVideo({ muted: false, volume: 0 });
         const store = createStore<PlayerTarget>()(volumeFeature);
+
         store.attach({ media: video, container: null });
 
         const result = await store.toggleMuted();

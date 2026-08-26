@@ -33,13 +33,13 @@ Mostly a standard [Astro](https://astro.build/) project.
 │  ├── content.config.ts     # Content collection schemas
 │  ├── docs.config.ts        # Docs sidebar structure
 │  └── test-setup.ts         # Vitest setup
-├── astro.config.mjs
+├── astro.config.ts
 ├── AGENTS.md                # Agent guidance and site-specific gotchas
 ├── package.json
 ├── README.md
 ├── TODO.md
 ├── tsconfig.json
-└── vitest.config.ts
+└── vite.config.ts           # Vite+, Vitest, and site task configuration
 ```
 
 ## Commands
@@ -56,9 +56,9 @@ If you're in `site/`...
 | Command              | Action                                           |
 | :------------------- | :----------------------------------------------- |
 | `pnpm install`       | Installs dependencies                            |
-| `pnpm dev`           | Starts local dev server at `localhost:4321`      |
-| `pnpm build`         | Build your production site to `./dist/`          |
-| `pnpm preview`       | Preview your build locally, before deploying     |
+| `pnpm exec vp run dev`   | Starts local dev server at `localhost:4321`  |
+| `pnpm exec vp run build` | Build your production site to `./dist/`      |
+| `pnpm astro preview`     | Preview your build locally, before deploying |
 | `pnpm api-docs`      | Regenerate API reference JSON from TypeScript    |
 | `pnpm astro ...`     | Run CLI commands like `astro add`, `astro check` |
 | `pnpm test`          | Run tests with Vitest                            |
@@ -77,11 +77,13 @@ The site deploys via Netlify from two branches:
 
 On each release, the CD workflow force-pushes `main` to `site/v10`, keeping production docs in sync with published packages.
 
-**Fixing a typo without cutting a release:** Land the fix on `main` first, then cherry-pick to `site/v10`. The next release's force-push already includes the fix (since it came from `main`), so nothing gets lost. The `site/v10` branch is protected — direct pushes are restricted to the CD bot.
+**Changelog prose** arrives too late for that force-push. The prose bot only starts once the release is published, so its PR lands on `main` after production has already moved. The [Forward-port changelog](../.github/workflows/forward-port-changelog.yml) workflow closes the gap: whenever anything under `src/content/changelog/` changes on `main`, it copies that folder onto `site/v10`. No cherry-pick needed.
+
+**Fixing a typo without cutting a release:** Land the fix on `main` first, then cherry-pick to `site/v10`. The next release's force-push already includes the fix (since it came from `main`), so nothing gets lost. Treat `site/v10` as bot-owned — it is rewritten from `main` on every release, so anything pushed there that isn't also on `main` disappears at the next cut.
 
 ## Environment Variables
 
-The installation page's video uploader uses OAuth + Mux. The environment schema in [`astro.config.mjs`](astro.config.mjs) is the current variable list. The site works without these variables; the uploader is simply unavailable.
+The installation page's video uploader uses OAuth + Mux. The environment schema in [`astro.config.ts`](astro.config.ts) is the current variable list. The site works without these variables; the uploader is simply unavailable.
 
 ## Technology Stack
 
@@ -166,13 +168,13 @@ Use `ogTitle` in docs/blog frontmatter when the page title is too long for the s
 
 API reference pages are generated from TypeScript source code by the builder in [`scripts/api-docs-builder/`](scripts/api-docs-builder/). It extracts component, utility, feature, media, and preset information into the gitignored `src/content/generated-*-reference/` collections.
 
-The JSON is regenerated automatically on `pnpm dev` and `pnpm build`, or manually via `pnpm api-docs`.
+The JSON is regenerated automatically by the root `pnpm dev` and `pnpm build` commands, or manually via `pnpm api-docs`.
 
 See [`scripts/api-docs-builder/README.md`](scripts/api-docs-builder/README.md) for full documentation.
 
 ## Markdown plugins
 
-Astro uses the Satteri Markdown processor with custom MDAST plugins configured in [`astro.config.mjs`](astro.config.mjs):
+Astro uses the Satteri Markdown processor with custom MDAST plugins configured in [`astro.config.ts`](astro.config.ts):
 
 - [`satteriConditionalHeadings`](src/utils/satteriConditionalHeadings.ts) tracks conditional headings and generated API-reference headings.
 - [`satteriReadingTime`](src/utils/satteriReadingTime.ts) derives reading-time frontmatter.

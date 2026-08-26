@@ -39,14 +39,11 @@ import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behav
 // ============================================================================
 
 /**
- * State shape for the MoQ playback engine — the union of all state
- * required by its composed behaviors.
+ * State shape for the MoQ playback engine — the union of all state required by its composed behaviors.
  *
- * Notable differences from the HLS engine: latency-control slots
- * (`targetLatency` / `measuredLatency` / `playoutRate` / `playoutState`)
- * exist because playout is clock-steered rather than element-driven, and
- * `currentTime` is **derived from whichever playout clock is running**
- * (written by `trackPlayoutTime`, not read from a media element).
+ * Notable differences from the HLS engine: latency-control slots (`targetLatency` / `measuredLatency` / `playoutRate` /
+ * `playoutState`) exist because playout is clock-steered rather than element-driven, and `currentTime` is **derived
+ * from whichever playout clock is running** (written by `trackPlayoutTime`, not read from a media element).
  */
 export interface MoqEngineState {
   /** A caller writes `{ url: 'moqt://…#msf:…' }`; `resolveCatalog` populates the rest. */
@@ -61,44 +58,37 @@ export interface MoqEngineState {
   userAudioTrackSelection?: Partial<AudioTrack>;
   userTextTrackSelection?: Partial<TextTrack> | 'off';
   /**
-   * Adapter-written pause flag. The renderers gate their playout rate to 0
-   * while set — without it, video-only playback (no audio master clock to
-   * freeze) would keep presenting on the self-clock while paused.
-   * `undefined` means playing, so engine-only drivers never pause by default.
+   * Adapter-written pause flag. The renderers gate their playout rate to 0 while set — without it, video-only playback
+   * (no audio master clock to freeze) would keep presenting on the self-clock while paused. `undefined` means playing,
+   * so engine-only drivers never pause by default.
    */
   paused?: boolean;
   /**
-   * Set by `suspendMediaWhilePaused` once a pause outlives its hold
-   * window; the subscribe behaviors release the media subscriptions while
-   * set (the catalog subscription stays open) and rejoin at the live edge
-   * on resume.
+   * Set by `suspendMediaWhilePaused` once a pause outlives its hold window; the subscribe behaviors release the media
+   * subscriptions while set (the catalog subscription stays open) and rejoin at the live edge on resume.
    */
   mediaSuspended?: boolean;
   /**
-   * Adapter-written autoplay-policy gate: set when playback begins
-   * without a user gesture while the AudioContext is suspended (autoplay).
-   * The audio subscribe behavior releases its subscription while set —
-   * video plays on the renderer self-clock — and the adapter clears it
-   * once a resume() settles, rejoining audio at the live edge.
+   * Adapter-written autoplay-policy gate: set when playback begins without a user gesture while the AudioContext is
+   * suspended (autoplay). The audio subscribe behavior releases its subscription while set — video plays on the
+   * renderer self-clock — and the adapter clears it once a resume() settles, rejoining audio at the live edge.
    */
   audioSuspended?: boolean;
   /** Consumer-set target latency in seconds (input slot). */
   targetLatency?: number;
   /**
-   * Consumer opt-in to adaptive latency (input slot). `undefined` defers
-   * to `config.adaptiveLatency.enabled`, which is off.
+   * Consumer opt-in to adaptive latency (input slot). `undefined` defers to `config.adaptiveLatency.enabled`, which is
+   * off.
    */
   adaptiveLatencyEnabled?: boolean;
   /**
-   * `adaptLatencyTarget`'s proposed target in seconds, or `undefined`
-   * while adaptation is off or warming up. Ranks below `targetLatency`
-   * and above the catalog target.
+   * `adaptLatencyTarget`'s proposed target in seconds, or `undefined` while adaptation is off or warming up. Ranks
+   * below `targetLatency` and above the catalog target.
    */
   adaptiveTargetLatency?: number;
   /**
-   * The setpoint `syncLatency` resolved and is actually holding, in
-   * seconds — the only slot that states the *resolved* target rather than
-   * an input to the resolution.
+   * The setpoint `syncLatency` resolved and is actually holding, in seconds — the only slot that states the _resolved_
+   * target rather than an input to the resolution.
    */
   effectiveTargetLatency?: number;
   /** Real edge-to-playout latency in seconds, measured by `syncLatency`. */
@@ -114,22 +104,18 @@ export interface MoqEngineState {
   /** Playout position in media seconds (audio master clock, else video). */
   currentTime?: number;
   /**
-   * Which renderer `currentTime` came from, published alongside it by
-   * `trackPlayoutTime`, and `undefined` while neither clock is producing a
-   * position. The latency controller measures the delivery edge of *that*
-   * track, since a depth taken against another one's clock is a subtraction
-   * across two timebases — and measures nothing at all without an owner, since
-   * `currentTime` holds its last value rather than clearing.
+   * Which renderer `currentTime` came from, published alongside it by `trackPlayoutTime`, and `undefined` while neither
+   * clock is producing a position. The latency controller measures the delivery edge of _that_ track, since a depth
+   * taken against another one's clock is a subtraction across two timebases — and measures nothing at all without an
+   * owner, since `currentTime` holds its last value rather than clearing.
    */
   playoutClockOwner?: PlayoutClockOwner;
 }
 
 /**
- * Context shape for the MoQ playback engine: the session actor, the
- * per-type subscriber actors (each with a `pending*` sibling so old + new
- * subscriptions overlap during make-before-break handoff), the renderer
- * actors, and the platform surfaces the adapter provides (`renderSurface`
- * canvas + `audioContext`).
+ * Context shape for the MoQ playback engine: the session actor, the per-type subscriber actors (each with a `pending*`
+ * sibling so old + new subscriptions overlap during make-before-break handoff), the renderer actors, and the platform
+ * surfaces the adapter provides (`renderSurface` canvas + `audioContext`).
  */
 export interface MoqEngineContext {
   moqSessionActor?: MoqSessionActor;
@@ -149,9 +135,8 @@ export type MoqEngineSignals = {
 };
 
 /**
- * Configuration for the MoQ playback engine. Each option is consumed by
- * the appropriate behavior — the engine itself has no config beyond what
- * its behaviors read.
+ * Configuration for the MoQ playback engine. Each option is consumed by the appropriate behavior — the engine itself
+ * has no config beyond what its behaviors read.
  */
 export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqEngineContext> {
   /** Transport factory override (tests / relays needing special setup). */
@@ -169,47 +154,37 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
   /** Latency tuning: the controller (`syncLatency`) plus the renderers' join-at-edge anchor. */
   latency?: Partial<LatencyControlConfig>;
   /**
-   * Adaptive-latency tuning (`adaptLatencyTarget`), including its
-   * `enabled` switch — **off by default**, so an untouched engine holds
-   * the fixed setpoint `latency` describes and this behavior registers no
-   * timer. Deliberately its own object rather than a flag inside
-   * `latency`: `latency` is shared verbatim with the renderers and the
-   * pause-suspension window, and the adaptive knobs mean nothing to
-   * either. The two are still coupled — `adaptLatencyTarget` validates
-   * its rate bounds against `latency.clockSlewRate` and `intervalMs` and
-   * throws on a combination whose control loops cannot settle.
+   * Adaptive-latency tuning (`adaptLatencyTarget`), including its `enabled` switch — **off by default**, so an
+   * untouched engine holds the fixed setpoint `latency` describes and this behavior registers no timer. Deliberately
+   * its own object rather than a flag inside `latency`: `latency` is shared verbatim with the renderers and the
+   * pause-suspension window, and the adaptive knobs mean nothing to either. The two are still coupled —
+   * `adaptLatencyTarget` validates its rate bounds against `latency.clockSlewRate` and `intervalMs` and throws on a
+   * combination whose control loops cannot settle.
    */
   adaptiveLatency?: Partial<AdaptiveLatencyConfig>;
   /**
-   * Continuous pause duration, in seconds, before media subscriptions
-   * release (`suspendMediaWhilePaused`). Defaults to target latency +
-   * `latency.catchUpThreshold` — the point where the latency controller
-   * starts discarding the paused buffer anyway.
+   * Continuous pause duration, in seconds, before media subscriptions release (`suspendMediaWhilePaused`). Defaults to
+   * target latency + `latency.catchUpThreshold` — the point where the latency controller starts discarding the paused
+   * buffer anyway.
    */
   pauseHoldSeconds?: number;
   /**
-   * Session reconnect policy (`setupMoqSession` → session actor): an
-   * unexpected transport loss retries with capped, jittered backoff
-   * instead of terminating; behaviors rejoin the catalog and media tracks
-   * at the live edge on each recovered connection. Defaults to
-   * retry-forever, 500ms → 10s.
+   * Session reconnect policy (`setupMoqSession` → session actor): an unexpected transport loss retries with capped,
+   * jittered backoff instead of terminating; behaviors rejoin the catalog and media tracks at the live edge on each
+   * recovered connection. Defaults to retry-forever, 500ms → 10s.
    */
   reconnect?: Partial<RetryBackoffConfig>;
   /**
-   * Retry policy for failed or publisher-ended subscriptions, shared by
-   * the catalog (`resolveCatalog`) and media tracks
-   * (`subscribeSelected*Track`). Failed usually means "does not exist
-   * yet" — play pressed before the broadcast, or a broadcaster mid-blip —
-   * so the cadence doubles as the join latency once the track appears.
-   * Defaults to retry-forever, 500ms → 3s.
+   * Retry policy for failed or publisher-ended subscriptions, shared by the catalog (`resolveCatalog`) and media tracks
+   * (`subscribeSelected*Track`). Failed usually means "does not exist yet" — play pressed before the broadcast, or a
+   * broadcaster mid-blip — so the cadence doubles as the join latency once the track appears. Defaults to
+   * retry-forever, 500ms → 3s.
    */
   subscribeRetry?: Partial<RetryBackoffConfig>;
   /**
-   * Media-subscription data-starvation deadline in milliseconds
-   * (`track-subscriber` watchdog): a live subscription silent this long is
-   * presumed dead and re-subscribed, covering relays that drop their
-   * publisher without ending downstream subscriptions. `0` disables.
-   * Default 10 000 ms.
+   * Media-subscription data-starvation deadline in milliseconds (`track-subscriber` watchdog): a live subscription
+   * silent this long is presumed dead and re-subscribed, covering relays that drop their publisher without ending
+   * downstream subscriptions. `0` disables. Default 10 000 ms.
    */
   subscribeStallTimeoutMs?: number;
   preferredSubtitleLanguage?: string;
@@ -222,9 +197,8 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
 // ============================================================================
 
 /**
- * Materialize the consumer-input slots no composed behavior produces
- * (`user*TrackSelection` — track-switching only reads them) and hand the
- * composition signal refs to `onSignalsReady`.
+ * Materialize the consumer-input slots no composed behavior produces (`user*TrackSelection` — track-switching only
+ * reads them) and hand the composition signal refs to `onSignalsReady`.
  */
 const shareSignals = makeShareSignals<MoqEngineState, MoqEngineContext>([
   'userVideoTrackSelection',
@@ -235,34 +209,30 @@ const shareSignals = makeShareSignals<MoqEngineState, MoqEngineContext>([
 /**
  * Create a MoQ playback engine.
  *
- * Composes SPF behaviors into a reactive pipeline for MoQ/MSF playback
- * over WebTransport + WebCodecs: session setup, catalog resolution, the
- * *reused* track-selection/ABR machinery over the shared media model,
- * make-before-break subscription handoff, and clock-steered rendering
- * with latency control. There is no MSE column — rendering is
- * VideoDecoder→canvas and AudioDecoder→Web Audio, with the audio clock as
- * master.
+ * Composes SPF behaviors into a reactive pipeline for MoQ/MSF playback over WebTransport + WebCodecs: session setup,
+ * catalog resolution, the _reused_ track-selection/ABR machinery over the shared media model, make-before-break
+ * subscription handoff, and clock-steered rendering with latency control. There is no MSE column — rendering is
+ * VideoDecoder→canvas and AudioDecoder→Web Audio, with the audio clock as master.
  *
- * The `syncPreload`/`trackLoadTriggers` element behaviors are not
- * composed: with no `HTMLMediaElement`, the adapter writes
- * `state.preload` / `state.loadActivated` directly.
+ * The `syncPreload`/`trackLoadTriggers` element behaviors are not composed: with no `HTMLMediaElement`, the adapter
+ * writes `state.preload` / `state.loadActivated` directly.
  *
  * @example
- * ```ts
- * let signals: MoqEngineSignals;
- * const engine = createMoqEngine({
- *   onSignalsReady: (refs) => {
- *     signals = refs;
- *   },
- * });
+ *   ```ts
+ *   let signals: MoqEngineSignals;
+ *   const engine = createMoqEngine({
+ *     onSignalsReady: (refs) => {
+ *       signals = refs;
+ *     },
+ *   });
  *
- * signals.context.renderSurface.set(canvas);
- * signals.context.audioContext.set(new AudioContext());
- * signals.state.presentation.set({ url: 'moqt://relay.example.com/live#msf:live--catalog' });
- * signals.state.loadActivated.set(true);
+ *   signals.context.renderSurface.set(canvas);
+ *   signals.context.audioContext.set(new AudioContext());
+ *   signals.state.presentation.set({ url: 'moqt://relay.example.com/live#msf:live--catalog' });
+ *   signals.state.loadActivated.set(true);
  *
- * await engine.destroy();
- * ```
+ *   await engine.destroy();
+ *   ```;
  */
 export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEngineState, MoqEngineContext> {
   // The arrival-timing sampler reads `moqBandwidth` while the reused
@@ -275,6 +245,7 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
     ...config,
     bandwidth: { ...DEFAULT_MOQ_BANDWIDTH_CONFIG, ...config.moqBandwidth },
   };
+
   return createComposition(
     [
       // Session first: owns the transport + MOQT session actor, gated on

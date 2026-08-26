@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import type {
   LiveVideoTrack,
   MaybeResolvedPresentation,
@@ -66,6 +67,7 @@ describe('Type Guards', () => {
       if (isResolvedTrack(track)) {
         // TypeScript should know track is VideoTrack here
         const segments = track.segments;
+
         expect(segments).toBeDefined();
       }
     });
@@ -157,6 +159,7 @@ describe('Type Guards', () => {
       if (isLiveTrack(track)) {
         // TypeScript should know track is LiveVideoTrack here
         const mode: 'push' = track.deliveryMode;
+
         expect(mode).toBe('push');
       } else {
         expect.unreachable('live track was not narrowed');
@@ -215,6 +218,7 @@ describe('Type Guards', () => {
       if (hasPresentationDuration(presentation)) {
         // TypeScript knows duration is number (not undefined)
         const d: number = presentation.duration;
+
         expect(d).toBe(100);
       }
     });
@@ -229,6 +233,7 @@ describe('Type Guards', () => {
       const unresolved: MaybeResolvedPresentation = {
         url: 'https://example.com/master.m3u8',
       };
+
       expect(isResolvedPresentation(unresolved)).toBe(false);
     });
 
@@ -239,6 +244,7 @@ describe('Type Guards', () => {
         url: 'https://example.com/master.m3u8',
         id: 'presentation-0',
       };
+
       expect(isResolvedPresentation(partial)).toBe(false);
     });
 
@@ -247,6 +253,7 @@ describe('Type Guards', () => {
         url: 'https://example.com/master.m3u8',
         selectionSets: [],
       };
+
       expect(isResolvedPresentation(partial)).toBe(false);
     });
 
@@ -257,6 +264,7 @@ describe('Type Guards', () => {
         startTime: 0,
         selectionSets: [],
       };
+
       expect(isResolvedPresentation(resolved)).toBe(true);
     });
 
@@ -269,6 +277,7 @@ describe('Type Guards', () => {
         startTime: 0,
         selectionSets: [],
       };
+
       expect(isResolvedPresentation(resolved)).toBe(true);
     });
 
@@ -283,6 +292,7 @@ describe('Type Guards', () => {
         // TypeScript should know presentation is Presentation here
         const id: string = presentation.id;
         const sets = presentation.selectionSets;
+
         expect(id).toBe('presentation-0');
         expect(sets).toBeDefined();
       }

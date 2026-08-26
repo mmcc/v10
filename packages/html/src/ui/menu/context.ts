@@ -1,19 +1,20 @@
-import type { MenuState, StateAttrMap } from '@videojs/core';
-import type { MenuApi } from '@videojs/core/dom';
+import type { MenuCore, MenuState } from '@videojs/core';
+import type { MenuApi, MenuPopupApi } from '@videojs/core/dom';
 import { createContext } from '@videojs/element/context';
 
-export interface MenuContextValue {
-  menu: MenuApi;
-  state: MenuState;
-  stateAttrMap: StateAttrMap<MenuState>;
-  /** Publish generic display and interaction state to this submenu's trigger. */
-  setTriggerMetadata: (metadata: MenuTriggerMetadata) => void;
-}
-
-export interface MenuTriggerMetadata {
+export interface MenuTriggerState {
   hint: string;
   disabled: boolean;
   availability?: 'available' | 'unavailable' | 'unsupported' | undefined;
+}
+
+export interface MenuContextValue {
+  core: MenuCore;
+  menu: MenuApi;
+  popup: MenuPopupApi;
+  state: MenuState;
+  /** Publish display and interaction state to this submenu's trigger. */
+  setTriggerState: (state: MenuTriggerState) => void;
 }
 
 export interface MenuGroupContextValue {

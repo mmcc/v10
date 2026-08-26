@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
+
 import { MoqtProtocolError } from '../errors';
 import { decodeVarint, encodeVarint, varintByteLength, varintLengthFromFirstByte } from '../varint';
 
@@ -71,8 +72,10 @@ describe('encodeVarint', () => {
       2 ** 49,
       Number.MAX_SAFE_INTEGER,
     ];
+
     for (const value of boundaries) {
       const encoded = encodeVarint(value);
+
       expect(encoded.length).toBe(varintByteLength(value));
       expect(decodeVarint(encoded)).toEqual({ value, byteLength: encoded.length });
     }

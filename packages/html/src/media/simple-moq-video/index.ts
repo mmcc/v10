@@ -3,6 +3,7 @@ import { effect } from '@videojs/spf';
 import { isResolvedPresentation, MoqMediaMixin, type MoqMediaProps } from '@videojs/spf/moq';
 import { applyShadowStyles, createShadowStyle } from '@videojs/utils/dom';
 import { isNull } from '@videojs/utils/predicate';
+
 import { MediaAttachMixin } from '../../store/media-attach-mixin';
 
 // SSR guard mirroring `CustomMediaElement` — this class is evaluated at
@@ -14,18 +15,14 @@ const MoqMediaBase = MoqMediaMixin(HTMLElementBase);
 const TIME_POLL_INTERVAL_MS = 250;
 
 /**
- * Layout parity with `CustomMediaElement`'s video template: the host
- * generates no box, so the canvas fills the skin's media container the same
- * way a slotted `<video>` does and honors the same style hooks. Without
- * this the canvas resolves `height: 100%` against an inline host and
- * collapses to its intrinsic bitmap height inside a skin.
+ * Layout parity with `CustomMediaElement`'s video template: the host generates no box, so the canvas fills the skin's
+ * media container the same way a slotted `<video>` does and honors the same style hooks. Without this the canvas
+ * resolves `height: 100%` against an inline host and collapses to its intrinsic bitmap height inside a skin.
  *
- * Deliberately NOT tagged with the build's `/* css *​/` marker: that plugin
- * swaps each `${…}` for an `___EXPR_n___` placeholder before running
- * lightningcss, and these interpolations are custom-property *names* inside
- * `var()`, so it would emit `var(___EXPR_0___)` and fail to parse. Keeping
- * the shared `VideoCSSVars` constants is worth more than minifying ~300
- * bytes of static CSS.
+ * Deliberately NOT tagged with the build's `/* css *​/` marker: that plugin swaps each `${…}` for an `___EXPR_n___`
+ * placeholder before running lightningcss, and these interpolations are custom-property _names_ inside `var()`, so it
+ * would emit `var(___EXPR_0___)` and fail to parse. Keeping the shared `VideoCSSVars` constants is worth more than
+ * minifying ~300 bytes of static CSS.
  */
 const SHADOW_STYLES = /*css*/ `
   :host {
@@ -61,18 +58,15 @@ function isValidPreload(value: string | null): value is MoqMediaProps['preload']
 }
 
 /**
- * `MoqMediaMixin` renders to a canvas + `AudioContext` rather than wrapping
- * a native `<video>`, so it doesn't fit `CustomMediaElement`'s
- * component-onto-a-target-element model (`SimpleHlsVideo`'s pattern) — this
- * class owns the canvas and the custom-element lifecycle directly instead.
+ * `MoqMediaMixin` renders to a canvas + `AudioContext` rather than wrapping a native `<video>`, so it doesn't fit
+ * `CustomMediaElement`'s component-onto-a-target-element model (`SimpleHlsVideo`'s pattern) — this class owns the
+ * canvas and the custom-element lifecycle directly instead.
  *
- * With no native media events to bridge, the element synthesizes the
- * capability surface core's store features probe for (`Media` is
- * capability-based, not `HTMLMediaElement`-based): pause/seek/source/
- * volume/stream-type/live properties plus the events their features
- * listen to, derived from the engine's state signals and a clock poller.
- * Deliberately not claimed: `buffered`/`seekable` (no buffer model yet),
- * `playbackRate` (live-only), and `textTracks` (no text renderer yet).
+ * With no native media events to bridge, the element synthesizes the capability surface core's store features probe for
+ * (`Media` is capability-based, not `HTMLMediaElement`-based): pause/seek/source/ volume/stream-type/live properties
+ * plus the events their features listen to, derived from the engine's state signals and a clock poller. Deliberately
+ * not claimed: `buffered`/`seekable` (no buffer model yet), `playbackRate` (live-only), and `textTracks` (no text
+ * renderer yet).
  */
 class SimpleMoqMediaImpl extends MoqMediaBase {
   static readonly observedAttributes = ['autoplay', 'src', 'preload', 'target-latency', 'adaptive-latency', 'muted'];
@@ -91,21 +85,27 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
 
   constructor(...args: ConstructorParameters<typeof MoqMediaBase>) {
     super(...args);
+
     if (__DEV__) {
       console.warn(
         '<simple-moq-video> is experimental: the MoQ engine has no error slot yet, so transport, ' +
           'codec, and catalog failures are logged rather than surfaced on the element.'
       );
     }
+
     // Declarative shadow DOM attaches a root during upgrade — a second bare
     // `attachShadow` throws NotSupportedError and leaves the element dead.
     // Mirrors `CustomMediaElement`/`BackgroundVideo`/`SkinElement`.
     if (!this.shadowRoot) {
       this.attachShadow((this.constructor as typeof SimpleMoqMediaImpl).shadowRootOptions);
     }
+
     const root = this.shadowRoot!;
+
     this.#canvas = root.querySelector('canvas') ?? document.createElement('canvas');
+
     if (!this.#canvas.isConnected) root.append(this.#canvas);
+
     // A `<canvas>` defaults to 300×150 until something draws to it; native
     // `<video>` reports 0×0 before the first frame. `#lastWidth`/`#lastHeight`
     // start at 0 to match, so without this the first poll tick in
@@ -125,8 +125,10 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       if (__DEV__) {
         console.warn('<simple-moq-video> was reconnected after destroy(); create a new element instead.');
       }
+
       return;
     }
+
     this.attach(this.#canvas);
     this.#connectEventBridge();
   }
@@ -135,13 +137,16 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     this.#bridge?.abort();
     this.#bridge = null;
     this.detach();
+
     // `keep-alive` opts out of teardown entirely (same escape hatch as
     // `CustomMediaElement`), for hosts that reparent asynchronously.
     if (this.hasAttribute('keep-alive')) return;
+
     // Defer so a synchronous reparent (remove + insert) doesn't tear down
     // the engine — mirrors `CustomMediaElement`'s disconnect guard.
     queueMicrotask(() => {
       if (this.isConnected || this.#destroyed) return;
+
       this.#destroyed = true;
       this.destroy();
     });
@@ -149,6 +154,7 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue) return;
+
     if (name === 'autoplay') {
       // The reflected accessors below route through the attribute, so the
       // engine-facing flag is written here, once per real transition.
@@ -162,6 +168,7 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       // controller as 0 (continuous catch-up) or NaN (every comparison
       // false, so latency control silently stops).
       const parsed = isNull(newValue) ? Number.NaN : Number(newValue);
+
       this.targetLatency = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
     } else if (name === 'adaptive-latency') {
       // Presence-based, like `autoplay`: this is a *request*, not a
@@ -174,16 +181,15 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       // `muted` is the *default* muted state per spec: removing the
       // attribute must not unmute an element the user muted.
       this.defaultMuted = !isNull(newValue);
+
       if (!isNull(newValue)) this.muted = true;
     }
   }
 
   /**
-   * Reflects the content attribute like the native IDL attribute. Autoplay
-   * starts video immediately; the audio clock stays gated by autoplay
-   * policy until the first user gesture (see the unlock listeners in the
-   * event bridge), so the stream plays silently until then — pair with
-   * `muted` where silent startup should be explicit.
+   * Reflects the content attribute like the native IDL attribute. Autoplay starts video immediately; the audio clock
+   * stays gated by autoplay policy until the first user gesture (see the unlock listeners in the event bridge), so the
+   * stream plays silently until then — pair with `muted` where silent startup should be explicit.
    */
   override get autoplay(): boolean {
     return this.hasAttribute('autoplay');
@@ -205,15 +211,19 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     // The engine paused slot is the source of truth (play()/pause() write
     // it; a src change re-pauses) — mirror its transitions as events.
     let lastPaused = this.paused;
+
     own(
       effect(() => {
         const paused = this.engine.state.paused.get() ?? true;
         if (paused === lastPaused) return;
+
         lastPaused = paused;
+
         // The clock does not advance while paused, so a stale `#lastTime`
         // would make the first tick after resuming look like a stall and
         // flash the spinner on a perfectly healthy stream.
         if (!paused) this.#lastTime = this.currentTime;
+
         this.#dispatch(paused ? 'pause' : 'play');
       })
     );
@@ -223,6 +233,7 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       effect(() => {
         const presentation = this.engine.state.presentation.get();
         if (!isResolvedPresentation(presentation) || this.#readyState >= HAVE_METADATA) return;
+
         this.#readyState = HAVE_METADATA;
         this.#dispatch('loadedmetadata');
         this.#dispatch('durationchange');
@@ -239,12 +250,14 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
     own(
       effect(() => {
         if (this.engine.state.audioSuspended.get() !== true) return;
+
         const unlock = () => {
           // Paused during deferral means the user chose not to play —
           // leave the unlock to the next explicit play().
           if (!this.paused) void this.play().catch(() => {});
         };
         const doc = this.ownerDocument;
+
         doc.addEventListener('pointerdown', unlock, { capture: true, passive: true });
         doc.addEventListener('keydown', unlock, { capture: true });
         return () => {
@@ -266,16 +279,21 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
         this.#lastHeight = this.#canvas.height;
         this.#dispatch('resize');
       }
+
       if (this.paused) return;
+
       const time = this.currentTime;
+
       if (time !== this.#lastTime) {
         this.#lastTime = time;
+
         if (this.#readyState < HAVE_ENOUGH_DATA) {
           this.#readyState = HAVE_ENOUGH_DATA;
           this.#dispatch('canplay');
           this.#dispatch('canplaythrough');
           this.#dispatch('playing');
         }
+
         this.#dispatch('timeupdate');
       } else if (this.#readyState === HAVE_ENOUGH_DATA) {
         this.#readyState = HAVE_CURRENT_DATA;
@@ -283,6 +301,7 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
       }
     };
     const interval = setInterval(tick, TIME_POLL_INTERVAL_MS);
+
     own(() => clearInterval(interval));
   }
 
@@ -301,14 +320,18 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
   override set src(value: string) {
     const previous = super.src;
     if (value === previous) return;
+
     super.src = value;
     // Mirror the native load cycle for the new resource. Stream-type and
     // live-window values are derived from `src`, so their change events
     // ride along with the empty↔set transitions.
     this.#readyState = HAVE_NOTHING;
     this.#lastTime = 0;
+
     if (previous) this.#dispatch('emptied');
+
     if (value) this.#dispatch('loadstart');
+
     this.#dispatch('durationchange');
     this.#dispatch('streamtypechange');
     this.#dispatch('targetlivewindowchange');
@@ -361,7 +384,9 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
 
   override set volume(value: number) {
     const previous = super.volume;
+
     super.volume = value;
+
     if (super.volume !== previous) this.#dispatch('volumechange');
   }
 
@@ -371,6 +396,7 @@ class SimpleMoqMediaImpl extends MoqMediaBase {
 
   override set muted(value: boolean) {
     if (value === super.muted) return;
+
     super.muted = value;
     this.#dispatch('volumechange');
   }

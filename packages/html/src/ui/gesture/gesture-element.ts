@@ -1,19 +1,13 @@
-import {
-  createDoubleTapGesture,
-  createTapGesture,
-  type GestureActionName,
-  type GesturePointerType,
-  type GestureRegion,
-  resolveGestureAction,
-} from '@videojs/core/dom';
+import type { GestureProps } from '@videojs/core';
+import { createDoubleTapGesture, createTapGesture, resolveGestureAction } from '@videojs/core/dom';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
 import { ContextConsumer } from '@videojs/element/context';
 
 import { containerContext, playerContext } from '../../player/context';
 import { PlayerController } from '../../player/player-controller';
-import { MediaElement } from '../media-element';
+import { UIElement } from '../ui-element';
 
-export class GestureElement extends MediaElement {
+export class GestureElement extends UIElement {
   static readonly tagName = 'media-gesture';
 
   static override properties: PropertyDeclarationMap = {
@@ -25,12 +19,12 @@ export class GestureElement extends MediaElement {
     disabled: { type: Boolean },
   };
 
-  type: 'tap' | 'doubletap' | (string & {}) = '';
-  action: GestureActionName | (string & {}) = '';
-  value: number | undefined = undefined;
-  pointer: GesturePointerType | undefined = undefined;
-  region: GestureRegion | undefined = undefined;
-  disabled = false;
+  type: GestureProps['type'] | '' = '';
+  action: GestureProps['action'] = '';
+  value: GestureProps['value'] = undefined;
+  pointer: GestureProps['pointer'] = undefined;
+  region: GestureProps['region'] = undefined;
+  disabled: NonNullable<GestureProps['disabled']> = false;
 
   readonly #player = new PlayerController(this, playerContext);
   readonly #container = new ContextConsumer(this, {
