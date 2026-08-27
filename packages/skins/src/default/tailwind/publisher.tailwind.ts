@@ -95,7 +95,8 @@ export const root = (isShadowDOM: boolean) =>
 /* ==========================================================================
    Controls
    Publishers must always see mute/stop controls, so the bar never hides
-   (no `data-visible` show/hide behavior in v1).
+   (no `data-visible` show/hide behavior in v1). While the error dialog is
+   open, its backdrop overlays the bar — same as the video skins.
    ========================================================================== */
 
 export const controls = cn(
@@ -103,7 +104,6 @@ export const controls = cn(
   surface,
   'group/controls',
   'text-white z-10',
-  'peer-data-open/error:hidden!',
   'absolute bottom-2 inset-x-2',
   '@2xl/media-root:bottom-3 @2xl/media-root:inset-x-3',
   '@2xl/media-root:[--media-base-boundary-offset:3]'
