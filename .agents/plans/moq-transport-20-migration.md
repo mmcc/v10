@@ -212,6 +212,14 @@ speaks `moqt-20` only and deletes the draft-19 filter tags, Fetch Type
 structures, and the catalog joining FETCH. The five branch points below are
 kept as the list of what changes, not as runtime switches.
 
+**Status (2026-09-02):** Phases 1–4 landed on `feat/moq-transport-20` in
+commit `feat(spf): speak moq-transport draft-20 (moqt-20)`. Node and browser
+test projects pass, typecheck passes. Not yet done: an interop pass against
+relay.mux.dev / mux.global through the `moq-relay-interop` and `spf-moq-player`
+templates (the only verification a fake relay cannot give — in particular the
+audio join now starting at the live edge, and the catalog resolving from the
+relay's `relative-group 1` replay), and Phase 5 on `mmcc/moq-publisher`.
+
 Branch points on a `draft: 19 | 20` value in `createMoqtSession` config:
 
 1. LOCATION_FILTER encode/decode (tag form vs field list).
