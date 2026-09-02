@@ -191,8 +191,8 @@ export function preferredTargetLatencySeconds(
 
 /**
  * Media timestamp playout should join a jitter buffer at: `targetLatencySeconds` behind the newest buffered frame. A
- * relay replays several recent groups to every joining subscriber, so anchoring at the oldest buffered frame instead
- * parks playout that whole replay behind the live edge.
+ * current-group join (`relative-group 1`) is served from the relay's cache, so the first frames can be a whole group
+ * old; anchoring at the oldest buffered frame instead would park playout that whole replay behind the live edge.
  */
 export function joinAnchorUs(newestTimestampUs: number, targetLatencySeconds: number): number {
   return newestTimestampUs - targetLatencySeconds * MICROSECONDS_PER_SECOND;

@@ -2,7 +2,7 @@
  * Loopback MoQ relay — a synthetic MSF publisher for the sandbox.
  *
  * There is no public relay that serves draft-ietf-moq-msf-01 catalogs yet (Phase 0 interop is still owed), so this
- * stands in for one: it speaks real draft-19 bytes over an in-memory `MoqtTransport` and publishes real
+ * stands in for one: it speaks real draft-20 bytes over an in-memory `MoqtTransport` and publishes real
  * WebCodecs-encoded media, which is enough to drive the whole engine — catalog → selection → subscribe → decode →
  * canvas + AudioContext.
  *
@@ -19,7 +19,7 @@
 import type { CreateMoqTransport } from '@videojs/spf/moq';
 
 // ============================================================================
-// Wire primitives (draft-ietf-moq-transport-19)
+// Wire primitives (draft-ietf-moq-transport-20)
 // ============================================================================
 
 /** Control/request message types (§10, Table 5). */
@@ -40,8 +40,8 @@ const ERROR_INVALID_RANGE = 0x11;
  */
 const SUBGROUP_HEADER_TYPE = 0x31;
 
-/** LOC property IDs (draft-ietf-moq-loc-02 §2.3). */
-const LOC_TIMESTAMP = 0x06;
+/** LOC property IDs (draft-ietf-moq-loc-04 §2.3). */
+const LOC_TIMESTAMP = 0x10;
 
 /**
  * The vi64 varint of draft-15+ (§1.4.1) — leading ones on the first byte give the encoded length minus one, so an
@@ -672,8 +672,9 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
             if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
               onSubscribe(message.body);
             } else if (message.type === MESSAGE_TYPE.FETCH) {
-              // No history is retained: the engine falls back to joining the
-              // live catalog track, which is what a fresh live stream does.
+              // The engine never fetches — a draft-20 join is a subscription
+              // filter, and every subscription replays the newest group anyway.
+              // Anything else asking for history is refused: none is retained.
               await writer.write(encodeRequestError(ERROR_INVALID_RANGE, 'nothing published'));
               await writer.close();
               return;

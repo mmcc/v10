@@ -3,7 +3,7 @@
  * combined: reacts to `selected{Video,Audio}TrackId` (written by the reused `track-switching` behaviors) and keeps
  * exactly one live `track-subscriber` actor per type in context, feeding the renderers.
  *
- * Switches are **make-before-break**: the new track is subscribed at an MSF time-aligned boundary (`next-group-start` —
+ * Switches are **make-before-break**: the new track is subscribed at an MSF time-aligned boundary (`relative-group 0` —
  * groups open with a random-access point, and alternate-group tracks share group numbers, §4.2) while the old
  * subscription keeps playing. Only once the new subscriber has buffered a decodable keyframe-led group
  * (`hasDecodableFrame`) _and_ its oldest frame is due at the playout clock (`currentTime`) does the swap happen: old
@@ -475,7 +475,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               // Switch handoffs land on the next group boundary (an MSF
               // time-aligned random-access point); the initial join uses
               // the variant's configured filter.
-              locationFilter: current ? { type: 'next-group-start' } : wiring.joinFilter,
+              locationFilter: current ? { type: 'relative-group', groupsBeforeNext: 0 } : wiring.joinFilter,
               parameters: actor.getAuthParameters(),
               refreshAuth: () => actor.refreshAuthToken(),
               stallTimeoutMs: config?.subscribeStallTimeoutMs,
@@ -526,7 +526,7 @@ export const subscribeSelectedVideoTrack = defineBehavior({
         selectionKey: 'selectedVideoTrackId',
         subscriberKey: 'videoSubscriberActor',
         pendingKey: 'pendingVideoSubscriberActor',
-        joinFilter: { type: 'next-group-start' },
+        joinFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       },
       deps
     ),
@@ -567,7 +567,7 @@ export const subscribeSelectedAudioTrack = defineBehavior({
         selectionKey: 'selectedAudioTrackId',
         subscriberKey: 'audioSubscriberActor',
         pendingKey: 'pendingAudioSubscriberActor',
-        joinFilter: { type: 'largest-object' },
+        joinFilter: { type: 'next-object' },
       },
       deps,
       deps.state.audioSuspended

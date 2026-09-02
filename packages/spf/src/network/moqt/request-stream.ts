@@ -1,7 +1,7 @@
 /**
- * Per-request bidirectional-stream lifecycle (moq-transport draft-19 §3.3).
+ * Per-request bidirectional-stream lifecycle (moq-transport draft-20 §3.3).
  *
- * Draft-19's control model is request-stream based: each request (SUBSCRIBE, FETCH, TRACK_STATUS, …) opens its own
+ * The control model is request-stream based: each request (SUBSCRIBE, FETCH, TRACK_STATUS, …) opens its own
  * bidirectional stream, the first message on it is the request, and responses (SUBSCRIBE_OK / REQUEST_OK /
  * REQUEST_ERROR / PUBLISH_DONE / GOAWAY) arrive as control messages on the same stream. There is no UNSUBSCRIBE message
  * — cancellation IS the stream lifecycle: abort our sending direction (RESET_STREAM) and cancel the receiving direction

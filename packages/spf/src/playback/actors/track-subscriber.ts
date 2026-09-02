@@ -94,7 +94,7 @@ export interface TrackSubscriberContext {
 export interface CreateTrackSubscriberOptions {
   session: MoqtSession;
   track: MoqTrack;
-  /** Where to join the track. Default: `{ type: 'largest-object' }` (live edge). */
+  /** Where to join the track. Default: `{ type: 'next-object' }` (live edge). */
   locationFilter?: LocationFilter;
   /** Extra request parameters (auth tokens, priority). */
   parameters?: MessageParameters;
@@ -140,7 +140,7 @@ export interface TrackSubscriberActor extends Pick<
 // Implementation
 // =============================================================================
 
-const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'largest-object' };
+const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'next-object' };
 
 /** See `CreateTrackSubscriberOptions.stallTimeoutMs`. */
 export const DEFAULT_STALL_TIMEOUT_MS = 10_000;

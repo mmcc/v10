@@ -166,7 +166,7 @@ const DEFAULT_RELAY_ORIGIN = 'moqt://relay.mux.dev';
  * (the same shape as the publisher sandbox's `?ns=`), and an optional JWT. Delegates to the engine's own
  * `composeMoqSource` so the page cannot drift from the encoding `parseMoqSource` accepts. The token rides the `c4m`
  * fragment parameter, which the engine composes onto the connect URL as `?jwt=` — the only auth carriage the relay
- * fleet accepts (draft-19 AUTHORIZATION_TOKEN structures hard-close the session).
+ * fleet accepts (AUTHORIZATION_TOKEN request parameters hard-close the session).
  */
 function composeMsfSource(origin: string, path: string, token: string): string {
   return composeMoqSource(origin.trim() || DEFAULT_RELAY_ORIGIN, path, token ? { token } : {});

@@ -5,6 +5,7 @@
  * fully buffered — the 16-bit message length bounds them). `StreamReader` is the asynchronous counterpart for
  * unidirectional data streams, where headers and objects arrive incrementally over a WebTransport `ReadableStream`.
  */
+import { isMoqtProtocolError } from './errors';
 import { decodeVarint, encodeVarintInto, varintByteLength, varintLengthFromFirstByte } from './varint';
 
 const textEncoder = new TextEncoder();
@@ -41,6 +42,22 @@ export class ByteReader {
 
     this.#offset += byteLength;
     return value;
+  }
+
+  /**
+   * Read a varint whose legal range exceeds this codec's 2^53−1 ceiling — PUBLISH_DONE's Stream Count uses 2^64−1 as
+   * its "could not count" sentinel (§10.12). A value above the ceiling reads as `undefined` and is skipped, instead of
+   * failing the session the way `readVarint` does.
+   */
+  readUnboundedVarint(): number | undefined {
+    try {
+      return this.readVarint();
+    } catch (error) {
+      if (!isMoqtProtocolError(error)) throw error;
+
+      this.#offset += varintLengthFromFirstByte(this.#bytes[this.#offset]!);
+      return undefined;
+    }
   }
 
   readUint8(): number {
