@@ -214,11 +214,39 @@ kept as the list of what changes, not as runtime switches.
 
 **Status (2026-09-02):** Phases 1–4 landed on `feat/moq-transport-20` in
 commit `feat(spf): speak moq-transport draft-20 (moqt-20)`. Node and browser
-test projects pass, typecheck passes. Not yet done: an interop pass against
-relay.mux.dev / mux.global through the `moq-relay-interop` and `spf-moq-player`
-templates (the only verification a fake relay cannot give — in particular the
-audio join now starting at the live edge, and the catalog resolving from the
-relay's `relative-group 1` replay), and Phase 5 on `mmcc/moq-publisher`.
+test projects pass, typecheck passes.
+
+**Live pass (2026-09-03, headless Chromium → sjc.relay.mux.global, moq-relay
+0.14.14, token-authenticated; publisher = the `mmcc/moq-publisher` sandbox's
+synthetic draft-19 stream under `mattypoo/vjs-probe`):**
+
+- WebTransport negotiates `moqt-20` (`transport.protocol`); server SETUP
+  reports `moq-lite-rs` plus the RELAY_HOPS / SOLICIT setup options; session
+  ready in ~250 ms.
+- Catalog with `relative-group 1`: SUBSCRIBE_OK, then object g0 o0 (the
+  independent catalog) on the subscription stream. The same track with
+  `next-object`: SUBSCRIBE_OK carrying LARGEST_OBJECT `{0,0}`, then an empty
+  subgroup stream — the relay is strict, so the old join would never have
+  resolved a catalog. Both confirm the Consequences section.
+- Video with `relative-group 1`: SUBSCRIBE_OK carried LARGEST_OBJECT
+  `{group 35, object 28}` (length-prefixed, decoded correctly) and delivery
+  began at g35 o0 — the IDR — with 60 objects for that group before live
+  groups g36… each from o0. Audio likewise starts each group at o0 (one
+  object per group from this publisher).
+- The real player (`moq-relay-interop` template): catalog resolved ~350 ms
+  after SETUP, both tracks subscribed, `playing` at ~2.5 s, measured latency
+  converged 0.27 s → 0.48 s against the 0.5 s target, playout `stable`, no
+  console errors over 36 s. Audio joining at the live edge did not upset the
+  latency controller.
+- Relay quirks seen: REQUEST_ERROR `0x194` ("Broadcast not found", an HTTP
+  404 as a MoQ code — unknown to us, so it retries with backoff as intended);
+  SUBSCRIBE_NAMESPACE under the token root answered REQUEST_OK but announced
+  nothing even while the broadcast was live.
+- relay.mux.dev could not be tested: its `*.relay.mux.dev` certificate
+  expired 2026-08-26 and WebTransport does not honor certificate-error
+  overrides.
+
+Remaining: Phase 5 on `mmcc/moq-publisher`.
 
 Branch points on a `draft: 19 | 20` value in `createMoqtSession` config:
 
