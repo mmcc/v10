@@ -165,6 +165,11 @@ function setupResolveCatalog({
 
           const apply = (text: string, groupId: number, objectId: number): void => {
             if (objectId === 0) {
+              // Groups travel on separate streams, so an older group's
+              // independent object can land after a newer group's. Applying
+              // it would roll the presentation back to a superseded catalog.
+              if (baseGroup !== undefined && groupId < baseGroup) return;
+
               baseGroup = groupId;
             } else if (catalog === undefined || groupId !== baseGroup) {
               // A delta with no base can't be interpreted (msf §5.1.6), and

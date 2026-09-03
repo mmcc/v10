@@ -170,10 +170,13 @@ export interface MoqtSessionCallbacks {
   /**
    * A server-initiated PUBLISH arrived. Call exactly one of the responders. Absent, the session rejects with
    * UNINTERESTED (a subscribe-only client).
+   *
+   * `accept` sends a bare PUBLISH_OK: since draft-20 the subscription parameters (FORWARD, LOCATION_FILTER, …) are
+   * legal only on PUBLISH and REQUEST_UPDATE, and a parameter in the wrong message is a PROTOCOL_VIOLATION (§10.2.1).
    */
   onIncomingPublish?(
     publish: IncomingPublish,
-    respond: { accept(parameters?: MessageParameters): void; reject(errorCode?: number, reason?: string): void }
+    respond: { accept(): void; reject(errorCode?: number, reason?: string): void }
   ): void;
   /** The session ended — transport closed, or a fatal protocol error. */
   onClosed?(info: { error?: unknown }): void;
@@ -985,11 +988,11 @@ class MoqtSessionImpl implements MoqtSession {
         let responded = false;
 
         callbacks.onIncomingPublish(message, {
-          accept: (parameters) => {
+          accept: () => {
             if (responded) return;
 
             responded = true;
-            void respond(encodeRequestOk(parameters ?? {}));
+            void respond(encodeRequestOk());
           },
           reject: (errorCode = REQUEST_ERROR_CODE.UNINTERESTED, reason = '') => {
             if (responded) return;

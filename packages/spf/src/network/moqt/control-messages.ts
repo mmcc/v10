@@ -968,7 +968,9 @@ export function encodeGoaway(timeout = 0): Uint8Array {
 /**
  * REQUEST_OK (§10.5). The subscriber sends this to accept an incoming PUBLISH (PUBLISH_OK). Track Properties are always
  * empty in that role, and since draft-20 so are the parameters — a subscriber changes subscription parameters with
- * REQUEST_UPDATE, not in PUBLISH_OK (§10.11).
+ * REQUEST_UPDATE, not in PUBLISH_OK (§10.11); the session driver's `accept()` therefore takes none. The parameter slot
+ * stays for the publisher-side roles of REQUEST_OK (TRACK_STATUS_OK, REQUEST_UPDATE_OK), which the fake peer in tests
+ * exercises.
  */
 export function encodeRequestOk(parameters: MessageParameters = {}): Uint8Array {
   const body = new ByteWriter();

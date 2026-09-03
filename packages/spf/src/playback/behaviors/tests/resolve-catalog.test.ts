@@ -224,6 +224,31 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
+  it('drops a straggling independent object from a superseded group', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, CATALOG));
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    // The older group's catalog arrives late: it must not roll the
+    // presentation back, and its deltas must stay dropped too.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG_WITH_AUDIO));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    // The base group's own deltas still apply.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+
+    reactor.destroy();
+  });
+
   // refreshAuthToken always rejects (see moq-session.ts) — a refreshed
   // token has no connection left to attach to. The one-shot retry must
   // give up as a terminal state like any other permanent rejection:
