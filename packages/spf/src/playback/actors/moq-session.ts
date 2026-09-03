@@ -15,12 +15,12 @@
  *
  * Also the home of the MSF §11.4 auth seam: `authProvider` supplies the initial authorization token (defaulting to the
  * source's `c4m` fragment token), composed onto the connect URL's `?jwt=` query parameter — the only carriage the known
- * relay fleet (moq-lite-rs lineage) accepts; see `composePlaybackConnectUrl`. `getAuthParameters()` always resolves
- * empty — nothing rides a request's parameters. `refreshAuthToken()` always rejects: this actor connects once and never
- * reconnects (a `goaway` is only recorded, see `SessionMessage`'s `'goaway'` case), so a refreshed token has nowhere
- * left to attach — the jwt is fixed at connect time. Both stay on the interface (with `MoqAuthProvider.refreshToken`)
- * for a future relay generation that accepts draft-19 AUTHORIZATION_TOKEN request parameters, at which point a token
- * could ride a request instead of only the connect URL.
+ * relay fleet (moq-relay, moq-dev/moq lineage) accepts; see `composePlaybackConnectUrl`. `getAuthParameters()` always
+ * resolves empty — nothing rides a request's parameters. `refreshAuthToken()` always rejects: this actor connects once
+ * and never reconnects (a `goaway` is only recorded, see `SessionMessage`'s `'goaway'` case), so a refreshed token has
+ * nowhere left to attach — the jwt is fixed at connect time. Both stay on the interface (with
+ * `MoqAuthProvider.refreshToken`) for a future relay generation that accepts AUTHORIZATION_TOKEN request parameters, at
+ * which point a token could ride a request instead of only the connect URL.
  */
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import type { MoqSource } from '../../media/moq/parse-source';
@@ -71,8 +71,8 @@ export interface MoqAuthProvider {
    * Unused today: `MoqSessionActor.refreshAuthToken()` rejects before ever calling this — see its doc. A refreshed
    * token has no connection left to attach to (the jwt rides only the connect URL, fixed at connect time), so calling
    * this here would mint a token from the provider that no code could ever use. Kept on the interface for a future
-   * relay generation that accepts draft-19 AUTHORIZATION_TOKEN request parameters, at which point a mid-session refresh
-   * becomes meaningful.
+   * relay generation that accepts AUTHORIZATION_TOKEN request parameters, at which point a mid-session refresh becomes
+   * meaningful.
    */
   refreshToken?(): Promise<Uint8Array | string | undefined> | Uint8Array | string | undefined;
   /** MOQT auth Token Type codepoint. Default 0. */
@@ -169,13 +169,13 @@ function skipTokenResolution(url: string): boolean {
 }
 
 /**
- * Compose the WebTransport connect URL for a source. moq-lite-rs lineage relays (Mux's relay-rs fleet, the Varnish lab
- * relays) authenticate with a JWT `?jwt=` query parameter on the connect URL and close the connection right after
- * CLIENT_SETUP when auth is required but missing — the same carriage `composePublishConnectUrl` uses on the publish
- * side (`publish/session/publish-session.ts`), for the same reason: this relay fleet hard-closes the session (`5
- * "invalid value"`) when a draft-19 AUTHORIZATION_TOKEN structure rides a request's parameters instead. An explicit
- * `jwt` param already in the source URL wins, and an unparseable URL is returned verbatim so `new WebTransport(url)`
- * raises the canonical error.
+ * Compose the WebTransport connect URL for a source. moq-relay (moq-dev/moq lineage — it still announces itself as
+ * `moq-lite-rs` in SETUP; Mux's fleet, the Varnish lab relays) authenticates with a JWT `?jwt=` query parameter on the
+ * connect URL and closes the connection right after CLIENT_SETUP when auth is required but missing — the same carriage
+ * `composePublishConnectUrl` uses on the publish side (`publish/session/publish-session.ts`), for the same reason: this
+ * relay fleet hard-closes the session (`5 "invalid value"`) when a AUTHORIZATION_TOKEN structure rides a request's
+ * parameters instead. An explicit `jwt` param already in the source URL wins, and an unparseable URL is returned
+ * verbatim so `new WebTransport(url)` raises the canonical error.
  */
 export function composePlaybackConnectUrl(url: string, authToken?: string): string {
   if (!authToken) return url;
@@ -392,13 +392,13 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
   void start();
 
   // The token rides ONLY in the connect URL's `?jwt=` query parameter
-  // (`composePlaybackConnectUrl`). The known relay fleet (moq-lite-rs
-  // lineage, incl. Mux's relay-rs deployments) does not support draft-19
-  // AUTHORIZATION_TOKEN structures yet and hard-closes the session
-  // (`5 "invalid value"`) when one appears in a request's parameters —
-  // the same defect fixed on the publish side in `publish-session.ts`.
-  // Re-attach via this seam (encodeAuthTokenUseValue, §10.2.2) once
-  // relays accept draft-19 auth.
+  // (`composePlaybackConnectUrl`). The known relay fleet (moq-relay,
+  // moq-dev/moq lineage, incl. Mux's deployments) does not accept the
+  // AUTHORIZATION_TOKEN request parameter (0x03 is not in its SUBSCRIBE
+  // parameter list) and hard-closes the session (`5 "invalid value"`)
+  // when one appears — the same defect fixed on the publish side in
+  // `publish-session.ts`. Re-attach via this seam
+  // (encodeAuthTokenUseValue, §10.2.2) once relays accept it.
   const tokenParameters = (): MessageParameters => ({});
 
   return {

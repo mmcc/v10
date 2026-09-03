@@ -208,7 +208,7 @@ describe('subscribeSelectedVideoTrack', () => {
     await vi.waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]!.options).toMatchObject({
       track: { id: HD.id },
-      locationFilter: { type: 'next-group-start' },
+      locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
     });
     expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
     expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
@@ -335,12 +335,12 @@ describe('subscribeSelectedVideoTrack', () => {
     expect(deps.context.videoSubscriberActor.get()).toBeUndefined();
     expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
 
-    // Resume: a fresh initial join (next-group-start), not a handoff.
+    // Resume: a fresh initial join (relative-group 0), not a handoff.
     deps.state.mediaSuspended.set(undefined);
     await vi.waitFor(() => expect(created).toHaveLength(2));
     expect(created[1]!.options).toMatchObject({
       track: { id: HD.id },
-      locationFilter: { type: 'next-group-start' },
+      locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
     });
     expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
     expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
@@ -487,7 +487,7 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(2);
       expect(created[1]!.options).toMatchObject({
         track: { id: HD.id },
-        locationFilter: { type: 'next-group-start' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       });
       expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
       expect(deps.context.pendingVideoSubscriberActor.get()).toBeUndefined();
@@ -517,7 +517,7 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(2);
       expect(created[1]!.options).toMatchObject({
         track: { id: HD.id },
-        locationFilter: { type: 'next-group-start' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       });
       expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
 
@@ -553,7 +553,7 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(3);
       expect(created[2]!.options).toMatchObject({
         track: { id: SD.id },
-        locationFilter: { type: 'next-group-start' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       });
       expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[2]);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
@@ -754,7 +754,7 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(2);
       expect(created[1]!.options).toMatchObject({
         track: { id: SD.id },
-        locationFilter: { type: 'next-group-start' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       });
       expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
 
@@ -783,7 +783,7 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(2);
       expect(created[1]!.options).toMatchObject({
         track: { id: SD.id },
-        locationFilter: { type: 'next-group-start' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       });
       expect(deps.context.videoSubscriberActor.get()).toBe(created[1]);
 
@@ -816,7 +816,7 @@ describe('subscribeSelectedVideoTrack', () => {
       expect(created).toHaveLength(3);
       expect(created[2]!.options).toMatchObject({
         track: { id: LD.id },
-        locationFilter: { type: 'next-group-start' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
       });
       expect(deps.context.pendingVideoSubscriberActor.get()).toBe(created[2]);
       expect(deps.context.videoSubscriberActor.get()).toBe(created[0]);
@@ -836,7 +836,7 @@ describe('subscribeSelectedAudioTrack', () => {
     await vi.waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]!.options).toMatchObject({
       track: { id: MAIN_AUDIO.id },
-      locationFilter: { type: 'largest-object' },
+      locationFilter: { type: 'next-object' },
     });
 
     // Autoplay started without a gesture: the adapter defers audio.
@@ -850,7 +850,7 @@ describe('subscribeSelectedAudioTrack', () => {
     await vi.waitFor(() => expect(created).toHaveLength(2));
     expect(created[1]!.options).toMatchObject({
       track: { id: MAIN_AUDIO.id },
-      locationFilter: { type: 'largest-object' },
+      locationFilter: { type: 'next-object' },
     });
     expect(deps.context.audioSubscriberActor.get()).toBe(created[1]);
 
@@ -904,7 +904,7 @@ describe('subscribeSelectedAudioTrack', () => {
       expect(created).toHaveLength(2);
       expect(created[1]!.options).toMatchObject({
         track: { id: MAIN_AUDIO.id },
-        locationFilter: { type: 'largest-object' },
+        locationFilter: { type: 'next-object' },
       });
       expect(deps.context.audioSubscriberActor.get()).toBe(created[1]);
       expect(deps.context.pendingAudioSubscriberActor.get()).toBeUndefined();

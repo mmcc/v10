@@ -205,7 +205,7 @@ describe('createAudioRendererActor', () => {
   it('decodes a live-edge join whose first frame is mid-group (isKey: false)', async () => {
     const frames = await encodeTestFrames(3);
 
-    // A `largest-object` subscribe joins live, so the first delivered frame
+    // A `next-object` subscribe joins live, so the first delivered frame
     // is whatever object is newest right now — essentially never a LOC
     // group's object 0 (`isKey: true`). The regression: decode() gated the
     // WebCodecs chunk type on `isKey`, and WebCodecs rejects a 'delta'

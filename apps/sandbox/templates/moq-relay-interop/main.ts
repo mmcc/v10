@@ -1,4 +1,4 @@
-// MoQ (draft-ietf-moq-transport-19 / MSF) relay interop smoke test.
+// MoQ (draft-ietf-moq-transport-20 / MSF) relay interop smoke test.
 // http://localhost:5173/moq-relay-interop/
 //
 // Query params:

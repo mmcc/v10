@@ -11,6 +11,7 @@ Use this file for durable repository rules. Prefer retrieval-led reasoning: insp
 - Current behavior: implementation and colocated tests
 - Public package behavior: package source, exports, and README files
 - Architecture rationale: `internal/design/`, `internal/decisions/`, and `rfc/`
+- Protocol drafts the MoQ stack implements: `internal/specs/moq/` (vendored IETF texts; its README lists the pinned revisions)
 
 When prose conflicts with executable sources, follow the executable source and update stale prose in the same change.
 

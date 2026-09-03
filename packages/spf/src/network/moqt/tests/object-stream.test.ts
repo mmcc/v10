@@ -388,11 +388,17 @@ describe('readFetchEntries', () => {
     await expect(collect(readFetchEntries(reader))).rejects.toThrow(/payload length .* exceeds/);
   });
 
-  it('yields end-of-range markers', async () => {
+  it('yields end-of-range markers for all three statuses (§11.4.4, Table 7)', async () => {
     const bytes = encodeFetchStream((w) => {
       w.writeVarint(0x8c); // End of Non-Existent Range
       w.writeVarint(4);
       w.writeVarint(20);
+      w.writeVarint(0x10c); // End of Unknown Range
+      w.writeVarint(5);
+      w.writeVarint(0);
+      w.writeVarint(0x20c); // End of Timed-Out Range
+      w.writeVarint(6);
+      w.writeVarint(2);
     });
     const reader = new StreamReader(streamOf(bytes));
 
@@ -400,7 +406,11 @@ describe('readFetchEntries', () => {
     await readFetchHeader(reader);
     const entries = await collect(readFetchEntries(reader));
 
-    expect(entries).toEqual([{ kind: 'end-of-range', status: 'non-existent', groupId: 4, objectId: 20 }]);
+    expect(entries).toEqual([
+      { kind: 'end-of-range', status: 'non-existent', groupId: 4, objectId: 20 },
+      { kind: 'end-of-range', status: 'unknown', groupId: 5, objectId: 0 },
+      { kind: 'end-of-range', status: 'timed-out', groupId: 6, objectId: 2 },
+    ]);
   });
 
   it('rejects a first object that references the prior object', async () => {

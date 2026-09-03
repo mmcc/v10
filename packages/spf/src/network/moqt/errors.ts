@@ -1,5 +1,5 @@
 /**
- * MOQT session-termination error codes (moq-transport draft-19 §3.5). Used as the close code when terminating the
+ * MOQT session-termination error codes (moq-transport draft-20 §3.5). Used as the close code when terminating the
  * transport session and as the `code` carried by `MoqtProtocolError`.
  */
 export const SESSION_ERROR = {
@@ -17,7 +17,6 @@ export const SESSION_ERROR = {
   DATA_STREAM_TIMEOUT: 0x12,
   AUTH_TOKEN_CACHE_OVERFLOW: 0x13,
   DUPLICATE_AUTH_TOKEN_ALIAS: 0x14,
-  VERSION_NEGOTIATION_FAILED: 0x15,
   MALFORMED_AUTH_TOKEN: 0x16,
   UNKNOWN_AUTH_TOKEN_ALIAS: 0x17,
   EXPIRED_AUTH_TOKEN: 0x18,

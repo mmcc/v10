@@ -88,7 +88,7 @@ describe('createMoqSessionActor', () => {
     expect(actor.snapshot.get().context.status).toBe('connecting');
     expect(makeCreateTransport.lastConnect).toMatchObject({
       connectUrl: 'https://relay.example.com/live',
-      protocols: ['moqt-19'],
+      protocols: ['moqt-20'],
     });
 
     fake.sendServerSetup();
@@ -176,7 +176,7 @@ describe('createMoqSessionActor', () => {
   });
 
   // The known relay fleet (moq-lite-rs lineage) hard-closes the session on
-  // draft-19 AUTHORIZATION_TOKEN structures — the token must ride ONLY in
+  // AUTHORIZATION_TOKEN request parameters — the token must ride ONLY in
   // the connect URL's `?jwt=` query parameter, matching the publish side's
   // `composePublishConnectUrl` fix.
   it('composes the c4m fragment token onto the connect URL as ?jwt=, keeping auth parameters empty', () => {

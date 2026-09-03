@@ -10,7 +10,7 @@
  *
  * ## What it can observe, and what it cannot
  *
- * There is no transport RTT here. spf speaks its own draft-19 stack (no PROBE — that is a moq-lite extension) and
+ * There is no transport RTT here. spf speaks its own draft-20 stack (no PROBE — that is a moq-lite extension) and
  * browsers do not populate `WebTransport.getStats().smoothedRtt`, so the absolute one-way delay is simply not
  * available. The no-RTT path is therefore the only path, and the estimate is built from what _is_ observable:
  *

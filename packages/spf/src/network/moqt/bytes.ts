@@ -43,6 +43,23 @@ export class ByteReader {
     return value;
   }
 
+  /**
+   * Read a count whose "unknown" sentinel is the maximal varint 2^64−1 — PUBLISH_DONE's Stream Count (§10.12). Exactly
+   * that sentinel reads as `undefined`; any other value above this codec's 2^53−1 ceiling is still the protocol error
+   * `readVarint` raises, since no real count gets there.
+   */
+  readCountVarint(): number | undefined {
+    const offset = this.#offset;
+
+    // 2^64−1 has one encoding: the 9-byte form with every bit set.
+    if (this.remaining >= 9 && this.#bytes.subarray(offset, offset + 9).every((byte) => byte === 0xff)) {
+      this.#offset += 9;
+      return undefined;
+    }
+
+    return this.readVarint();
+  }
+
   readUint8(): number {
     if (this.remaining < 1) throw new RangeError('read past end of buffer');
 
