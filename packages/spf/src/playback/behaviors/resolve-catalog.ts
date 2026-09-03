@@ -169,8 +169,6 @@ function setupResolveCatalog({
               // independent object can land after a newer group's. Applying
               // it would roll the presentation back to a superseded catalog.
               if (baseGroup !== undefined && groupId < baseGroup) return;
-
-              baseGroup = groupId;
             } else if (catalog === undefined || groupId !== baseGroup) {
               // A delta with no base can't be interpreted (msf §5.1.6), and
               // one from another group would apply against the wrong base;
@@ -180,6 +178,12 @@ function setupResolveCatalog({
 
             try {
               catalog = applyUpdate(catalog, text, updateOptions);
+
+              // The base moves only once its independent object parsed: a
+              // malformed one leaves the previous catalog in place, and its
+              // group's deltas are dropped rather than applied to it.
+              if (objectId === 0) baseGroup = groupId;
+
               state.presentation.set(moqCatalogToPresentation(catalog, presentation, source.sessionUri));
             } catch (error) {
               // TODO(error-management): route to a state-error slot once one exists.

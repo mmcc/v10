@@ -2,10 +2,12 @@
 
 Planning pass dated 2026-09-02. `draft-ietf-moq-transport-20` was published
 2026-08-31 and is vendored at `internal/specs/moq/draft-ietf-moq-transport-20.txt`
-(its Appendix A.1 is the authoritative change list). The code on `mmcc/moq`
-and `mmcc/moq-publisher` pins draft-19 (`MOQT_PROTOCOL_ID = 'moqt-19'`).
-LOC-04 and MSF-01 did not change; loc.ts already uses the loc-04 property IDs
-that draft-20 §15.8 now mirrors, so no LOC/MSF code moves.
+(its Appendix A.1 is the authoritative change list). Before this branch the
+code on `mmcc/moq` and `mmcc/moq-publisher` pinned draft-19
+(`MOQT_PROTOCOL_ID = 'moqt-19'`); `feat/moq-transport-20` moves the player to
+`moqt-20`, and the publisher branch follows in Phase 5. LOC-04 and MSF-01 did
+not change; loc.ts already uses the loc-04 property IDs that draft-20 §15.8
+now mirrors, so no LOC/MSF code moves.
 
 The relay fleet (mux.global and relay.mux.dev, both updated 2026-09-02) runs
 moq-relay 0.14.14, released 2026-09-01, which added `moqt-20` in moq-dev/moq

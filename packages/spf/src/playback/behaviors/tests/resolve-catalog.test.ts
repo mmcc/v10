@@ -249,6 +249,37 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
+  // A malformed independent object must not move the base: otherwise the
+  // new group's deltas would apply to the previous group's catalog.
+  it('keeps the previous base when an independent object fails to parse', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, '{"version":"1","tracks":'));
+    expect(consoleError).toHaveBeenCalledWith('[resolveCatalog] catalog parse failed:', expect.anything());
+
+    // Group 6's delta has no valid base of its own; it must not land on
+    // group 5's catalog.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    // The next well-formed independent object recovers.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(7, 0, CATALOG_WITH_AUDIO));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
   // refreshAuthToken always rejects (see moq-session.ts) — a refreshed
   // token has no connection left to attach to. The one-shot retry must
   // give up as a terminal state like any other permanent rejection:

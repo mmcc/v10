@@ -200,6 +200,13 @@ describe('encodePublishDone', () => {
       reason: '',
     });
   });
+
+  it('rejects a stream count above 2^53-1 that is not the sentinel', () => {
+    // A 9-byte varint one bit short of the sentinel: 2^63 + …, not a count any publisher can mean.
+    const body = Uint8Array.of(PUBLISH_DONE_STATUS.GOING_AWAY, 0xff, 0x80, ...new Array<number>(7).fill(0xff), 0x00);
+
+    expect(() => decodeControlMessage({ type: MESSAGE_TYPE.PUBLISH_DONE, body })).toThrow(MoqtProtocolError);
+  });
 });
 
 describe('encodePublishStateNotify', () => {

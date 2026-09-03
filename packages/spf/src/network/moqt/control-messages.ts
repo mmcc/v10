@@ -1231,9 +1231,10 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
     case MESSAGE_TYPE.PUBLISH_DONE: {
       const statusCode = reader.readVarint();
       // A publisher that cannot count its streams MUST send 2^64−1 (§10.12),
-      // which is above this codec's varint ceiling — read it as "unknown"
-      // rather than failing the session over a legitimate PUBLISH_DONE.
-      const streamCount = reader.readUnboundedVarint();
+      // which is above this codec's varint ceiling — read that one value as
+      // "unknown" rather than failing the session over a legitimate
+      // PUBLISH_DONE. Any other count past the ceiling stays a protocol error.
+      const streamCount = reader.readCountVarint();
 
       return { kind: 'publish-done', statusCode, streamCount, reason: readReasonPhrase(reader) };
     }
