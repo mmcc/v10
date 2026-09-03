@@ -723,27 +723,39 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         }
 
         // SUBSCRIBE_OK (§10.8): track alias + message parameters
-        // (count-prefixed; the publish engine sends none — per-type
-        // encodings make a non-empty block unskippable) + track-property
-        // KVPs to the end of the body (delta-encoded types; even type →
-        // varint value, odd → length-prefixed bytes). TIMESCALE is the
-        // one property the engine declares (LOC stamps in microseconds).
+        // (count-prefixed) + track-property KVPs to the end of the body.
+        // Both blocks are delta-typed with the same parity encoding — even
+        // type → varint value, odd → length-prefixed bytes — so each skips
+        // cleanly. The publish engine sends LARGEST_OBJECT (§10.2.17, an
+        // odd/length-prefixed parameter) in the parameter block once the
+        // track has content; TIMESCALE (LOC's microsecond stamp) is the one
+        // track property it declares.
         const fields = new Reader(response.body);
 
         trackAlias = fields.varint();
+
+        const parameterCount = fields.varint();
+        let previousParameterType = 0;
+
+        for (let index = 0; index < parameterCount; index++) {
+          const parameterType = previousParameterType + fields.varint();
+
+          previousParameterType = parameterType;
+
+          if (parameterType % 2 === 0) fields.varint();
+          else fields.slice(fields.varint());
+        }
+
         let timescale: number | undefined;
+        let previousType = 0;
 
-        if (fields.varint() === 0) {
-          let previousType = 0;
+        while (fields.offset < response.body.length) {
+          const propertyType = previousType + fields.varint();
 
-          while (fields.offset < response.body.length) {
-            const propertyType = previousType + fields.varint();
+          previousType = propertyType;
+          const value = propertyType % 2 === 0 ? fields.varint() : fields.slice(fields.varint());
 
-            previousType = propertyType;
-            const value = propertyType % 2 === 0 ? fields.varint() : fields.slice(fields.varint());
-
-            if (propertyType === TRACK_PROPERTY_TIMESCALE && typeof value === 'number') timescale = value;
-          }
+          if (propertyType === TRACK_PROPERTY_TIMESCALE && typeof value === 'number') timescale = value;
         }
 
         bindAlias(trackAlias, track);

@@ -4,6 +4,7 @@ import { toLocFrame } from '../../../media/moq/loc';
 import { packageLocFrame } from '../../../media/moq/loc-packaging';
 import { applyMoqCatalogUpdate } from '../../../media/moq/parse-catalog';
 import { utf8Decode, utf8Encode } from '../../../network/moqt/bytes';
+import { StreamReader } from '../../../network/moqt/bytes';
 import {
   type ControlMessage,
   ControlMessageDeframer,
@@ -18,7 +19,7 @@ import {
   TRACK_PROPERTY,
   type TrackNamespace,
 } from '../../../network/moqt/control-messages';
-import type { MoqtObject } from '../../../network/moqt/object-stream';
+import { type MoqtObject, readFetchHeader, STREAM_TYPE } from '../../../network/moqt/object-stream';
 import { createMoqtSession, type MoqtSession } from '../../../network/moqt/session';
 import {
   openRawRequest,
@@ -859,6 +860,103 @@ describe('createMoqtPublishSession', () => {
       expect(closes).toHaveLength(1);
     });
     subscriber.destroy();
+  });
+
+  it('reports the track Largest Object in SUBSCRIBE_OK once content exists', async () => {
+    const { pair, session, subscriber } = makePublishHarness();
+
+    await session.ready;
+    let largest: { group: number; object: number } | undefined;
+
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video', getLargestObject: () => largest });
+
+    // No content yet — SUBSCRIBE_OK omits LARGEST_OBJECT (§10.2.17).
+    const early = await rawSubscribe(pair.server, 'video', 201);
+
+    await vi.waitFor(() => {
+      expect(early.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    });
+    const earlyOk = early.received[0];
+
+    expect(earlyOk?.kind).toBe('subscribe-ok');
+
+    if (earlyOk?.kind === 'subscribe-ok') expect(earlyOk.parameters.largestObject).toBeUndefined();
+
+    // Once objects have been written, the next SUBSCRIBE_OK carries it
+    // (length-prefixed, the way moq-lite-rs decodes it).
+    largest = { group: 35, object: 28 };
+    const later = await rawSubscribe(pair.server, 'video', 203);
+
+    await vi.waitFor(() => {
+      expect(later.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    });
+    const laterOk = later.received[0];
+
+    expect(laterOk?.kind).toBe('subscribe-ok');
+
+    if (laterOk?.kind === 'subscribe-ok') expect(laterOk.parameters.largestObject).toEqual({ group: 35, object: 28 });
+
+    session.destroy();
+    subscriber.destroy();
+  });
+
+  it('opens and resets a fill fetch stream for an inbound FILL_PARAMETERS', async () => {
+    // No subscribe driver on the peer side: it sends the server SETUP by
+    // hand and watches the publisher's uni streams for the fill.
+    const pair = createTransportPair();
+    const session = createMoqtPublishSession(pair.client);
+    const fills: { requestId: number; reset: boolean }[] = [];
+
+    void (async () => {
+      const streams = pair.server.incomingUnidirectionalStreams.getReader();
+
+      while (true) {
+        const { done, value } = await streams.read();
+        if (done) break;
+
+        void (async () => {
+          const reader = new StreamReader(value);
+          const type = await reader.readVarint().catch(() => -1);
+          if (type !== STREAM_TYPE.FETCH_HEADER) return;
+
+          const { requestId } = await readFetchHeader(reader);
+
+          // The publisher resets after the FETCH_HEADER; the drain throws.
+          try {
+            while (!(await reader.atEnd())) await reader.readUint8();
+
+            fills.push({ requestId, reset: false });
+          } catch {
+            fills.push({ requestId, reset: true });
+          }
+        })();
+      }
+    })();
+
+    const control = await pair.server.createUnidirectionalStream();
+
+    await control.getWriter().write(encodeSetup());
+    await session.ready;
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+
+    await openRawRequest(
+      pair.server,
+      encodeSubscribe({
+        requestId: 205,
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        parameters: {
+          forward: 1,
+          locationFilter: { type: 'next-object' },
+          fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+        },
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(fills).toEqual([{ requestId: 205, reset: true }]);
+    });
+    session.destroy();
   });
 
   it('rejects a subscription update it cannot apply instead of acknowledging it', async () => {

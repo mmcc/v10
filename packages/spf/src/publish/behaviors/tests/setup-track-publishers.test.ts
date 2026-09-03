@@ -168,7 +168,8 @@ describe('setupTrackPublishers', () => {
     });
     const publisher = context.videoTrackPublisher.get()!;
 
-    // Unsubscribed: a keyframe goes nowhere (pull-through ingest).
+    // Unsubscribed: a keyframe opens no stream (pull-through ingest) but
+    // is retained as the in-progress group.
     publisher.send({ type: 'frame', payload: new Uint8Array([1]), properties: [], keyframe: true, timestampUs: 0 });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(publisher.snapshot.get().context.openedGroups).toBe(0);
@@ -183,8 +184,14 @@ describe('setupTrackPublishers', () => {
       expect(actor.snapshot.get().context.trackBindings.video).toBeDefined();
     });
 
-    // The binding-sync effect has bound the publisher — the next keyframe
-    // reaches the subscriber.
+    // The binding-sync effect bound the publisher, which replays the
+    // retained in-progress group from object 0 — the instant join.
+    await vi.waitFor(() => {
+      expect(payloads).toHaveLength(1);
+    });
+    expect(payloads[0]).toEqual(new Uint8Array([1]));
+
+    // A live keyframe follows on the same subscription.
     publisher.send({
       type: 'frame',
       payload: new Uint8Array([2, 2]),
@@ -193,9 +200,9 @@ describe('setupTrackPublishers', () => {
       timestampUs: 1_000,
     });
     await vi.waitFor(() => {
-      expect(payloads).toHaveLength(1);
+      expect(payloads).toHaveLength(2);
     });
-    expect(payloads[0]).toEqual(new Uint8Array([2, 2]));
+    expect(payloads[1]).toEqual(new Uint8Array([2, 2]));
   });
 
   it('keeps the publishers through an encodings gap and destroys them when the session goes away', async () => {

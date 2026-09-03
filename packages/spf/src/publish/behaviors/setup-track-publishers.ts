@@ -223,15 +223,22 @@ function addTrackPublisher(
   trackName: string,
   options: { groupPerFrame: boolean; replayLastGroupOnBind?: boolean }
 ): TrackPublisherActor {
-  const handle = cluster.session.registerTrack({
-    trackNamespace: cluster.namespace,
-    trackName,
-  });
   const publisher = createTrackPublisherActor({
     openUniStream: () => cluster.session.openUniStream(),
     groupPerFrame: options.groupPerFrame,
     replayLastGroupOnBind: options.replayLastGroupOnBind === true,
     maxQueuedGroups: cluster.maxQueuedGroups,
+  });
+  const handle = cluster.session.registerTrack({
+    trackNamespace: cluster.namespace,
+    trackName,
+    // The publisher owns the Largest Object it has written; the session
+    // reads it here to report LARGEST_OBJECT in SUBSCRIBE_OK (§10.2.17).
+    getLargestObject: () => {
+      const { largestGroupId, largestObjectId } = publisher.snapshot.get().context;
+
+      return largestGroupId >= 0 ? { group: largestGroupId, object: largestObjectId } : undefined;
+    },
   });
 
   cluster.created.push({ handle, publisher, boundAlias: undefined });

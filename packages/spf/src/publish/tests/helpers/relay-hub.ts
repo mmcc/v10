@@ -286,8 +286,8 @@ export function createRelayHub(): RelayHub {
 
     /**
      * Pull one announced track: a fresh bidi stream per SUBSCRIBE, alias recorded from the publisher's SUBSCRIBE_OK,
-     * held open until one side ends it. A bare FIN from the publisher is the draft-19 clean track end — recorded as
-     * churn, and forwarded to the track's downstream subscribers as PUBLISH_DONE the way a real relay ends the track.
+     * held open until one side ends it. A bare FIN from the publisher is the clean track end — recorded as churn, and
+     * forwarded to the track's downstream subscribers as PUBLISH_DONE the way a real relay ends the track.
      */
     const subscribeUpstream = (trackName: string): void => {
       if (destroyed || connectionClosed || upstreamTracks.has(trackName)) return;

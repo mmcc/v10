@@ -35,6 +35,7 @@ import {
   encodeSetup,
   encodeSubscribeOk,
   type KeyValuePair,
+  type Location,
   MESSAGE_TYPE,
   type MessageParameters,
   MOQT_PROTOCOL_ID,
@@ -44,7 +45,7 @@ import {
   type TrackNamespace,
 } from '../../network/moqt/control-messages';
 import { isMoqtProtocolError, MoqtProtocolError, SESSION_ERROR } from '../../network/moqt/errors';
-import { isSubgroupHeaderType, STREAM_TYPE } from '../../network/moqt/object-stream';
+import { encodeFetchHeader, isSubgroupHeaderType, STREAM_TYPE } from '../../network/moqt/object-stream';
 import type { BidirectionalStreamLike } from '../../network/moqt/request-stream';
 import type { Goaway, MoqtTransport } from '../../network/moqt/session';
 
@@ -106,6 +107,13 @@ export interface MoqtPublishSessionConfig {
 export interface RegisterTrackOptions {
   trackNamespace: TrackNamespace;
   trackName: string;
+  /**
+   * The track's Largest Object (§10.2.17), read when answering a SUBSCRIBE so SUBSCRIBE_OK reports it once content
+   * exists (the spec MUST, and moq-lite-rs relays decode it). Pulled at subscribe time rather than pushed so it never
+   * churns the session; returning `undefined` (or omitting this) means nothing has been published yet and the parameter
+   * is left off.
+   */
+  getLargestObject?: () => Location | undefined;
 }
 
 export interface RegisteredTrack {
@@ -179,6 +187,8 @@ interface TrackRecord {
   pendingFins: Promise<void>[];
   /** Settles when the FINs queued by `end()` land. */
   doneFlushed?: Promise<void>;
+  /** Reads the track's Largest Object for SUBSCRIBE_OK (see `RegisterTrackOptions.getLargestObject`). */
+  getLargestObject?: () => Location | undefined;
 }
 
 /** One accepted inbound SUBSCRIBE_NAMESPACE — the announce carrier. */
@@ -476,6 +486,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       subscribers: [],
       done: false,
       pendingFins: [],
+      getLargestObject: options.getLargestObject,
     };
 
     this.#tracks.set(track.key, track);
@@ -545,6 +556,30 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     }
 
     return this.#transport.createUnidirectionalStream();
+  }
+
+  /**
+   * A subscription (or REQUEST_UPDATE) carrying FILL_PARAMETERS requests a fill fetch stream (§5.1.3). This origin
+   * serves no fills, so it meets the §5.1.3.1 requirement the honest way: open a uni stream, write the FETCH_HEADER
+   * carrying the initiating Request ID so the subscriber can correlate the failure, then reset it. A reset is the
+   * fill-failure signal — a FIN would falsely claim the fill range is empty. The known relays never send
+   * FILL_PARAMETERS today; this keeps a peer that does from stalling on a fill that never arrives.
+   */
+  #openAndResetFill(requestId: number): void {
+    void (async () => {
+      let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+
+      try {
+        const stream = await this.openUniStream();
+
+        writer = stream.getWriter();
+        await writer.write(encodeFetchHeader(requestId));
+      } catch {
+        // Session closing or the peer went away before the header landed.
+      } finally {
+        writer?.abort(new Error('moq publish session: fill fetch streams are not served')).catch(() => {});
+      }
+    })();
   }
 
   // ---------------------------------------------------------------------------
@@ -890,13 +925,20 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     track.subscribers.push(subscriber);
 
     try {
-      // Declaring the track's timescale is what keeps object TIMESTAMP
-      // extensions flowing through moq-lite-rs relays — undeclared, they
-      // parse and discard them and re-stamp frames on arrival, and the
-      // viewer's clocks would sync to relay arrival time instead of
-      // capture time. LOC packaging stamps objects in microseconds.
+      // Report the track's Largest Object once content exists (§10.2.17
+      // MUST; the relay decodes it length-prefixed) so a `relative-group`
+      // subscriber can resolve its join. Declaring the timescale is what
+      // keeps object TIMESTAMP extensions flowing through moq-lite-rs
+      // relays — undeclared, they parse and discard them and re-stamp
+      // frames on arrival, and the viewer's clocks would sync to relay
+      // arrival time instead of capture time. LOC packaging stamps objects
+      // in microseconds.
+      const largestObject = track.getLargestObject?.();
+
       await writer.write(
-        encodeSubscribeOk(trackAlias, {}, [{ type: TRACK_PROPERTY.TIMESCALE, value: MICROSECONDS_PER_SECOND }])
+        encodeSubscribeOk(trackAlias, largestObject ? { largestObject } : {}, [
+          { type: TRACK_PROPERTY.TIMESCALE, value: MICROSECONDS_PER_SECOND },
+        ])
       );
       subscriber.accepted = true;
     } catch {
@@ -947,6 +989,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       });
     }
 
+    // FILL_PARAMETERS on the SUBSCRIBE requests a fill fetch stream, but
+    // only while Forward State is 1 (§5.1.3.1). We serve none — open and
+    // reset it (below) rather than leave the peer waiting.
+    if (subscribe.parameters.fillParameters !== undefined && subscriber.forwarding) {
+      this.#openAndResetFill(subscribe.requestId);
+    }
+
     // Keep serving the request stream: REQUEST_UPDATEs arrive here.
     try {
       while (!(await reader.atEnd())) {
@@ -955,7 +1004,10 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
 
         if (message.kind === 'request-update') {
           this.#claimPeerRequestId(message.requestId);
-          const { forward, subscriberPriority: _priority, ...unsupported } = message.parameters;
+          // FILL_PARAMETERS is a per-message fill request (§5.1.3), not a
+          // subscription-state change — pulled out so it neither counts as
+          // an unsupported update nor sticks to the subscription.
+          const { forward, subscriberPriority: _priority, fillParameters, ...unsupported } = message.parameters;
 
           // Forward State toggles ride REQUEST_UPDATE; the binding must
           // follow so data stops (or starts) with the subscription's
@@ -970,6 +1022,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
                 trackAlias: subscriber.forwarding ? subscriber.trackAlias : undefined,
               });
             }
+          }
+
+          // A fill requested while Forward State is 1 opens (and, here,
+          // immediately resets) a fill fetch stream keyed by the update's
+          // own Request ID (§5.1.3.1).
+          if (fillParameters !== undefined && subscriber.forwarding) {
+            this.#openAndResetFill(message.requestId);
           }
 
           this.#callbacks.onRequestUpdate?.({

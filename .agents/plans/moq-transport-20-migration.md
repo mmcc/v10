@@ -254,11 +254,37 @@ ID in `publish-session.ts` (reuse is session-fatal; `onRequestUpdate` reports
 the updated request and the update's id); the relay-hub test helper resolves
 draft-20 Location Filters like moq-relay 0.14.14 (upstream `relative-group 1`
 join, strict `next-object`, LARGEST_OBJECT in SUBSCRIBE_OK); the publisher
-sandbox's loopback relay pulls upstream with `relative-group 1`. Still owed:
-serving `relative-group 1` from the in-progress group's object 0 in
-`track-publisher.ts` (a new binding starts at the next keyframe today, so the
-relay's upstream video join lands on the next group), `LARGEST_OBJECT` in the
-publisher's SUBSCRIBE_OK, and open-and-reset for inbound FILL_PARAMETERS.
+sandbox's loopback relay pulls upstream with `relative-group 1`.
+
+**Phase 5 complete (2026-09-03, `feat/moq-publisher-transport-20` off
+`mmcc/moq-publisher`):** the three remaining items landed.
+
+- **In-progress-group replay.** `track-publisher.ts` retains the current
+  group's frames (keyframe + deltas, bound or not, reset on each keyframe) in
+  `currentGroupFrames` and, on `bind`, replays them as a fresh group from
+  object 0 under the new alias before continuing live. A mid-group subscriber
+  (the relay's `relative-group 1` upstream join) now decodes instantly instead
+  of waiting for the next keyframe, and no subgroup stream begins partway
+  through a group. Group-per-frame tracks keep using `replayLastGroupOnBind`;
+  the two paths are mutually exclusive.
+- **LARGEST_OBJECT in SUBSCRIBE_OK.** The actor tracks the largest
+  (group, object) it has written on its snapshot (`largestGroupId` /
+  `largestObjectId`, -1 before the first). `setup-track-publishers` passes a
+  `getLargestObject` reader into `registerTrack`; the session pulls it at
+  SUBSCRIBE time and includes LARGEST_OBJECT (§10.2.17, length-prefixed) in
+  SUBSCRIBE_OK once content exists, omitting it before. Pull-at-subscribe, so
+  no snapshot churn. The sandbox loopback relay's SUBSCRIBE_OK parser now skips
+  the parameter block by parity instead of asserting it is empty.
+- **Inbound FILL_PARAMETERS.** `#openAndResetFill` opens a uni stream, writes a
+  FETCH_HEADER carrying the initiating Request ID, and resets it — the honest
+  §5.1.3.1 minimum for an origin that serves no fills (a reset is the failure
+  signal; a FIN would falsely claim an empty range). Wired on both the inbound
+  SUBSCRIBE and the REQUEST_UPDATE paths, gated on Forward State 1, with
+  FILL_PARAMETERS pulled out of the update's "unsupported" set so it no longer
+  rejects the update. `encodeFetchHeader` added to `object-stream.ts`.
+
+All spf test projects pass (node 353, browser 130); typecheck passes. Not yet
+verified live against the relay fleet.
 
 Branch points on a `draft: 19 | 20` value in `createMoqtSession` config:
 

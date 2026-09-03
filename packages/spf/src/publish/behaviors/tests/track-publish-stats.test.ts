@@ -73,6 +73,8 @@ const ZERO_PUBLISHER_COUNTERS: TrackPublisherCounters = {
   bytesSent: 0,
   queuedGroups: 0,
   lastTimestampUs: Number.NaN,
+  largestGroupId: -1,
+  largestObjectId: -1,
 };
 
 function makePublisher(counters: Partial<TrackPublisherCounters>): TrackPublisherActor {
