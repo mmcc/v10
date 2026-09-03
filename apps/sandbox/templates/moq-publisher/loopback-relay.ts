@@ -3,7 +3,7 @@
  * real playback engine.
  *
  * One side accepts a `MoqPublishMedia` session through its `connectTransport` seam and plays the relay half of
- * announce-and-serve, mirroring moq-relay 0.14.7's pull-through ingest: it answers the SETUP exchange, solicits
+ * announce-and-serve, mirroring moq-relay 0.14.14's pull-through ingest: it answers the SETUP exchange, solicits
  * announces with a SUBSCRIBE_NAMESPACE for the empty prefix, and — as the in-page player side asks for tracks (catalog
  * first, then the catalog's tracks) — opens one upstream SUBSCRIBE per track, routing the publisher's subgroup data
  * streams by the SUBSCRIBE_OK-returned aliases into per-track object buffers (a small ring of the most recent groups).
@@ -19,14 +19,14 @@
  *
  * The wire encoding is written from the specs rather than reusing `network/moqt`'s codecs (they are not public API);
  * the byte-level shapes mirror `spf-moq-player/loopback-relay.ts`, extended with the publisher-facing decoders
- * (draft-ietf-moq-transport-19 §10, §11.4.2). If this grows further, the pieces worth exporting properly from
+ * (draft-ietf-moq-transport-20 §10, §11.4.2). If this grows further, the pieces worth exporting properly from
  * `@videojs/spf` are the control-message codec and a transport-pair helper.
  */
 import type { CreateMoqTransport } from '@videojs/spf/moq';
 import type { ConnectPublishTransport } from '@videojs/spf/moq-publish';
 
 // ============================================================================
-// Wire primitives (draft-ietf-moq-transport-19)
+// Wire primitives (draft-ietf-moq-transport-20)
 // ============================================================================
 
 /** Control/request message types (§10, Table 5). */
@@ -67,8 +67,12 @@ const SUBSCRIBE_PARAMETER = {
   GROUP_ORDER: 0x22,
 } as const;
 
-/** Location Filter type "largest-object" (§5.1.2) — join at the live edge. */
-const LOCATION_FILTER_LARGEST_OBJECT = 0x2;
+/**
+ * A one-field Location Filter (§5.1.2) is relative to the next group: `1` starts at the current group's object 0 — the
+ * join moq-relay 0.14.14 asks upstream publishers for, so an in-progress group is served whole rather than from the
+ * live edge.
+ */
+const LOCATION_FILTER_CURRENT_GROUP = 0x1;
 
 /** GROUP_ORDER wire value for descending delivery (§10.2). */
 const GROUP_ORDER_DESCENDING = 0x2;
@@ -340,10 +344,11 @@ function encodeSubscribeNamespace(requestId: number): Uint8Array {
 }
 
 /**
- * SUBSCRIBE toward the publisher (§10.7) — the exact request moq-relay 0.14.7 sends when pulling a track: forward on,
- * subscriber priority 0, join at the largest object, descending group order. Message parameters are count-prefixed with
- * delta-encoded types and per-type value encodings (§10.2), so the byte after each delta is what that type says it is —
- * a raw uint8 for FORWARD / SUBSCRIBER_PRIORITY / GROUP_ORDER, a length-prefixed filter for LOCATION_FILTER.
+ * SUBSCRIBE toward the publisher (§10.7) — the exact request moq-relay 0.14.14 sends on draft-20 when pulling a track:
+ * forward on, subscriber priority 0, join at the current group (`relative-group 1`), descending group order. Message
+ * parameters are count-prefixed with delta-encoded types and per-type value encodings (§10.2), so the byte after each
+ * delta is what that type says it is — a raw uint8 for FORWARD / SUBSCRIBER_PRIORITY / GROUP_ORDER, a length-prefixed
+ * filter for LOCATION_FILTER.
  */
 function encodeSubscribe(requestId: number, namespace: string[], trackName: string): Uint8Array {
   const body = new Writer().varint(requestId);
@@ -356,7 +361,7 @@ function encodeSubscribe(requestId: number, namespace: string[], trackName: stri
   body
     .varint(SUBSCRIBE_PARAMETER.LOCATION_FILTER - SUBSCRIBE_PARAMETER.SUBSCRIBER_PRIORITY)
     .varint(1)
-    .varint(LOCATION_FILTER_LARGEST_OBJECT);
+    .varint(LOCATION_FILTER_CURRENT_GROUP);
   body.varint(SUBSCRIBE_PARAMETER.GROUP_ORDER - SUBSCRIBE_PARAMETER.LOCATION_FILTER).u8(GROUP_ORDER_DESCENDING);
   return frame(MESSAGE_TYPE.SUBSCRIBE, body.toBytes());
 }
@@ -1247,8 +1252,10 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
             if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
               onSubscribe(message.body);
             } else if (message.type === MESSAGE_TYPE.FETCH) {
-              // No history beyond the ring buffer: the engine falls back to
-              // joining live, which is what a live loopback stream is.
+              // The engine never fetches — a draft-20 join is a subscription
+              // filter, and every subscription replays the newest group anyway.
+              // Anything else asking for history is refused: nothing beyond
+              // the ring buffer is retained.
               await writer.write(encodeRequestError(ERROR_INVALID_RANGE, 'nothing published'));
               await writer.close();
               return;

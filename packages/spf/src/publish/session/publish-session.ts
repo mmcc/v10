@@ -1,5 +1,5 @@
 /**
- * Publish-capable MOQT session (moq-transport draft-19), the publish-side sibling of `network/moqt/session.ts`'s
+ * Publish-capable MOQT session (moq-transport draft-20), the publish-side sibling of `network/moqt/session.ts`'s
  * subscribe-only driver.
  *
  * Owns the protocol mechanics over an established transport: the SETUP exchange on paired unidirectional control
@@ -67,7 +67,7 @@ export interface MoqtPublishSessionCallbacks {
   /**
    * The announced namespace reached the wire on an accepted SUBSCRIBE_NAMESPACE solicitation — the peer can now route
    * SUBSCRIBEs to it. NAMESPACE entries have no acknowledgement of their own; this is the strongest "announced" fact
-   * draft-19 offers.
+   * the transport draft offers.
    */
   onAnnounced?(info: { namespace: TrackNamespace }): void;
   /**
@@ -86,8 +86,11 @@ export interface MoqtPublishSessionCallbacks {
    * forwarding subscription, so no data streams may be opened for the track.
    */
   onTrackBinding?(info: { trackName: string; trackAlias: number | undefined }): void;
-  /** REQUEST_UPDATE on an inbound subscribe request stream. */
-  onRequestUpdate?(info: { requestId: number; parameters: MessageParameters }): void;
+  /**
+   * REQUEST_UPDATE on an inbound request stream. `requestId` is the request being updated (the stream's SUBSCRIBE or
+   * SUBSCRIBE_NAMESPACE); `updateRequestId` is the update's own, freshly consumed Request ID (§10.1).
+   */
+  onRequestUpdate?(info: { requestId: number; updateRequestId: number; parameters: MessageParameters }): void;
   /** The session ended — transport closed, or a fatal protocol error. */
   onClosed?(info: { error?: unknown }): void;
 }
@@ -108,8 +111,8 @@ export interface RegisterTrackOptions {
 export interface RegisteredTrack {
   readonly trackName: string;
   /**
-   * End the track: FIN every live subscription's request stream (a FIN with no trailing bytes is the draft-19 clean
-   * track end) and refuse future SUBSCRIBEs with DOES_NOT_EXIST. Idempotent.
+   * End the track: FIN every live subscription's request stream (a FIN with no trailing bytes is the clean track end)
+   * and refuse future SUBSCRIBEs with DOES_NOT_EXIST. Idempotent.
    */
   end(): void;
 }
@@ -492,9 +495,9 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   /**
-   * FIN every live subscription's request stream — with no trailing bytes, which is the clean draft-19 track end — and
-   * refuse future SUBSCRIBEs. The aggregated write completion lands on `track.doneFlushed` so `close()` can hold the
-   * transport open until the FINs reach the wire.
+   * FIN every live subscription's request stream — with no trailing bytes, which is the clean track end — and refuse
+   * future SUBSCRIBEs. The aggregated write completion lands on `track.doneFlushed` so `close()` can hold the transport
+   * open until the FINs reach the wire.
    */
   #endTrack(track: TrackRecord): void {
     if (track.done) return;
@@ -675,13 +678,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
           ? message.requestId
           : undefined;
 
-    if (initiatingRequestId !== undefined) {
-      if (this.#peerRequestIds.has(initiatingRequestId)) {
-        throw new MoqtProtocolError(`peer reused request id ${initiatingRequestId}`);
-      }
-
-      this.#peerRequestIds.add(initiatingRequestId);
-    }
+    if (initiatingRequestId !== undefined) this.#claimPeerRequestId(initiatingRequestId);
 
     if (message.kind === 'subscribe') {
       await this.#handleIncomingSubscribe(stream, reader, message);
@@ -709,6 +706,18 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     const errorCode = message.kind === 'publish' ? REQUEST_ERROR_CODE.UNINTERESTED : REQUEST_ERROR_CODE.NOT_SUPPORTED;
 
     await respond(encodeRequestError(errorCode, 'publish-only endpoint'));
+  }
+
+  /**
+   * Request IDs are consumed once per session (§10.1) — by every request-initiating message and, since draft-20 gave it
+   * an id of its own, by REQUEST_UPDATE — and a reuse is session-fatal.
+   */
+  #claimPeerRequestId(requestId: number): void {
+    if (this.#peerRequestIds.has(requestId)) {
+      throw new MoqtProtocolError(`peer reused request id ${requestId}`);
+    }
+
+    this.#peerRequestIds.add(requestId);
   }
 
   /**
@@ -790,11 +799,17 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
           this.#receivedGoaway = true;
           this.#callbacks.onGoaway?.(message);
         } else if (message.kind === 'request-update') {
+          this.#claimPeerRequestId(message.requestId);
           // Namespace subscriptions may legally be updated (§10.9). v1
           // applies none of it (a prefix change would re-base every
           // entry), so per §10.9.1 the update is answered with an error
-          // and the request stream closes below — never session-fatal.
-          this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
+          // and the request stream closes below — never session-fatal
+          // (only the reused Request ID above is).
+          this.#callbacks.onRequestUpdate?.({
+            requestId: subscribeNamespace.requestId,
+            updateRequestId: message.requestId,
+            parameters: message.parameters,
+          });
           void writer
             .write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'namespace update not supported'))
             .catch(() => {});
@@ -906,7 +921,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       // PREDECESSOR (arrival order — a successor may accept before an
       // older backpressured write settles, and must not be swept by it)
       // ends cleanly (FIN) so the peer's bookkeeping resolves. One live
-      // subscription per track is a deliberate v1 constraint: draft-19
+      // subscription per track is a deliberate v1 constraint: the spec
       // permits concurrent same-track subscriptions, but serving them
       // means writing every group once per alias, and the known peers
       // (moq-lite-rs relays) hold at most one upstream subscription per
@@ -939,6 +954,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         const message = await this.#readControlFrame(reader, type);
 
         if (message.kind === 'request-update') {
+          this.#claimPeerRequestId(message.requestId);
           const { forward, subscriberPriority: _priority, ...unsupported } = message.parameters;
 
           // Forward State toggles ride REQUEST_UPDATE; the binding must
@@ -956,7 +972,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
             }
           }
 
-          this.#callbacks.onRequestUpdate?.({ requestId: message.requestId, parameters: message.parameters });
+          this.#callbacks.onRequestUpdate?.({
+            requestId: subscribe.requestId,
+            updateRequestId: message.requestId,
+            parameters: message.parameters,
+          });
 
           if (!subscriber.finished) {
             if (Object.keys(unsupported).length > 0) {

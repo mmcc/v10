@@ -85,7 +85,7 @@ describe('createTrackSubscriberActor', () => {
     expect(subscriptions[0]!.options).toMatchObject({
       trackNamespace: ['live'],
       trackName: 'video',
-      parameters: { locationFilter: { type: 'largest-object' } },
+      parameters: { locationFilter: { type: 'next-object' } },
     });
     expect(subscriber.snapshot.get().context.status).toBe('pending');
 

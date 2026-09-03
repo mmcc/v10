@@ -457,7 +457,7 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
             // Every audio sample is independently decodable — `isKey` is a
             // LOC group-boundary marker (meaningful for video's GOP
             // gating), not a decodability signal here. A live-edge
-            // (largest-object) join almost never lands on group object 0,
+            // (`next-object`) join almost never lands on group object 0,
             // and WebCodecs requires the first post-configure chunk to be
             // 'key', so gating on `next.isKey` would reject it.
             type: 'key',

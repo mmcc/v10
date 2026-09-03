@@ -1,5 +1,5 @@
 /**
- * Pure MOQT session protocol driver (moq-transport draft-19), subscribe side only.
+ * Pure MOQT session protocol driver (moq-transport draft-20), subscribe side only.
  *
  * Owns the protocol mechanics over an established transport: the SETUP exchange on paired unidirectional control
  * streams (§3.3), request-stream bookkeeping keyed by Request ID (§10.1 — client IDs are even, starting at 0), routing
@@ -88,7 +88,8 @@ export interface SubscribeOk {
 
 export interface PublishDone {
   statusCode: number;
-  streamCount: number;
+  /** Data streams the publisher opened; `undefined` when it could not count them (§10.12). */
+  streamCount: number | undefined;
   reason: string;
 }
 
@@ -103,6 +104,11 @@ export interface SubscriptionHandlers {
   onDone?(done: PublishDone): void;
   /** Response to a REQUEST_UPDATE sent on this subscription. */
   onUpdateOk?(): void;
+  /**
+   * PUBLISH_STATE_NOTIFY (§10.10): the publisher changed subscription state on its own — `parameters` carries only what
+   * changed, with LARGEST_OBJECT marking where. Informational; the session sends no reply.
+   */
+  onStateNotify?(parameters: MessageParameters): void;
   /** GOAWAY on this request stream: re-issue the request (possibly elsewhere). */
   onGoaway?(goaway: Goaway): void;
 }
@@ -111,10 +117,7 @@ export interface Subscription {
   readonly requestId: number;
   /** Modify the subscription (REQUEST_UPDATE, §10.9). */
   update(parameters: MessageParameters): void;
-  /**
-   * Tear the subscription down. Draft-19 has no UNSUBSCRIBE message — teardown is the request stream's lifecycle
-   * (§3.3.3).
-   */
+  /** Tear the subscription down. MOQT has no UNSUBSCRIBE message — teardown is the request stream's lifecycle (§3.3.3). */
   cancel(reason?: unknown): void;
 }
 
@@ -167,10 +170,13 @@ export interface MoqtSessionCallbacks {
   /**
    * A server-initiated PUBLISH arrived. Call exactly one of the responders. Absent, the session rejects with
    * UNINTERESTED (a subscribe-only client).
+   *
+   * `accept` sends a bare PUBLISH_OK: since draft-20 the subscription parameters (FORWARD, LOCATION_FILTER, …) are
+   * legal only on PUBLISH and REQUEST_UPDATE, and a parameter in the wrong message is a PROTOCOL_VIOLATION (§10.2.1).
    */
   onIncomingPublish?(
     publish: IncomingPublish,
-    respond: { accept(parameters?: MessageParameters): void; reject(errorCode?: number, reason?: string): void }
+    respond: { accept(): void; reject(errorCode?: number, reason?: string): void }
   ): void;
   /** The session ended — transport closed, or a fatal protocol error. */
   onClosed?(info: { error?: unknown }): void;
@@ -188,7 +194,7 @@ export interface MoqtSessionConfig {
   unknownAliasTimeoutMs?: number;
   /**
    * How long to wait for a request's first response (SUBSCRIBE_OK / FETCH_OK / REQUEST_OK / REQUEST_ERROR) before
-   * failing it. Draft-19 expects implementations to bound control exchanges (§3.5's CONTROL_MESSAGE_TIMEOUT); without
+   * failing it. The draft expects implementations to bound control exchanges (§3.5's CONTROL_MESSAGE_TIMEOUT); without
    * this a relay that accepts the stream and then goes quiet leaves the request pending forever. Default 10000ms.
    */
   requestTimeoutMs?: number;
@@ -201,22 +207,11 @@ export interface MoqtSubscribeOptions {
   parameters?: MessageParameters;
 }
 
-/** A joining fetch omits namespace/name — they come from the joined subscription. */
-export type MoqtFetchOptions =
-  | {
-      type: 'standalone';
-      trackNamespace: TrackNamespace;
-      trackName: string;
-      startLocation: { group: number; object: number };
-      endLocation: { group: number; object: number };
-      parameters?: MessageParameters;
-    }
-  | {
-      type: 'relative-joining' | 'absolute-joining';
-      joiningRequestId: number;
-      joiningStart: number;
-      parameters?: MessageParameters;
-    };
+/**
+ * FETCH (§10.13) takes the SUBSCRIBE shape; the range is `parameters.locationFilter`, read with fetch rules (§5.1.2): a
+ * relative start counts back from Largest Object, an omitted end stops there, no filter means the whole track.
+ */
+export type MoqtFetchOptions = MoqtSubscribeOptions;
 
 export interface MoqtSession {
   /** Resolves when the server's SETUP has been received. */
@@ -476,7 +471,10 @@ class MoqtSessionImpl implements MoqtSession {
     return {
       requestId,
       update: (parameters) => {
-        record.stream?.send(encodeRequestUpdate(requestId, parameters)).catch(() => {});
+        // REQUEST_UPDATE consumes a Request ID of its own (§10.1); the stream
+        // it travels on is what names the subscription. Reusing the
+        // subscription's id would be a duplicate the peer MUST close on.
+        record.stream?.send(encodeRequestUpdate(this.#allocateRequestId(), parameters)).catch(() => {});
       },
       cancel: (reason) => this.#cancelSubscription(record, reason),
     };
@@ -494,16 +492,7 @@ class MoqtSessionImpl implements MoqtSession {
 
     this.#fetches.set(requestId, record);
 
-    const request: FetchRequest =
-      options.type === 'standalone'
-        ? { requestId, ...options }
-        : {
-            requestId,
-            type: options.type,
-            joiningRequestId: options.joiningRequestId,
-            joiningStart: options.joiningStart,
-            parameters: options.parameters,
-          };
+    const request: FetchRequest = { requestId, ...options };
 
     void this.#openRequest(
       encodeFetch(request),
@@ -684,8 +673,13 @@ class MoqtSessionImpl implements MoqtSession {
       case 'publish-done':
         // Data streams may still be inbound; the alias route stays until
         // the subscription is cancelled or the session ends, so late
-        // subgroups still deliver (§10.11 leaves the timing policy to us).
+        // subgroups still deliver (§10.12 leaves the timing policy to us).
         record.handlers.onDone?.(message);
+        break;
+      case 'publish-state-notify':
+        // Unilateral (§10.10): no REQUEST_OK back, and it does not count
+        // against MAX_REQUEST_UPDATES.
+        record.handlers.onStateNotify?.(message.parameters);
         break;
       case 'goaway':
         record.handlers.onGoaway?.(message);
@@ -707,7 +701,7 @@ class MoqtSessionImpl implements MoqtSession {
         });
         break;
       // Some deployed relays accept a FETCH with the generic REQUEST_OK
-      // instead of the FETCH_OK moq-transport-19 §10.12.3 mandates. It
+      // instead of the FETCH_OK §10.13 mandates. It
       // carries no End Location/End Of Track, so `onOk` can't fire — the
       // fetch's actual completion still surfaces via onEntry/onEnd on the
       // data stream, which this response has no bearing on. It is still
@@ -918,6 +912,9 @@ class MoqtSessionImpl implements MoqtSession {
   async #runFetchStream(reader: StreamReader, requestId: number): Promise<void> {
     const record = this.#fetches.get(requestId);
 
+    // A FETCH_HEADER naming no fetch of ours is dropped, not fatal. That
+    // includes a fill fetch stream (§5.1.3), keyed by a SUBSCRIBE's Request
+    // ID — this subscriber never asks for one, so none is expected.
     if (!record || record.cancelled) {
       await reader.cancel();
       return;
@@ -991,11 +988,11 @@ class MoqtSessionImpl implements MoqtSession {
         let responded = false;
 
         callbacks.onIncomingPublish(message, {
-          accept: (parameters) => {
+          accept: () => {
             if (responded) return;
 
             responded = true;
-            void respond(encodeRequestOk(parameters ?? {}));
+            void respond(encodeRequestOk());
           },
           reject: (errorCode = REQUEST_ERROR_CODE.UNINTERESTED, reason = '') => {
             if (responded) return;

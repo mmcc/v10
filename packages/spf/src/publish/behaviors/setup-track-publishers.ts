@@ -367,7 +367,7 @@ function setupTrackPublishersSetup({
               for (const { handle, publisher } of [...next.created].reverse()) {
                 // Quiesce: 'end' FINs the open group, then the track's
                 // live subscriptions get their clean stream FIN (the
-                // draft-19 track end — no trailing message; a relay
+                // clean track end — no trailing message; a relay
                 // aborts the track on any post-SUBSCRIBE_OK byte), then
                 // destroy() force-ends whatever is left.
                 publisher.send({ type: 'end' });

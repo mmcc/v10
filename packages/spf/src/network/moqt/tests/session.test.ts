@@ -7,10 +7,12 @@ import {
   decodeControlMessage,
   encodePublishDone,
   encodePublishNamespace,
+  encodePublishStateNotify,
   encodeRequestError,
   encodeRequestOk,
   encodeSetup,
   encodeSubscribeOk,
+  type LocationFilter,
   PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
 } from '../control-messages';
@@ -216,6 +218,9 @@ function encodeSubgroup(trackAlias: number, groupId: number, payload: Uint8Array
   writer.writeBytes(payload);
   return writer.toBytes();
 }
+
+/** The fetch range playback would ask for if it fetched: the current group from its start. */
+const CURRENT_GROUP: LocationFilter = { type: 'relative-group', groupsBeforeNext: 1 };
 
 function createSessionHarness(callbacks?: MoqtSessionCallbacks) {
   const fake = createFakeTransport();
@@ -544,12 +549,12 @@ describe('createMoqtSession', () => {
     harness.session.destroy();
   });
 
-  it('routes fetch streams by request id (catalog joining-fetch shape)', async () => {
+  it('routes fetch streams by request id', async () => {
     const harness = createSessionHarness();
 
     harness.sendServerSetup();
 
-    const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
     const subscribeStream = await harness.nextRequestStream();
 
     await subscribeStream.firstMessage;
@@ -558,7 +563,7 @@ describe('createMoqtSession', () => {
     const onEnd = vi.fn();
 
     harness.session.fetch(
-      { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
+      { trackNamespace: ['live'], trackName: 'catalog', parameters: { locationFilter: CURRENT_GROUP } },
       { onEntry: (entry) => entries.push(entry), onEnd }
     );
     const fetchStream = await harness.nextRequestStream();
@@ -566,7 +571,12 @@ describe('createMoqtSession', () => {
 
     expect(fetchMessage).toMatchObject({
       kind: 'fetch',
-      request: { type: 'relative-joining', requestId: 2, joiningRequestId: 0, joiningStart: 0 },
+      request: {
+        requestId: 2,
+        trackNamespace: ['live'],
+        trackName: 'catalog',
+        parameters: { locationFilter: CURRENT_GROUP },
+      },
     });
 
     // Fetch data stream: FETCH_HEADER + one object.
@@ -597,7 +607,7 @@ describe('createMoqtSession', () => {
 
     harness.sendServerSetup();
 
-    const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
 
     await harness.nextRequestStream();
 
@@ -605,7 +615,7 @@ describe('createMoqtSession', () => {
     const onEnd = vi.fn();
 
     harness.session.fetch(
-      { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
+      { trackNamespace: ['live'], trackName: 'catalog', parameters: { locationFilter: CURRENT_GROUP } },
       { onEntry: (entry) => entries.push(entry), onEnd }
     );
     const fetchStream = await harness.nextRequestStream();
@@ -648,7 +658,7 @@ describe('createMoqtSession', () => {
 
     fake.sendServerSetup();
 
-    const subscription = session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+    session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
 
     await fake.nextRequestStream();
 
@@ -656,7 +666,7 @@ describe('createMoqtSession', () => {
     const entries: unknown[] = [];
 
     session.fetch(
-      { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
+      { trackNamespace: ['live'], trackName: 'catalog', parameters: { locationFilter: CURRENT_GROUP } },
       { onEntry: (entry) => entries.push(entry), onError }
     );
     const fetchStream = await fake.nextRequestStream();
@@ -723,7 +733,7 @@ describe('createMoqtSession', () => {
 
     harness.sendServerSetup();
 
-    const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'catalog' });
     const subscribeStream = await harness.nextRequestStream();
 
     await subscribeStream.firstMessage;
@@ -733,7 +743,7 @@ describe('createMoqtSession', () => {
     const onReset = vi.fn();
 
     harness.session.fetch(
-      { type: 'relative-joining', joiningRequestId: subscription.requestId, joiningStart: 0 },
+      { trackNamespace: ['live'], trackName: 'catalog', parameters: { locationFilter: CURRENT_GROUP } },
       { onEntry: (entry) => entries.push(entry), onEnd, onReset }
     );
     const fetchStream = await harness.nextRequestStream();
@@ -905,5 +915,94 @@ describe('createMoqtSession', () => {
 
     await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
     expect(harness.getCloseInfo()).toMatchObject({ closeCode: 0x3 });
+  });
+
+  it('surfaces PUBLISH_STATE_NOTIFY to the subscription without replying', async () => {
+    const harness = createSessionHarness();
+
+    harness.sendServerSetup();
+
+    const onStateNotify = vi.fn();
+
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onStateNotify });
+    const request = await harness.nextRequestStream();
+
+    await request.firstMessage;
+    await request.send(encodeSubscribeOk(7));
+    await request.send(encodePublishStateNotify({ largestObject: { group: 12, object: 3 } }));
+
+    await vi.waitFor(() => expect(onStateNotify).toHaveBeenCalled());
+    expect(onStateNotify).toHaveBeenCalledWith({ largestObject: { group: 12, object: 3 } });
+
+    // §10.10: unilateral — no REQUEST_OK or REQUEST_ERROR goes back.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(request.messages).toHaveLength(1);
+    harness.session.destroy();
+  });
+
+  it('closes the session on PUBLISH_STATE_NOTIFY over a fetch stream', async () => {
+    const onClosed = vi.fn();
+    const harness = createSessionHarness({ onClosed });
+
+    harness.sendServerSetup();
+    harness.session.fetch({ trackNamespace: ['live'], trackName: 'catalog' });
+    const request = await harness.nextRequestStream();
+
+    await request.firstMessage;
+    await request.send(encodePublishStateNotify({}));
+
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
+    expect(harness.getCloseInfo()).toMatchObject({ closeCode: 0x3 });
+  });
+
+  // §10.1 counts REQUEST_UPDATE among the messages that consume a Request
+  // ID; reusing the subscription's would be a duplicate the peer closes on.
+  it('gives each REQUEST_UPDATE a fresh request id', async () => {
+    const harness = createSessionHarness();
+
+    harness.sendServerSetup();
+
+    const subscription = harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' });
+    const request = await harness.nextRequestStream();
+
+    await request.firstMessage;
+    subscription.update({ forward: 0 });
+    subscription.update({ forward: 1 });
+
+    await vi.waitFor(() => expect(request.messages).toHaveLength(3));
+    expect(request.messages[1]).toMatchObject({ kind: 'request-update', requestId: 2, parameters: { forward: 0 } });
+    expect(request.messages[2]).toMatchObject({ kind: 'request-update', requestId: 4, parameters: { forward: 1 } });
+    harness.session.destroy();
+  });
+
+  it('reports an uncountable PUBLISH_DONE stream count as undefined instead of failing the session', async () => {
+    const onClosed = vi.fn();
+    const harness = createSessionHarness({ onClosed });
+
+    harness.sendServerSetup();
+
+    const onDone = vi.fn();
+
+    harness.session.subscribe({ trackNamespace: ['live'], trackName: 'video' }, { onDone });
+    const request = await harness.nextRequestStream();
+
+    await request.firstMessage;
+    await request.send(encodeSubscribeOk(7));
+
+    // Status, the 9-byte varint 2^64-1 (§10.12's sentinel), empty reason.
+    const body = Uint8Array.of(PUBLISH_DONE_STATUS.TRACK_ENDED, ...new Array<number>(9).fill(0xff), 0x00);
+    const frame = new ByteWriter();
+
+    frame.writeVarint(0x0b);
+    frame.writeUint16(body.length);
+    frame.writeBytes(body);
+    await request.send(frame.toBytes());
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: undefined, reason: '' })
+    );
+    expect(onClosed).not.toHaveBeenCalled();
+    harness.session.destroy();
   });
 });

@@ -1,11 +1,12 @@
 /**
- * MOQT unidirectional data-stream parsing (moq-transport draft-19 §3.4, §11).
+ * MOQT unidirectional data-stream parsing (moq-transport draft-20 §3.4, §11).
  *
  * Every unidirectional stream begins with a varint stream type:
  *
- * - `SUBGROUP_HEADER` (0b0XX1XXXX) — objects for one subgroup of one group of a subscribed track, identified by Track
- *   Alias.
- * - `FETCH_HEADER` (0x05) — objects for a FETCH response, identified by Request ID.
+ * - `SUBGROUP_HEADER` (a Type Flags bitfield with bit 4 set, §11.4.2) — objects for one subgroup of one group of a
+ *   subscribed track, identified by Track Alias.
+ * - `FETCH_HEADER` (0x05) — objects for a FETCH response, identified by Request ID. A fill fetch stream (§5.1.3) has the
+ *   same shape and names the SUBSCRIBE or REQUEST_UPDATE that asked for it.
  * - `SETUP` (0x2F00) — the peer's control stream (handled by the session).
  * - `PADDING` (0x132B3E28) — bandwidth probing; drained and ignored.
  *
@@ -28,8 +29,9 @@ export const STREAM_TYPE = {
 } as const;
 
 /**
- * Whether a stream-type varint is a SUBGROUP_HEADER. Valid values have the form 0b0XX1XXXX (bit 4 set, bit 7 clear)
- * with SUBGROUP_ID_MODE ≠ 0b11 (reserved).
+ * Whether a stream-type varint is a SUBGROUP_HEADER. §11.4.2 describes the type as Type Flags: bit 4 is always set,
+ * SUBGROUP_ID_MODE 0b11 is reserved, and a value of 128 or more — or any set bit without a specified meaning — is a
+ * PROTOCOL_VIOLATION. Every bit below 0x80 is assigned, so "bit 7 clear" is that last rule in full.
  */
 export function isSubgroupHeaderType(type: number): boolean {
   if (type > 0x7f || (type & 0x10) === 0) return false;
@@ -218,8 +220,18 @@ const FETCH_FLAG = {
   DATAGRAM: 0x40,
 } as const;
 
-const FETCH_END_OF_NON_EXISTENT_RANGE = 0x8c;
-const FETCH_END_OF_UNKNOWN_RANGE = 0x10c;
+/** End of Range serialization flags (§11.4.4, Table 7). */
+const FETCH_END_OF_RANGE_STATUS: Record<number, FetchEndOfRangeStatus> = {
+  0x8c: 'non-existent',
+  0x10c: 'unknown',
+  0x20c: 'timed-out',
+};
+
+/**
+ * Why a run of Locations was not serialized: they do not exist, their status is unknown to the relay, or the relay's
+ * Fill Timeout expired before upstream supplied them (§10.2.5).
+ */
+export type FetchEndOfRangeStatus = 'non-existent' | 'unknown' | 'timed-out';
 
 export type FetchStreamEntry =
   | {
@@ -234,7 +246,7 @@ export type FetchStreamEntry =
     }
   | {
       kind: 'end-of-range';
-      status: 'non-existent' | 'unknown';
+      status: FetchEndOfRangeStatus;
       groupId: number;
       objectId: number;
     };
@@ -256,16 +268,16 @@ export async function* readFetchEntries(
 
   while (!(await reader.atEnd())) {
     const flags = await reader.readVarint();
+    const endOfRange = FETCH_END_OF_RANGE_STATUS[flags];
 
-    if (flags === FETCH_END_OF_NON_EXISTENT_RANGE || flags === FETCH_END_OF_UNKNOWN_RANGE) {
+    if (endOfRange !== undefined) {
       const groupId = await reader.readVarint();
       const objectId = await reader.readVarint();
-      const status = flags === FETCH_END_OF_NON_EXISTENT_RANGE ? 'non-existent' : 'unknown';
 
       // The indicator becomes the prior Location; subgroup/priority carry
       // over from the last actual object (§11.4.4.2).
       prior = { groupId, objectId, subgroupId: prior?.subgroupId, priority: prior?.priority };
-      yield { kind: 'end-of-range', status, groupId, objectId };
+      yield { kind: 'end-of-range', status: endOfRange, groupId, objectId };
       continue;
     }
 

@@ -17,7 +17,7 @@ import type { CreateMoqTransport } from '../../../actors/moq-session';
 import { createMoqEngine, type MoqEngineConfig, type MoqEngineSignals } from '../engine';
 
 // ============================================================================
-// In-memory relay: speaks real draft-19 bytes over a fake WebTransport.
+// In-memory relay: speaks real draft-20 bytes over a fake WebTransport.
 // ============================================================================
 
 const CATALOG = JSON.stringify({
@@ -108,7 +108,8 @@ function createFakeRelay(catalog: string = CATALOG) {
     }
 
     if (message.kind === 'fetch') {
-      // No history — the engine falls back to live catalog objects.
+      // The engine never fetches (a draft-20 join is a subscription filter);
+      // anything that does is refused — no history is retained.
       await writer.write(encodeRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'nothing published'));
       await writer.close();
       return;
@@ -389,7 +390,7 @@ describe('createMoqEngine', () => {
 
     await vi.waitFor(() => expect(trackIds()).toContain('live/video2'), { timeout: 5000 });
 
-    // Resume: a fresh live-edge join (next-group-start), no catalog churn.
+    // Resume: a fresh next-group join (relative-group 0), no catalog churn.
     signals.state.paused.set(false);
     await vi.waitFor(
       () => {
@@ -399,15 +400,16 @@ describe('createMoqEngine', () => {
     );
     expect(relay.subscriptions.filter((s) => s.message.trackName === 'catalog')).toHaveLength(1);
     expect(relay.subscriptions.at(-1)!.message.parameters).toMatchObject({
-      locationFilter: { type: 'next-group-start' },
+      locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
     });
     await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined());
 
     await engine.destroy();
   });
 
-  // A draft-19 relay replays its recent groups to every joining subscriber,
-  // so the jitter buffer starts seconds deep. `latency.joinAtEdge` decides
+  // A relay can replay buffered groups to a joining subscriber (a draft-20
+  // current-group join replays that group from cache; older relays replayed
+  // several), so the jitter buffer can start seconds deep. `latency.joinAtEdge` decides
   // whether playout starts at the front of that replay or at its edge.
   //
   // The canvas is attached after the replay lands so the assertion is about
@@ -590,7 +592,7 @@ describe('createMoqEngine', () => {
     expect(() => createMoqEngine({ adaptiveLatency: { intervalMs: 100 } })).toThrow(RangeError);
   });
 
-  it('subscribes to the catalog with the largest-object filter', async () => {
+  it('subscribes to the catalog from the start of the current group', async () => {
     const relay = createFakeRelay();
     let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
@@ -609,7 +611,7 @@ describe('createMoqEngine', () => {
     expect(relay.subscriptions[0]!.message).toMatchObject({
       trackNamespace: ['live'],
       trackName: 'catalog',
-      parameters: { locationFilter: { type: 'largest-object' } },
+      parameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
     });
 
     await engine.destroy();

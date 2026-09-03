@@ -136,11 +136,12 @@ describe('encodeNamespaceDone', () => {
 describe('decodeControlMessage', () => {
   it('accepts a SUBSCRIBE laid out exactly as moq-lite-rs writes it', () => {
     // Hand-assembled from the relay's `write_subscribe` at moq-relay
-    // 0.14.7: delta-encoded ascending parameter types; FORWARD (0x10),
-    // SUBSCRIBER_PRIORITY (0x20), and GROUP_ORDER (0x22) as single RAW
-    // bytes (not varints — pinned with a priority of 0x80, which a varint
-    // decoder would misread as a two-byte prefix); LOCATION_FILTER (0x21)
-    // length-prefixed holding varint 0x2 (largest-object).
+    // 0.14.14 on draft-20: delta-encoded ascending parameter types;
+    // FORWARD (0x10), SUBSCRIBER_PRIORITY (0x20), and GROUP_ORDER (0x22)
+    // as single RAW bytes (not varints — pinned with a priority of 0x80,
+    // which a varint decoder would misread as a two-byte prefix);
+    // LOCATION_FILTER (0x21) length-prefixed holding the single field 0x1
+    // (`relative-group 1`: the current group from object 0).
     const body = [
       0x05, // request id
       0x02, // namespace: 2 fields
@@ -157,7 +158,7 @@ describe('decodeControlMessage', () => {
       0x80, //   raw byte 128
       0x01, // +0x01 → LOCATION_FILTER
       0x01, //   length 1
-      0x02, //   largest-object
+      0x01, //   relative-group 1
       0x01, // +0x01 → GROUP_ORDER
       0x02, //   raw byte: descending
     ];
@@ -171,14 +172,14 @@ describe('decodeControlMessage', () => {
       parameters: {
         forward: 1,
         subscriberPriority: 0x80,
-        locationFilter: { type: 'largest-object' },
+        locationFilter: { type: 'relative-group', groupsBeforeNext: 1 },
         groupOrder: 'descending',
       },
     });
   });
 });
 
-describe('encodeRequestOk (draft-19 byte shape)', () => {
+describe('encodeRequestOk (draft-20 byte shape)', () => {
   it('emits the bare parameter-count body a solicitation acceptance needs', () => {
     // The publisher's REQUEST_OK to a SUBSCRIBE_NAMESPACE carries no
     // request id and no parameters — moq-lite-rs decodes exactly

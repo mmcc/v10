@@ -5,7 +5,7 @@ import '@app/styles.css';
 // Renders the real skinned publisher (`<video-publisher>` + `<publisher-skin>`)
 // over a media host. The default mode is an end-to-end in-page loopback:
 // the real MoQ publish engine (real capture, real WebCodecs encode, real
-// draft-19 bytes) publishes into `./loopback-relay.ts`, and a bare
+// draft-20 bytes) publishes into `./loopback-relay.ts`, and a bare
 // `<simple-moq-video>` player beside it subscribes and renders the camera
 // back — camera in, playback out, one page.
 //
@@ -13,10 +13,10 @@ import '@app/styles.css';
 //   ?real            publish to an actual MoQ relay via <moq-publish-video>
 //   ?relay=<url>     relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>  publish namespace for ?real (default: persisted random name)
-//   ?token=<token>   auth token for ?real — the engine offers it as a ?jwt=
-//                    connect-URL param (kixelated-lineage relays), a SETUP
-//                    Authorization Token option, and request parameters
-//                    (draft-19); never persisted
+//   ?token=<token>   auth token for ?real — the engine carries it only as a
+//                    ?jwt= connect-URL param, the one carriage the relay
+//                    fleet accepts (AUTHORIZATION_TOKEN structures on the
+//                    wire hard-close the session); never persisted
 //   ?fake            real capture, fake publish transport (FakePublishMedia)
 //   ?synthetic       stub getUserMedia with canvas+oscillator capture, so the
 //                    demo runs headlessly / without a camera
@@ -41,8 +41,8 @@ const button = 'rounded border border-zinc-300 bg-white px-2 py-1 hover:bg-zinc-
 // ── Mode + settings (query params with localStorage fallback) ───────────────
 
 // The moq-dev relay the moq-relay-interop template verified speaks this
-// engine's draft (moq-transport-19). relay.quic.video looks tempting but
-// speaks kixelated's moq-lite dialect, so a draft-19 SETUP goes nowhere.
+// engine's draft (moq-transport-20). relay.quic.video looks tempting but
+// speaks kixelated's moq-lite dialect, so a moqt-20 SETUP goes nowhere.
 const DEFAULT_RELAY = 'https://relay.mux.dev';
 const RELAY_STORAGE_KEY = 'moq-publisher:relay';
 const NS_STORAGE_KEY = 'moq-publisher:ns';

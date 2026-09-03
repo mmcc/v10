@@ -1,5 +1,5 @@
 /**
- * MOQT control-message wire codecs (moq-transport draft-19 §10).
+ * MOQT control-message wire codecs (moq-transport draft-20 §10).
  *
  * Every control or request-stream message is framed as:
  *
@@ -14,24 +14,28 @@
  * PUBLISH); the decoders cover what it receives. All draft-version specifics live in this directory — this is the
  * churn-absorption layer for pre-WGLC drafts.
  *
+ * Where the draft text and the deployed relay (moq-relay, moq-dev/moq) disagree on a wire detail, the codec follows the
+ * relay and says so at the site — interop is with the relay, not the prose.
+ *
  * Namespace fields and track names are byte strings on the wire; this codec surfaces them as UTF-8 `string`s, which is
  * what MSF (the streaming format this engine speaks) constrains them to.
  */
 import { ByteReader, ByteWriter, utf8Decode, utf8Encode } from './bytes';
 import { MoqtProtocolError } from './errors';
-import { decodeVarint } from './varint';
+import { decodeVarint, MAX_VARINT_VALUE } from './varint';
 
 // ============================================================================
 // Wire constants
 // ============================================================================
 
 /**
- * ALPN / WebTransport protocol identifier for the implemented draft. Version negotiation happens at connection time
- * (`WT-Available-Protocols` in WebTransport, ALPN in native QUIC) — not in SETUP.
+ * ALPN / WebTransport protocol identifier for the implemented draft (§3.1: `moqt-` plus the draft number). Version
+ * negotiation happens at connection time (`WT-Available-Protocols` in WebTransport, ALPN in native QUIC) — not in
+ * SETUP.
  */
-export const MOQT_PROTOCOL_ID = 'moqt-19';
+export const MOQT_PROTOCOL_ID = 'moqt-20';
 
-/** Control/request message type codes (draft-19 §10, Table 5). */
+/** Control/request message type codes (§10, Table 5). */
 export const MESSAGE_TYPE = {
   SETUP: 0x2f00,
   GOAWAY: 0x10,
@@ -48,12 +52,13 @@ export const MESSAGE_TYPE = {
   FETCH: 0x16,
   FETCH_OK: 0x18,
   PUBLISH: 0x1d,
+  PUBLISH_STATE_NOTIFY: 0x22,
   REQUEST_UPDATE: 0x2,
   SUBSCRIBE_NAMESPACE: 0x50,
   SUBSCRIBE_TRACKS: 0x51,
 } as const;
 
-/** Setup Option types (draft-19 §10.3.1). A namespace separate from message parameters. */
+/** Setup Option types (§10.3.1). A namespace separate from message parameters. */
 export const SETUP_OPTION = {
   PATH: 0x01,
   AUTHORIZATION_TOKEN: 0x03,
@@ -64,7 +69,7 @@ export const SETUP_OPTION = {
   MAX_REQUEST_UPDATES: 0x08,
 } as const;
 
-/** Message parameter types (draft-19 §10.2). */
+/** Message parameter types (§10.2, §15.7). */
 export const PARAMETER_TYPE = {
   OBJECT_DELIVERY_TIMEOUT: 0x02,
   AUTHORIZATION_TOKEN: 0x03,
@@ -77,6 +82,7 @@ export const PARAMETER_TYPE = {
   SUBSCRIBER_PRIORITY: 0x20,
   LOCATION_FILTER: 0x21,
   GROUP_ORDER: 0x22,
+  FILL_PARAMETERS: 0x23,
   SUBGROUP_FILTER: 0x25,
   OBJECTID_FILTER: 0x26,
   PRIORITY_FILTER: 0x27,
@@ -84,11 +90,12 @@ export const PARAMETER_TYPE = {
   TRACK_PROPERTY_FILTER: 0x29,
   NEW_GROUP_REQUEST: 0x32,
   TRACK_NAMESPACE_PREFIX: 0x34,
+  INCLUDE_PROPERTIES: 0x35,
 } as const;
 
 /**
- * Track Property types (draft-19 §10.8) — the KVP block trailing SUBSCRIBE_OK / PUBLISH / FETCH_OK. A registry of its
- * own, distinct from both Setup Options and message parameters.
+ * Track Property types (§10.8) — the KVP block trailing SUBSCRIBE_OK / PUBLISH / FETCH_OK. A registry of its own,
+ * distinct from both Setup Options and message parameters.
  */
 export const TRACK_PROPERTY = {
   /**
@@ -99,7 +106,7 @@ export const TRACK_PROPERTY = {
   TIMESCALE: 0x08,
 } as const;
 
-/** REQUEST_ERROR codes (draft-19 §15.11.2). */
+/** REQUEST_ERROR codes (§15.11.2). */
 export const REQUEST_ERROR_CODE = {
   INTERNAL_ERROR: 0x0,
   UNAUTHORIZED: 0x1,
@@ -115,19 +122,17 @@ export const REQUEST_ERROR_CODE = {
   UNINTERESTED: 0x20,
   PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,
-  INVALID_JOINING_REQUEST_ID: 0x32,
   UNSUPPORTED_EXTENSION: 0x33,
   REDIRECT: 0x34,
   CONFLICTING_FILTERS: 0x35,
   INVALID_FILTER: 0x36,
 } as const;
 
-/** PUBLISH_DONE status codes (draft-19 §10.11). */
+/** PUBLISH_DONE status codes (§10.12). */
 export const PUBLISH_DONE_STATUS = {
   INTERNAL_ERROR: 0x0,
   UNAUTHORIZED: 0x1,
   TRACK_ENDED: 0x2,
-  SUBSCRIPTION_ENDED: 0x3,
   GOING_AWAY: 0x4,
   TOO_FAR_BEHIND: 0x5,
   EXPIRED: 0x6,
@@ -154,7 +159,6 @@ const PERMANENT_REQUEST_ERROR_CODES: ReadonlySet<number> = new Set([
   REQUEST_ERROR_CODE.UNINTERESTED,
   REQUEST_ERROR_CODE.PREFIX_OVERLAP,
   REQUEST_ERROR_CODE.NAMESPACE_TOO_LARGE,
-  REQUEST_ERROR_CODE.INVALID_JOINING_REQUEST_ID,
   REQUEST_ERROR_CODE.UNSUPPORTED_EXTENSION,
   // Until session migration exists, the redirect target is unreachable and
   // re-asking the same relay just re-earns the redirect.
@@ -190,7 +194,7 @@ export function isRetryablePublishDoneStatus(statusCode: number): boolean {
   return !PERMANENT_PUBLISH_DONE_STATUSES.has(statusCode);
 }
 
-/** Stream reset / STOP_SENDING error codes (draft-19 §3.3.4). */
+/** Stream reset / STOP_SENDING error codes (§3.3.4). */
 export const STREAM_RESET_CODE = {
   INTERNAL_ERROR: 0x0,
   CANCELLED: 0x1,
@@ -212,12 +216,13 @@ const MAX_FULL_TRACK_NAME_LENGTH = 4096;
 const MAX_REASON_PHRASE_LENGTH = 1024;
 const MAX_NEW_SESSION_URI_LENGTH = 8192;
 const MAX_KVP_VALUE_LENGTH = 0xffff;
+const MAX_LOCATION_FILTER_FIELDS = 4;
 
 // ============================================================================
 // Shared structures
 // ============================================================================
 
-/** A particular Object in a Group within a Track (draft-19 §1.4.2). */
+/** A particular Object in a Group within a Track (§1.4.2). */
 export interface Location {
   group: number;
   object: number;
@@ -300,8 +305,30 @@ function readLocation(reader: ByteReader): Location {
   return { group: reader.readVarint(), object: reader.readVarint() };
 }
 
+/**
+ * LARGEST_OBJECT rides inside a length prefix. §10.2 defines a Location parameter as two bare varints, but moq-relay —
+ * the peer this engine is deployed against — applies the Key-Value-Pair parity rule to the odd type 0x09 and frames it
+ * with a Length on every draft (moq-dev/moq#3255 records it as a spec conflict). The two forms are indistinguishable on
+ * the wire, so the codec follows the relay.
+ */
+function writeLocationParameter(writer: ByteWriter, location: Location): void {
+  const value = new ByteWriter(16);
+
+  writeLocation(value, location);
+  writer.writeLengthPrefixed(value.toBytes());
+}
+
+function readLocationParameter(reader: ByteReader): Location {
+  const value = new ByteReader(reader.readBytes(reader.readVarint()));
+  const location = readLocation(value);
+
+  if (value.remaining !== 0) throw new MoqtProtocolError('Location parameter has trailing bytes');
+
+  return location;
+}
+
 // ============================================================================
-// Key-Value-Pairs (draft-19 §1.4.3) — Setup Options and Track Properties
+// Key-Value-Pairs (§1.4.3) — Setup Options and Track Properties
 // ============================================================================
 
 /**
@@ -362,33 +389,60 @@ export function decodeKeyValuePairs(reader: ByteReader, endOffset: number): KeyV
 }
 
 // ============================================================================
-// Location Filters (draft-19 §5.1.2) — carried in the LOCATION_FILTER parameter
+// Location Filters (§5.1.2) — carried in the LOCATION_FILTER parameter
 // ============================================================================
 
+/**
+ * Which Objects a subscription or fetch covers. On the wire the LOCATION_FILTER value is up to four varints —
+ * StartGroup, StartObject, EndGroupDelta, EndObject — and how many are present selects the meaning:
+ *
+ * - `none` — zero fields. Unfiltered: the whole track for a subscription, `{0,0}` up to Largest Object for a fetch; in
+ *   REQUEST_UPDATE it clears the filter.
+ * - `relative-group` — one field. Start at `{Largest.Group + 1 − groupsBeforeNext, 0}`, open-ended: `0` is the next
+ *   group, `1` the start of the current group (a decodable join), `N` N−1 groups before it.
+ * - `next-object` — the two-field spelling `{0,0}`: `{Largest.Group, Largest.Object + 1}`, the live edge, which can begin
+ *   mid-group.
+ * - `absolute` — two to four fields: an explicit start, optionally bounded by an end group (delta from the start group,
+ *   whole group included unless `endObject` narrows it). An open-ended absolute `{0,0}` is unfiltered by definition and
+ *   encodes as `none` — its two-field spelling would read as `next-object`.
+ */
 export type LocationFilter =
-  | { type: 'largest-object' }
-  | { type: 'next-group-start' }
-  | { type: 'absolute-start'; start: Location }
-  | { type: 'absolute-range'; start: Location; endGroupDelta: number };
+  | { type: 'none' }
+  | { type: 'next-object' }
+  | { type: 'relative-group'; groupsBeforeNext: number }
+  | { type: 'absolute'; start: Location; endGroupDelta?: number; endObject?: number };
 
-const LOCATION_FILTER_TYPE = {
-  'next-group-start': 0x1,
-  'largest-object': 0x2,
-  'absolute-start': 0x3,
-  'absolute-range': 0x4,
-} as const;
-
+/** Serialize a filter as the LOCATION_FILTER parameter's value (without its length prefix). */
 export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
   const writer = new ByteWriter(32);
 
-  writer.writeVarint(LOCATION_FILTER_TYPE[filter.type]);
+  switch (filter.type) {
+    case 'none':
+      break;
+    case 'next-object':
+      writer.writeVarint(0);
+      writer.writeVarint(0);
+      break;
+    case 'relative-group':
+      writer.writeVarint(filter.groupsBeforeNext);
+      break;
+    case 'absolute': {
+      const { start, endGroupDelta, endObject } = filter;
 
-  if (filter.type === 'absolute-start' || filter.type === 'absolute-range') {
-    writeLocation(writer, filter.start);
-  }
+      if (endObject !== undefined && endGroupDelta === undefined) {
+        throw new MoqtProtocolError('location filter end object requires an end group');
+      }
 
-  if (filter.type === 'absolute-range') {
-    writer.writeVarint(filter.endGroupDelta);
+      if (start.group === 0 && start.object === 0 && endGroupDelta === undefined) break;
+
+      writeLocation(writer, start);
+
+      if (endGroupDelta !== undefined) writer.writeVarint(endGroupDelta);
+
+      if (endObject !== undefined) writer.writeVarint(endObject);
+
+      break;
+    }
   }
 
   return writer.toBytes();
@@ -396,39 +450,48 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
 
 export function decodeLocationFilter(bytes: Uint8Array): LocationFilter {
   const reader = new ByteReader(bytes);
-  const type = reader.readVarint();
-  const filter = ((): LocationFilter => {
-    switch (type) {
-      case LOCATION_FILTER_TYPE['next-group-start']:
-        return { type: 'next-group-start' };
-      case LOCATION_FILTER_TYPE['largest-object']:
-        return { type: 'largest-object' };
-      case LOCATION_FILTER_TYPE['absolute-start']:
-        return { type: 'absolute-start', start: readLocation(reader) };
-      case LOCATION_FILTER_TYPE['absolute-range']:
-        return { type: 'absolute-range', start: readLocation(reader), endGroupDelta: reader.readVarint() };
-      default:
-        throw new MoqtProtocolError(`unknown location filter type ${type}`);
-    }
-  })();
+  const fields: number[] = [];
 
-  if (reader.remaining !== 0) {
-    throw new MoqtProtocolError('location filter has trailing bytes');
+  while (reader.remaining > 0) {
+    if (fields.length === MAX_LOCATION_FILTER_FIELDS) {
+      throw new MoqtProtocolError('location filter has more than four fields');
+    }
+
+    fields.push(reader.readVarint());
   }
+
+  if (fields.length === 0) return { type: 'none' };
+
+  if (fields.length === 1) return { type: 'relative-group', groupsBeforeNext: fields[0]! };
+
+  const [group, object, endGroupDelta, endObject] = fields as [number, number, number?, number?];
+  if (fields.length === 2 && group === 0 && object === 0) return { type: 'next-object' };
+
+  const filter: LocationFilter = { type: 'absolute', start: { group, object } };
+
+  if (endGroupDelta !== undefined) {
+    if (group + endGroupDelta > MAX_VARINT_VALUE) {
+      throw new MoqtProtocolError('location filter end group exceeds supported range');
+    }
+
+    filter.endGroupDelta = endGroupDelta;
+  }
+
+  if (endObject !== undefined) filter.endObject = endObject;
 
   return filter;
 }
 
 // ============================================================================
-// Message Parameters (draft-19 §10.2)
+// Message Parameters (§10.2)
 // ============================================================================
 
 export type GroupOrder = 'ascending' | 'descending';
 
 /**
  * Decoded message parameters. Unlike Setup Options, message parameters use per-type encodings (uint8 / varint /
- * Location / length-prefixed), so the codec is registry-driven. Per §10.2 an unknown parameter type is a
- * PROTOCOL_VIOLATION (parameters cannot be skipped — the block is bounded by count, not length).
+ * length-prefixed), so the codec is registry-driven. Per §10.2 an unknown parameter type is a PROTOCOL_VIOLATION
+ * (parameters cannot be skipped — the block is bounded by count, not length).
  */
 export interface MessageParameters {
   objectDeliveryTimeout?: number;
@@ -443,11 +506,38 @@ export interface MessageParameters {
   subscriberPriority?: number;
   locationFilter?: LocationFilter;
   groupOrder?: GroupOrder;
+  /**
+   * FILL_PARAMETERS (§10.2.15): asks the publisher to deliver a fill range on a fetch stream alongside the subscription
+   * — its presence alone requests the fill. A nested parameter scope: only the fill-scoped subset is legal inside, and
+   * omitted entries inherit the subscription's own values.
+   */
+  fillParameters?: FillParameters;
   newGroupRequest?: number;
-  /** Range-filter parameters (§5.1.3), kept opaque — the engine never sends or interprets them. */
+  /** Range-filter parameters (§5.1.4), kept opaque — the engine never sends or interprets them. */
   rangeFilters?: { type: number; value: Uint8Array }[];
   trackNamespacePrefix?: TrackNamespace;
+  /** INCLUDE_PROPERTIES (§10.2.21): `0` asks the responder to send empty Track Properties. Default `1`. */
+  includeProperties?: 0 | 1;
 }
+
+/** The parameters FILL_PARAMETERS may carry (§10.2.15, Table 6). */
+export type FillParameters = Pick<
+  MessageParameters,
+  'fillTimeout' | 'subscriberPriority' | 'locationFilter' | 'groupOrder' | 'rangeFilters'
+>;
+
+type ParameterScope = 'message' | 'fill';
+
+const FILL_SCOPE_TYPES: ReadonlySet<number> = new Set([
+  PARAMETER_TYPE.FILL_TIMEOUT,
+  PARAMETER_TYPE.SUBSCRIBER_PRIORITY,
+  PARAMETER_TYPE.LOCATION_FILTER,
+  PARAMETER_TYPE.GROUP_ORDER,
+  PARAMETER_TYPE.SUBGROUP_FILTER,
+  PARAMETER_TYPE.OBJECTID_FILTER,
+  PARAMETER_TYPE.PRIORITY_FILTER,
+  PARAMETER_TYPE.OBJECT_PROPERTY_FILTER,
+]);
 
 const GROUP_ORDER_WIRE: Record<GroupOrder, number> = { ascending: 0x1, descending: 0x2 };
 
@@ -485,7 +575,7 @@ function collectParameterEntries(parameters: MessageParameters): ParameterEntry[
   }
 
   if (parameters.largestObject !== undefined) {
-    push(PARAMETER_TYPE.LARGEST_OBJECT, (w) => writeLocation(w, parameters.largestObject!));
+    push(PARAMETER_TYPE.LARGEST_OBJECT, (w) => writeLocationParameter(w, parameters.largestObject!));
   }
 
   if (parameters.forward !== undefined) {
@@ -506,6 +596,12 @@ function collectParameterEntries(parameters: MessageParameters): ParameterEntry[
     push(PARAMETER_TYPE.GROUP_ORDER, (w) => w.writeUint8(GROUP_ORDER_WIRE[parameters.groupOrder!]));
   }
 
+  if (parameters.fillParameters !== undefined) {
+    push(PARAMETER_TYPE.FILL_PARAMETERS, (w) =>
+      w.writeLengthPrefixed(encodeFillParameters(parameters.fillParameters!))
+    );
+  }
+
   if (parameters.newGroupRequest !== undefined) {
     push(PARAMETER_TYPE.NEW_GROUP_REQUEST, (w) => w.writeVarint(parameters.newGroupRequest!));
   }
@@ -518,12 +614,31 @@ function collectParameterEntries(parameters: MessageParameters): ParameterEntry[
     push(PARAMETER_TYPE.TRACK_NAMESPACE_PREFIX, (w) => writeTrackNamespace(w, parameters.trackNamespacePrefix!));
   }
 
+  if (parameters.includeProperties !== undefined) {
+    push(PARAMETER_TYPE.INCLUDE_PROPERTIES, (w) => w.writeLengthPrefixed(Uint8Array.of(parameters.includeProperties!)));
+  }
+
   return entries;
 }
 
-/** Serialize as `Number of Parameters (vi64)` + delta-typed parameter list. */
-export function encodeMessageParameters(writer: ByteWriter, parameters: MessageParameters = {}): void {
+/**
+ * Serialize as `Number of Parameters (vi64)` + delta-typed parameter list. The `'fill'` scope is the nested list inside
+ * FILL_PARAMETERS, where only Table 6's types are legal.
+ */
+export function encodeMessageParameters(
+  writer: ByteWriter,
+  parameters: MessageParameters = {},
+  scope: ParameterScope = 'message'
+): void {
   const entries = collectParameterEntries(parameters).sort((a, b) => a.type - b.type);
+
+  if (scope === 'fill') {
+    const disallowed = entries.find((entry) => !FILL_SCOPE_TYPES.has(entry.type));
+
+    if (disallowed) {
+      throw new MoqtProtocolError(`parameter type ${disallowed.type} is not allowed inside FILL_PARAMETERS`);
+    }
+  }
 
   writer.writeVarint(entries.length);
   let previousType = 0;
@@ -535,6 +650,14 @@ export function encodeMessageParameters(writer: ByteWriter, parameters: MessageP
   }
 }
 
+/** FILL_PARAMETERS' value: a parameter list encoded as if for a separate message (§10.2.15). */
+function encodeFillParameters(fill: FillParameters): Uint8Array {
+  const writer = new ByteWriter(64);
+
+  encodeMessageParameters(writer, fill, 'fill');
+  return writer.toBytes();
+}
+
 const RANGE_FILTER_TYPES: readonly number[] = [
   PARAMETER_TYPE.SUBGROUP_FILTER,
   PARAMETER_TYPE.OBJECTID_FILTER,
@@ -543,7 +666,7 @@ const RANGE_FILTER_TYPES: readonly number[] = [
   PARAMETER_TYPE.TRACK_PROPERTY_FILTER,
 ];
 
-export function decodeMessageParameters(reader: ByteReader): MessageParameters {
+export function decodeMessageParameters(reader: ByteReader, scope: ParameterScope = 'message'): MessageParameters {
   const count = reader.readVarint();
   const parameters: MessageParameters = {};
   let previousType = 0;
@@ -552,6 +675,12 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
     const type = previousType + reader.readVarint();
 
     previousType = type;
+
+    // §10.2.15: a type outside Table 6 inside FILL_PARAMETERS is a
+    // PROTOCOL_VIOLATION, the nested scope included.
+    if (scope === 'fill' && !FILL_SCOPE_TYPES.has(type)) {
+      throw new MoqtProtocolError(`parameter type ${type} is not allowed inside FILL_PARAMETERS`);
+    }
 
     switch (type) {
       case PARAMETER_TYPE.OBJECT_DELIVERY_TIMEOUT:
@@ -576,7 +705,7 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
         parameters.expires = reader.readVarint();
         break;
       case PARAMETER_TYPE.LARGEST_OBJECT:
-        parameters.largestObject = readLocation(reader);
+        parameters.largestObject = readLocationParameter(reader);
         break;
       case PARAMETER_TYPE.FORWARD: {
         const forward = reader.readUint8();
@@ -598,12 +727,34 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
         parameters.groupOrder = order === 0x1 ? 'ascending' : 'descending';
         break;
       }
+      case PARAMETER_TYPE.FILL_PARAMETERS: {
+        const value = new ByteReader(reader.readBytes(reader.readVarint()));
+
+        parameters.fillParameters = decodeMessageParameters(value, 'fill');
+
+        if (value.remaining !== 0) throw new MoqtProtocolError('FILL_PARAMETERS has trailing bytes');
+
+        break;
+      }
       case PARAMETER_TYPE.NEW_GROUP_REQUEST:
         parameters.newGroupRequest = reader.readVarint();
         break;
       case PARAMETER_TYPE.TRACK_NAMESPACE_PREFIX:
         parameters.trackNamespacePrefix = readTrackNamespace(reader);
         break;
+      case PARAMETER_TYPE.INCLUDE_PROPERTIES: {
+        // §10.2.21 calls the value a uint8; moq-relay frames it
+        // length-prefixed by the odd-type parity rule (moq-dev/moq#3255),
+        // and the codec follows the relay — see `writeLocationParameter`.
+        const value = reader.readBytes(reader.readVarint());
+
+        if (value.length !== 1 || value[0]! > 1) {
+          throw new MoqtProtocolError(`invalid INCLUDE_PROPERTIES value ${Array.from(value).join(',')}`);
+        }
+
+        parameters.includeProperties = value[0] as 0 | 1;
+        break;
+      }
       default: {
         if (RANGE_FILTER_TYPES.includes(type)) {
           const value = reader.readBytes(reader.readVarint());
@@ -623,7 +774,7 @@ export function decodeMessageParameters(reader: ByteReader): MessageParameters {
 }
 
 // ============================================================================
-// Authorization tokens (draft-19 §10.2.2)
+// Authorization tokens (§10.2.2)
 // ============================================================================
 
 /**
@@ -753,70 +904,37 @@ export interface SubscribeRequest {
   parameters?: MessageParameters;
 }
 
+/**
+ * FETCH (§10.13) has the SUBSCRIBE body: the range is `parameters.locationFilter`, evaluated with the fetch rules of
+ * §5.1.2 — relative starts count back from Largest Object, an omitted end stops there, and no filter means the whole
+ * track. Nothing selects "standalone" or "joining" any more; a join is a subscription with FILL_PARAMETERS.
+ */
+export type FetchRequest = SubscribeRequest;
+
+/** SUBSCRIBE, TRACK_STATUS, and FETCH share one body: Request ID, Full Track Name, Parameters. */
+function encodeTrackRequest(type: number, request: SubscribeRequest): Uint8Array {
+  const body = new ByteWriter();
+
+  body.writeVarint(request.requestId);
+  writeTrackNamespace(body, request.trackNamespace);
+  body.writeLengthPrefixed(utf8Encode(request.trackName));
+  encodeMessageParameters(body, request.parameters);
+  return frameMessage(type, body);
+}
+
 /** SUBSCRIBE (§10.7) — first message on a new request stream. */
 export function encodeSubscribe(request: SubscribeRequest): Uint8Array {
-  const body = new ByteWriter();
-
-  body.writeVarint(request.requestId);
-  writeTrackNamespace(body, request.trackNamespace);
-  body.writeLengthPrefixed(utf8Encode(request.trackName));
-  encodeMessageParameters(body, request.parameters);
-  return frameMessage(MESSAGE_TYPE.SUBSCRIBE, body);
+  return encodeTrackRequest(MESSAGE_TYPE.SUBSCRIBE, request);
 }
 
-/** TRACK_STATUS (§10.14) — identical wire format to SUBSCRIBE. */
+/** TRACK_STATUS (§10.15) — identical wire format to SUBSCRIBE. */
 export function encodeTrackStatus(request: SubscribeRequest): Uint8Array {
-  const body = new ByteWriter();
-
-  body.writeVarint(request.requestId);
-  writeTrackNamespace(body, request.trackNamespace);
-  body.writeLengthPrefixed(utf8Encode(request.trackName));
-  encodeMessageParameters(body, request.parameters);
-  return frameMessage(MESSAGE_TYPE.TRACK_STATUS, body);
+  return encodeTrackRequest(MESSAGE_TYPE.TRACK_STATUS, request);
 }
 
-export type FetchRequest =
-  | {
-      requestId: number;
-      type: 'standalone';
-      trackNamespace: TrackNamespace;
-      trackName: string;
-      startLocation: Location;
-      /** The end Location, plus 1; `object: 0` requests the entire group. */
-      endLocation: Location;
-      parameters?: MessageParameters;
-    }
-  | {
-      requestId: number;
-      type: 'relative-joining' | 'absolute-joining';
-      /** Request ID of the subscription this fetch joins. */
-      joiningRequestId: number;
-      /** Relative: groups before the Joining Location. Absolute: the start Group ID. */
-      joiningStart: number;
-      parameters?: MessageParameters;
-    };
-
-const FETCH_TYPE_WIRE = { standalone: 0x1, 'relative-joining': 0x2, 'absolute-joining': 0x3 } as const;
-
-/** FETCH (§10.12) — first message on a new request stream. */
+/** FETCH (§10.13) — first message on a new request stream. */
 export function encodeFetch(request: FetchRequest): Uint8Array {
-  const body = new ByteWriter();
-
-  body.writeVarint(request.requestId);
-  body.writeVarint(FETCH_TYPE_WIRE[request.type]);
-
-  if (request.type === 'standalone') {
-    writeTrackNamespace(body, request.trackNamespace);
-    body.writeLengthPrefixed(utf8Encode(request.trackName));
-    writeLocation(body, request.startLocation);
-    writeLocation(body, request.endLocation);
-  } else {
-    body.writeVarint(request.joiningRequestId);
-    body.writeVarint(request.joiningStart);
-  }
-
-  encodeMessageParameters(body, request.parameters);
-  return frameMessage(MESSAGE_TYPE.FETCH, body);
+  return encodeTrackRequest(MESSAGE_TYPE.FETCH, request);
 }
 
 export interface SubscribeNamespaceRequest {
@@ -825,7 +943,7 @@ export interface SubscribeNamespaceRequest {
   parameters?: MessageParameters;
 }
 
-/** SUBSCRIBE_NAMESPACE (§10.18) — first message on a new request stream. */
+/** SUBSCRIBE_NAMESPACE (§10.19) — first message on a new request stream. */
 export function encodeSubscribeNamespace(request: SubscribeNamespaceRequest): Uint8Array {
   const body = new ByteWriter();
 
@@ -835,7 +953,11 @@ export function encodeSubscribeNamespace(request: SubscribeNamespaceRequest): Ui
   return frameMessage(MESSAGE_TYPE.SUBSCRIBE_NAMESPACE, body);
 }
 
-/** REQUEST_UPDATE (§10.9) — sent on an existing request stream. */
+/**
+ * REQUEST_UPDATE (§10.9) — sent on an existing request stream. `requestId` is the update's own, freshly allocated
+ * Request ID (§10.1 counts REQUEST_UPDATE among the messages that consume one); the stream identifies the request being
+ * updated.
+ */
 export function encodeRequestUpdate(requestId: number, parameters: MessageParameters = {}): Uint8Array {
   const body = new ByteWriter();
 
@@ -858,7 +980,10 @@ export function encodeGoaway(timeout = 0): Uint8Array {
 
 /**
  * REQUEST_OK (§10.5). The subscriber sends this to accept an incoming PUBLISH (PUBLISH_OK). Track Properties are always
- * empty in that role.
+ * empty in that role, and since draft-20 so are the parameters — a subscriber changes subscription parameters with
+ * REQUEST_UPDATE, not in PUBLISH_OK (§10.11); the session driver's `accept()` therefore takes none. The parameter slot
+ * stays for the publisher-side roles of REQUEST_OK (TRACK_STATUS_OK, REQUEST_UPDATE_OK), which the fake peer in tests
+ * exercises.
  */
 export function encodeRequestOk(parameters: MessageParameters = {}): Uint8Array {
   const body = new ByteWriter();
@@ -899,7 +1024,7 @@ export function encodeSubscribeOk(
   return frameMessage(MESSAGE_TYPE.SUBSCRIBE_OK, body);
 }
 
-/** PUBLISH_DONE (§10.11). */
+/** PUBLISH_DONE (§10.12). */
 export function encodePublishDone(statusCode: number, streamCount: number, reason = ''): Uint8Array {
   const body = new ByteWriter();
 
@@ -909,7 +1034,15 @@ export function encodePublishDone(statusCode: number, streamCount: number, reaso
   return frameMessage(MESSAGE_TYPE.PUBLISH_DONE, body);
 }
 
-/** FETCH_OK (§10.13). */
+/** PUBLISH_STATE_NOTIFY (§10.10) — the publisher's unilateral "these subscription parameters changed". */
+export function encodePublishStateNotify(parameters: MessageParameters = {}): Uint8Array {
+  const body = new ByteWriter();
+
+  encodeMessageParameters(body, parameters);
+  return frameMessage(MESSAGE_TYPE.PUBLISH_STATE_NOTIFY, body);
+}
+
+/** FETCH_OK (§10.14). */
 export function encodeFetchOk(
   endOfTrack: boolean,
   endLocation: Location,
@@ -925,7 +1058,7 @@ export function encodeFetchOk(
   return frameMessage(MESSAGE_TYPE.FETCH_OK, body);
 }
 
-/** PUBLISH (§10.10). */
+/** PUBLISH (§10.11). */
 export function encodePublish(
   request: SubscribeRequest & { trackAlias: number },
   trackProperties: readonly KeyValuePair[] = []
@@ -947,7 +1080,7 @@ export interface PublishNamespaceRequest {
   parameters?: MessageParameters;
 }
 
-/** PUBLISH_NAMESPACE (§10.15) — a publisher announcing a namespace. */
+/** PUBLISH_NAMESPACE (§10.16) — a publisher announcing a namespace. */
 export function encodePublishNamespace(request: PublishNamespaceRequest): Uint8Array {
   const body = new ByteWriter();
 
@@ -1005,7 +1138,7 @@ export type ControlMessage =
       trackName: string;
       parameters: MessageParameters;
     }
-  | { kind: 'fetch'; request: FetchRequest }
+  | { kind: 'fetch'; request: FetchRequest & { parameters: MessageParameters } }
   | {
       kind: 'subscribe-namespace';
       requestId: number;
@@ -1016,7 +1149,14 @@ export type ControlMessage =
   | { kind: 'request-ok'; parameters: MessageParameters; trackProperties: KeyValuePair[] }
   | { kind: 'request-error'; errorCode: number; retryInterval: number; reason: string; redirect?: Redirect }
   | { kind: 'request-update'; requestId: number; parameters: MessageParameters }
-  | { kind: 'publish-done'; statusCode: number; streamCount: number; reason: string }
+  | { kind: 'publish-state-notify'; parameters: MessageParameters }
+  | {
+      kind: 'publish-done';
+      statusCode: number;
+      /** `undefined` when the publisher could not count its streams (the 2^64−1 sentinel, §10.12). */
+      streamCount: number | undefined;
+      reason: string;
+    }
   | {
       kind: 'publish';
       requestId: number;
@@ -1120,9 +1260,15 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
 
       return { kind: 'request-update', requestId, parameters: decodeMessageParameters(reader) };
     }
+    case MESSAGE_TYPE.PUBLISH_STATE_NOTIFY:
+      return { kind: 'publish-state-notify', parameters: decodeMessageParameters(reader) };
     case MESSAGE_TYPE.PUBLISH_DONE: {
       const statusCode = reader.readVarint();
-      const streamCount = reader.readVarint();
+      // A publisher that cannot count its streams MUST send 2^64−1 (§10.12),
+      // which is above this codec's varint ceiling — read that one value as
+      // "unknown" rather than failing the session over a legitimate
+      // PUBLISH_DONE. Any other count past the ceiling stays a protocol error.
+      const streamCount = reader.readCountVarint();
 
       return { kind: 'publish-done', statusCode, streamCount, reason: readReasonPhrase(reader) };
     }
@@ -1166,42 +1312,20 @@ function decodeControlMessageBody(type: number, reader: ByteReader, end: number)
       };
     }
     case MESSAGE_TYPE.SUBSCRIBE:
-    case MESSAGE_TYPE.TRACK_STATUS: {
+    case MESSAGE_TYPE.TRACK_STATUS:
+    case MESSAGE_TYPE.FETCH: {
       const requestId = reader.readVarint();
       const trackNamespace = readTrackNamespace(reader);
       const trackName = utf8Decode(reader.readBytes(reader.readVarint()));
       const parameters = decodeMessageParameters(reader);
+
+      if (type === MESSAGE_TYPE.FETCH) {
+        return { kind: 'fetch', request: { requestId, trackNamespace, trackName, parameters } };
+      }
+
       const kind = type === MESSAGE_TYPE.SUBSCRIBE ? 'subscribe' : 'track-status';
 
       return { kind, requestId, trackNamespace, trackName, parameters };
-    }
-    case MESSAGE_TYPE.FETCH: {
-      const requestId = reader.readVarint();
-      const fetchType = reader.readVarint();
-
-      if (fetchType === FETCH_TYPE_WIRE.standalone) {
-        const trackNamespace = readTrackNamespace(reader);
-        const trackName = utf8Decode(reader.readBytes(reader.readVarint()));
-        const startLocation = readLocation(reader);
-        const endLocation = readLocation(reader);
-        const parameters = decodeMessageParameters(reader);
-
-        return {
-          kind: 'fetch',
-          request: { requestId, type: 'standalone', trackNamespace, trackName, startLocation, endLocation, parameters },
-        };
-      }
-
-      if (fetchType !== FETCH_TYPE_WIRE['relative-joining'] && fetchType !== FETCH_TYPE_WIRE['absolute-joining']) {
-        throw new MoqtProtocolError(`unknown fetch type ${fetchType}`);
-      }
-
-      const joiningRequestId = reader.readVarint();
-      const joiningStart = reader.readVarint();
-      const parameters = decodeMessageParameters(reader);
-      const joiningType = fetchType === FETCH_TYPE_WIRE['relative-joining'] ? 'relative-joining' : 'absolute-joining';
-
-      return { kind: 'fetch', request: { requestId, type: joiningType, joiningRequestId, joiningStart, parameters } };
     }
     case MESSAGE_TYPE.SUBSCRIBE_NAMESPACE: {
       const requestId = reader.readVarint();

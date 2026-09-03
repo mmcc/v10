@@ -23,7 +23,10 @@ Size baseline (2026-07-17): MoQ entry 18.16 KB min+gzip (90.8% of the
 
 Implemented against the actual spec texts (fetched 2026-07-17):
 `draft-ietf-moq-transport-19`, `draft-ietf-moq-msf-01`,
-`draft-ietf-moq-loc-02`. Notable corrections to the plan's assumptions:
+`draft-ietf-moq-loc-02` (LOC moved to loc-04 in PR #9). The spec texts are
+now vendored under `internal/specs/moq/` (transport-20, loc-04, msf-01 as of
+2026-09-02); the draft-20 migration plan is `moq-transport-20-migration.md`
+beside this file. Notable corrections to the plan's assumptions:
 
 - **Varint is NOT the QUIC RFC 9000 varint.** Draft-15+ uses a
   leading-ones vi64 (1–9 bytes). Spec Table 2 vectors are test fixtures.

@@ -250,7 +250,7 @@ describe('openPublishSession', () => {
       expect(subscriptions.catalog.ended()).toBe(true);
       expect(subscriptions.video.ended()).toBe(true);
     });
-    // A bare FIN is the clean draft-19 track end — any trailing message
+    // A bare FIN is the clean track end — any trailing message
     // (the old PUBLISH_DONE) makes moq-lite-rs abort the track instead.
     expect(subscriptions.catalog.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
     expect(subscriptions.video.received.map((m) => m.kind)).toEqual(['subscribe-ok']);

@@ -222,7 +222,7 @@ const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineCon
  * Create a MoQ publish engine.
  *
  * The composition: capture (`getUserMedia`/`getDisplayMedia`) → WebCodecs encode → MOQT publish over an in-repo publish
- * session speaking the same draft-19 dialect as the playback stack, publishing LOC-packaged tracks plus an MSF catalog
+ * session speaking the same moqt-20 dialect as the playback stack, publishing LOC-packaged tracks plus an MSF catalog
  * track.
  *
  * M1 composed the capture stage — device enumeration, capture-source acquisition, preview mirroring, and mute toggles.

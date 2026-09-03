@@ -7,7 +7,7 @@ import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-ha
 /**
  * Cross-engine regression suite: the real publish engine (DEFAULT encoder config — H.264 in `avc` (AVCC) bitstream
  * format, with the avcC published out-of-band as the catalog's `initDataList`; see `probe-encoder-support.ts` for the
- * carriage history) publishing through an in-memory draft-19 relay hub to the real playback engine rendering onto a
+ * carriage history) publishing through an in-memory draft-20 relay hub to the real playback engine rendering onto a
  * canvas.
  *
  * Covers the real-world publisher bugs: - a LATE-joining subscriber (after ≥1 group boundary) must reach decoded video
@@ -220,8 +220,8 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     expect(publisher.state.sessionStatus.get()).toBe('live');
 
     // Orderly unpublish ends every track — now including screen — by
-    // FINing the hub's subscribe streams (a bare FIN is the draft-19
-    // clean track end; PUBLISH_DONE never appears under announce-and-serve).
+    // FINing the hub's subscribe streams (a bare FIN is the clean track
+    // end; PUBLISH_DONE never appears under announce-and-serve).
     publisher.state.publishActivated.set(false);
     await vi.waitFor(
       () => {

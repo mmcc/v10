@@ -1,8 +1,8 @@
 /**
  * In-memory MoQ relay hub for cross-engine tests: real publish engine on one side, real playback engine(s) on the
- * other, draft-19 bytes in the middle over `createTransportPair` transports.
+ * other, draft-20 bytes in the middle over `createTransportPair` transports.
  *
- * Publisher side (`connectPublisher`) mirrors moq-relay 0.14.7's announce-and-serve ingest. After the SETUP exchange
+ * Publisher side (`connectPublisher`) mirrors moq-relay 0.14.14's announce-and-serve ingest. After the SETUP exchange
  * the hub opens a bidi stream and solicits announces (SUBSCRIBE_NAMESPACE, empty prefix, odd server-side request ids)
  * and reads NAMESPACE / NAMESPACE_DONE entries off that stream for the session's lifetime. Tracks are pulled on demand:
  * one upstream SUBSCRIBE per track (downstream demand dedupes onto it), with the publisher's SUBSCRIBE_OK assigning the
@@ -11,13 +11,14 @@
  * track by FINing the hub's SUBSCRIBE stream — no PUBLISH_DONE ever arrives — and retracts a namespace with
  * NAMESPACE_DONE; both land in `trackEnds`, the churn signal the source-switch regression tests assert on.
  *
- * Subscriber side (`connectSubscriber`): answers SUBSCRIBE with SUBSCRIBE_OK and forwards objects
- * one-per-subgroup-stream, honoring the request's location filter the way a spec-following relay does —
- * `largest-object` replays the newest buffered group then follows live (catalog/audio joins), `next-group-start`
- * forwards only groups that start after the subscribe (video joins). FETCH is answered with REQUEST_ERROR so the
- * catalog resolution falls back to its live subscription. A downstream subscribe registers standing upstream demand for
- * its track; an upstream FIN ends the track's downstream subscriptions with PUBLISH_DONE, the way a real relay ends the
- * track for every viewer.
+ * Subscriber side (`connectSubscriber`): answers SUBSCRIBE with SUBSCRIBE_OK (carrying LARGEST_OBJECT once the track
+ * has content) and forwards objects one-per-subgroup-stream, resolving the request's Location Filter (draft-20 §5.1.2)
+ * the way moq-relay 0.14.14 does — `relative-group 1` replays the current group from object 0 then follows live
+ * (catalog joins), `relative-group 0` forwards only groups that start after the subscribe (video joins), and
+ * `next-object` is strict: nothing already published is replayed (audio joins). FETCH is answered with REQUEST_ERROR;
+ * the draft-20 player never sends one. A downstream subscribe registers standing upstream demand for its track; an
+ * upstream FIN ends the track's downstream subscriptions with PUBLISH_DONE, the way a real relay ends the track for
+ * every viewer.
  *
  * Tracks and demand persist across publisher sessions (a reconnecting publisher is re-solicited and its demanded tracks
  * re-subscribed), so the hub can also observe teardown/reconnect churn instead of crashing on it.
@@ -33,6 +34,8 @@ import {
   encodeSubscribeNamespace,
   encodeSubscribeOk,
   type KeyValuePair,
+  type Location,
+  type LocationFilter,
   PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
   type TrackNamespace,
@@ -62,8 +65,8 @@ interface BufferedObject {
 
 interface Subscription {
   trackAlias: number;
-  /** Only forward groups at/after this id (`next-group-start` joins). */
-  minGroupId: number;
+  /** First object this subscription may receive (inclusive), resolved from its Location Filter at subscribe time. */
+  start: Location;
   deliver(object: BufferedObject): void;
   end(statusCode: number): void;
 }
@@ -72,7 +75,8 @@ interface TrackRecord {
   name: string;
   /** Insertion-ordered groupId → objects, pruned to the newest few groups. */
   groups: Map<number, BufferedObject[]>;
-  largestGroupId: number;
+  /** Largest Object received from the publisher; `undefined` until the first one lands. */
+  largest: Location | undefined;
   objectsReceived: number;
   subscribers: Set<Subscription>;
 }
@@ -135,6 +139,37 @@ async function readControlFrame(reader: StreamReader, type: number): Promise<Con
   return decodeControlMessage({ type, body });
 }
 
+function locationOf(object: BufferedObject): Location {
+  return { group: object.groupId, object: object.objectId };
+}
+
+/** `a` is at or after `b` in (group, object) order. */
+function isAtOrAfter(a: Location, b: Location): boolean {
+  return a.group > b.group || (a.group === b.group && a.object >= b.object);
+}
+
+/**
+ * Where a new subscription starts, resolved against the track's Largest Object the way moq-relay 0.14.14 resolves a
+ * draft-20 Location Filter (§5.1.2): `next-object` is strict (nothing already published is replayed), `relative-group`
+ * counts back from the next group (`0` = the next group, `1` = the current group from object 0), an absolute start is
+ * honored as given (the hub never sees an end), and an unfiltered request starts at the current group like moq-lite.
+ */
+function resolveStart(filter: LocationFilter | undefined, largest: Location | undefined): Location {
+  if (filter?.type === 'next-object') {
+    return largest ? { group: largest.group, object: largest.object + 1 } : { group: 0, object: 0 };
+  }
+
+  if (filter?.type === 'relative-group') {
+    const nextGroup = largest ? largest.group + 1 : 0;
+
+    return { group: Math.max(0, nextGroup - filter.groupsBeforeNext), object: 0 };
+  }
+
+  if (filter?.type === 'absolute') return filter.start;
+
+  return { group: largest?.group ?? 0, object: 0 };
+}
+
 export function createRelayHub(): RelayHub {
   let destroyed = false;
   let nextSubscriberAlias = 1;
@@ -153,7 +188,7 @@ export function createRelayHub(): RelayHub {
     let track = tracks.get(name);
 
     if (!track) {
-      track = { name, groups: new Map(), largestGroupId: -1, objectsReceived: 0, subscribers: new Set() };
+      track = { name, groups: new Map(), largest: undefined, objectsReceived: 0, subscribers: new Set() };
       tracks.set(name, track);
     }
 
@@ -174,12 +209,15 @@ export function createRelayHub(): RelayHub {
       }
     }
 
+    const location = locationOf(object);
+
     group.push(object);
-    track.largestGroupId = Math.max(track.largestGroupId, object.groupId);
     track.objectsReceived++;
 
+    if (!track.largest || !isAtOrAfter(track.largest, location)) track.largest = location;
+
     for (const subscriber of track.subscribers) {
-      if (object.groupId >= subscriber.minGroupId) subscriber.deliver(object);
+      if (isAtOrAfter(location, subscriber.start)) subscriber.deliver(object);
     }
   };
 
@@ -190,7 +228,7 @@ export function createRelayHub(): RelayHub {
   };
 
   // ---------------------------------------------------------------------------
-  // Publisher side — announce-and-serve, mirroring moq-relay 0.14.7
+  // Publisher side — announce-and-serve, mirroring moq-relay 0.14.14
   // ---------------------------------------------------------------------------
 
   const connectPublisher: ConnectPublishTransport = () => {
@@ -272,11 +310,14 @@ export function createRelayHub(): RelayHub {
               requestId,
               trackNamespace,
               trackName,
-              // The exact parameter set moq-relay 0.14.7 sends upstream.
+              // The exact parameter set moq-relay 0.14.14 sends upstream on
+              // draft-20: a `relative-group 1` join asks for the current
+              // group from object 0, then live (draft-20's strict Next
+              // Object would skip the in-progress group).
               parameters: {
                 forward: 1,
                 subscriberPriority: 0,
-                locationFilter: { type: 'largest-object' },
+                locationFilter: { type: 'relative-group', groupsBeforeNext: 1 },
                 groupOrder: 'descending',
               },
             })
@@ -517,13 +558,12 @@ export function createRelayHub(): RelayHub {
             const track = trackFor(message.trackName);
             const trackAlias = nextSubscriberAlias++;
 
-            await writer.write(encodeSubscribeOk(trackAlias));
-            const filter = message.parameters.locationFilter ?? { type: 'largest-object' };
-            const joinAtNextGroup = filter.type === 'next-group-start';
-
+            // Like the relay on draft-20, SUBSCRIBE_OK reports the Largest
+            // Object once the track has content (length-prefixed, §10.2.17).
+            await writer.write(encodeSubscribeOk(trackAlias, track.largest ? { largestObject: track.largest } : {}));
             subscription = {
               trackAlias,
-              minGroupId: joinAtNextGroup ? track.largestGroupId + 1 : 0,
+              start: resolveStart(message.parameters.locationFilter, track.largest),
               deliver: (object) => forwardObject(trackAlias, object),
               end: (statusCode) => {
                 void writer
@@ -533,14 +573,19 @@ export function createRelayHub(): RelayHub {
               },
             };
 
-            if (!joinAtNextGroup && track.largestGroupId >= 0) {
-              // Replay the newest buffered group, then follow live.
-              for (const object of track.groups.get(track.largestGroupId) ?? []) subscription.deliver(object);
+            // Replay whatever the filter reaches back for (the current
+            // group on a `relative-group 1` join), then follow live.
+            for (const groupId of [...track.groups.keys()].sort((a, b) => a - b)) {
+              for (const object of track.groups.get(groupId) ?? []) {
+                if (isAtOrAfter(locationOf(object), subscription.start)) subscription.deliver(object);
+              }
             }
 
             track.subscribers.add(subscription);
             subscribedTrack = track;
           } else if (message.kind === 'fetch') {
+            // The draft-20 player never fetches (its joins are Location
+            // Filters); anything asking for history is refused.
             await writer.write(encodeRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'no history'));
             await writer.close();
             return;

@@ -142,7 +142,7 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
 
     const { canvas: renderCanvas, signals } = createSubscriber(hub, disposals);
 
-    // The audio leg comes up first (largest-object join) and owns the
+    // The audio leg comes up first (`next-object` join) and owns the
     // master clock from then on — the exact regime that starved video in
     // the field.
     await vi.waitFor(

@@ -9,7 +9,7 @@ import {
   PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
 } from '../../../network/moqt/control-messages';
-import type { FetchHandlers, MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
+import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import { resolveCatalog } from '../resolve-catalog';
 
@@ -35,20 +35,25 @@ const CATALOG_WITH_AUDIO = JSON.stringify({
   ],
 });
 
+/** The join every catalog attempt asks for: the current group from its independent object (§5.1.2). */
+const CURRENT_GROUP = { type: 'relative-group', groupsBeforeNext: 1 };
+
 // ============================================================================
 // Fakes
 // ============================================================================
 
+interface SubscribeOptions {
+  trackNamespace: string[];
+  trackName: string;
+  parameters?: MessageParameters;
+}
+
 function createFakeSessionActor() {
-  const subscriptions: {
-    options: { trackNamespace: string[]; trackName: string };
-    handlers: SubscriptionHandlers;
-    cancelled: boolean;
-  }[] = [];
-  const fetches: { options: unknown; handlers: FetchHandlers; cancelled: boolean }[] = [];
+  const subscriptions: { options: SubscribeOptions; handlers: SubscriptionHandlers; cancelled: boolean }[] = [];
+  const fetches: unknown[] = [];
   const session = {
     ready: Promise.resolve(),
-    subscribe(options: { trackNamespace: string[]; trackName: string }, handlers: SubscriptionHandlers = {}) {
+    subscribe(options: SubscribeOptions, handlers: SubscriptionHandlers = {}) {
       const record = { options, handlers, cancelled: false };
 
       subscriptions.push(record);
@@ -60,16 +65,9 @@ function createFakeSessionActor() {
         },
       };
     },
-    fetch(options: unknown, handlers: FetchHandlers = {}) {
-      const record = { options, handlers, cancelled: false };
-
-      fetches.push(record);
-      return {
-        requestId: 100,
-        cancel: () => {
-          record.cancelled = true;
-        },
-      };
+    fetch(options: unknown) {
+      fetches.push(options);
+      return { requestId: 100, cancel: () => {} };
     },
     trackStatus: () => {},
     close: () => {},
@@ -115,17 +113,6 @@ function makeDeps(actor: MoqSessionActor | undefined, presentation: MaybeResolve
   };
 }
 
-function fetchEntry(groupId: number, objectId: number, text: string) {
-  return {
-    kind: 'object' as const,
-    groupId,
-    objectId,
-    priority: 128,
-    properties: [],
-    payload: utf8Encode(text),
-  };
-}
-
 const publishDone = { statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 0, reason: 'broadcast ended' };
 
 /** Signal effects re-run on the microtask queue; two turns settle a cascade. */
@@ -146,29 +133,31 @@ describe('resolveCatalog', () => {
     vi.useRealTimers();
   });
 
-  it('subscribes to the catalog track with a joining fetch once the session is ready', async () => {
+  it('subscribes to the catalog track from the start of the current group once the session is ready', async () => {
     const { actor, subscriptions, fetches } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
     await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
-    expect(subscriptions[0]!.options).toMatchObject({ trackNamespace: ['live'], trackName: 'catalog' });
-    expect(fetches).toHaveLength(1);
-    expect(fetches[0]!.options).toMatchObject({ type: 'relative-joining', joiningRequestId: 0, joiningStart: 0 });
+    expect(subscriptions[0]!.options).toMatchObject({
+      trackNamespace: ['live'],
+      trackName: 'catalog',
+      parameters: { locationFilter: CURRENT_GROUP },
+    });
+    // No FETCH: the relay replays the group on the subscription itself.
+    expect(fetches).toHaveLength(0);
 
     reactor.destroy();
     expect(subscriptions[0]!.cancelled).toBe(true);
-    expect(fetches[0]!.cancelled).toBe(true);
   });
 
-  it('resolves the presentation from fetched catalog objects', async () => {
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+  it('resolves the presentation from the replayed independent catalog object', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
-    await vi.waitFor(() => expect(fetches).toHaveLength(1));
-    fetches[0]!.handlers.onEntry?.(fetchEntry(5, 0, CATALOG));
-    fetches[0]!.handlers.onEnd?.();
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
 
     await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
     expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
@@ -177,17 +166,14 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
-  it('applies live delta updates after the fetch settles', async () => {
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+  it('applies deltas against the independent object of their own group', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
-    await vi.waitFor(() => expect(fetches).toHaveLength(1));
-
-    // Live delta lands before the fetch replay finishes — it must buffer.
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
     subscriptions[0]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
-    fetches[0]!.handlers.onEntry?.(fetchEntry(5, 0, CATALOG));
-    fetches[0]!.handlers.onEnd?.();
 
     await vi.waitFor(() => {
       const presentation = deps.state.presentation.get();
@@ -199,13 +185,14 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
-  it('recovers via the next independent object when the fetch fails', async () => {
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+  // A publisher that does not replay the current group delivers from the
+  // next object: a delta with no base.
+  it('drops a delta with no base and recovers on the next independent object', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
-    await vi.waitFor(() => expect(fetches).toHaveLength(1));
-    fetches[0]!.handlers.onError?.({ errorCode: 0x11, retryInterval: 0, reason: 'invalid range' });
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
 
     // A dangling delta with no prior catalog is dropped...
     subscriptions[0]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
@@ -218,6 +205,81 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
+  // Groups travel on separate streams, so an older group's tail can land
+  // after a newer group's independent object. Applying it would land the
+  // old delta on the new base.
+  it('drops a straggling delta from a superseded group', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, CATALOG));
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    reactor.destroy();
+  });
+
+  it('drops a straggling independent object from a superseded group', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, CATALOG));
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    // The older group's catalog arrives late: it must not roll the
+    // presentation back, and its deltas must stay dropped too.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG_WITH_AUDIO));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    // The base group's own deltas still apply.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+
+    reactor.destroy();
+  });
+
+  // A malformed independent object must not move the base: otherwise the
+  // new group's deltas would apply to the previous group's catalog.
+  it('keeps the previous base when an independent object fails to parse', async () => {
+    const { actor, subscriptions } = createFakeSessionActor();
+    const deps = makeDeps(actor, { url: MOQ_URL });
+    const reactor = resolveCatalog.setup(deps);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
+    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
+
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, '{"version":"1","tracks":'));
+    expect(consoleError).toHaveBeenCalledWith('[resolveCatalog] catalog parse failed:', expect.anything());
+
+    // Group 6's delta has no valid base of its own; it must not land on
+    // group 5's catalog.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 1, DELTA));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
+
+    // The next well-formed independent object recovers.
+    subscriptions[0]!.handlers.onObject?.(catalogObject(7, 0, CATALOG_WITH_AUDIO));
+    await flush();
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+    consoleError.mockRestore();
+
+    reactor.destroy();
+  });
+
   // refreshAuthToken always rejects (see moq-session.ts) — a refreshed
   // token has no connection left to attach to. The one-shot retry must
   // give up as a terminal state like any other permanent rejection:
@@ -225,17 +287,13 @@ describe('resolveCatalog', () => {
   // presentation and no queued restart reopens the subscription.
   it('gives up cleanly on EXPIRED_AUTH_TOKEN since refreshAuthToken cannot supply a usable token', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions, fetches, refreshAuthToken } = createFakeSessionActor();
+    const { actor, subscriptions, refreshAuthToken } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await flush();
     expect(subscriptions).toHaveLength(1);
-
-    // A live catalog object buffered behind the unsettled joining fetch —
-    // the settle timer's drain path, which never checks the attempt token.
-    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
 
     subscriptions[0]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
@@ -247,14 +305,12 @@ describe('resolveCatalog', () => {
       expect(consoleError).toHaveBeenCalledWith('[resolveCatalog] auth refresh failed:', expect.any(Error))
     );
 
-    // Terminal freezes the state: no retry, handles cancelled, and past
-    // the fetch deadline the buffered object must NOT have drained into
-    // the presentation.
+    // Terminal freezes the state: no retry, handle cancelled, and a late
+    // object from the dead attempt must not reach the presentation.
     await vi.advanceTimersByTimeAsync(60_000);
     expect(subscriptions).toHaveLength(1);
     expect(subscriptions[0]!.cancelled).toBe(true);
-    expect(fetches).toHaveLength(1);
-    expect(fetches[0]!.cancelled).toBe(true);
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
 
@@ -273,60 +329,13 @@ describe('resolveCatalog', () => {
     reactor.destroy();
   });
 
-  // A relay can answer FETCH_OK and then never open its data stream, so
-  // onEnd/onError/onReset never fire and the session's request timeout has
-  // nothing to catch. Without a settle deadline the catalog buffers live
-  // deltas forever and never resolves.
-  it('falls back to live-only when the joining fetch never settles', async () => {
-    const { actor, subscriptions } = createFakeSessionActor();
-    const deps = makeDeps(actor, { url: MOQ_URL });
-    const reactor = resolveCatalog.setup({ ...deps, config: { catalogFetchTimeoutMs: 10 } });
-
-    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
-    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
-    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
-
-    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
-    expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
-
-    reactor.destroy();
-  });
-
-  // The deadline switches to live-only, but the relay may still deliver
-  // the joining fetch's replay afterwards. Those entries are older than
-  // the live catalog by construction — applying one would roll the
-  // presentation back (or land the next delta on the wrong base).
-  it('ignores fetch entries that arrive after the settle deadline', async () => {
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
-    const deps = makeDeps(actor, { url: MOQ_URL });
-    const reactor = resolveCatalog.setup({ ...deps, config: { catalogFetchTimeoutMs: 10 } });
-
-    await vi.waitFor(() => expect(fetches).toHaveLength(1));
-    // The deadline also cancels the replay stream outright.
-    await vi.waitFor(() => expect(fetches[0]!.cancelled).toBe(true));
-
-    subscriptions[0]!.handlers.onObject?.(catalogObject(6, 0, CATALOG_WITH_AUDIO));
-    await vi.waitFor(() => expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true));
-    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
-
-    // A straggling replay entry (an older group) must not overwrite it.
-    fetches[0]!.handlers.onEntry?.(fetchEntry(5, 0, CATALOG));
-    fetches[0]!.handlers.onEnd?.();
-    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
-    expect(getTracksByType(deps.state.presentation.get()!, 'video')).toHaveLength(1);
-
-    reactor.destroy();
-  });
-
-  // The `attempt`/`isCurrent` guard got its live path back: `start()` runs
-  // again for every non-auth retry and PUBLISH_DONE resubscribe, so a
-  // cancelled first fetch's late callback must not disturb the retry
-  // attempt. (An earlier revision drove this through a successful auth
-  // refresh, which the current relay fleet's connect-URL-only jwt carriage
-  // made unreachable — the recovery restart is the reachable path now.)
-  it('keeps a cancelled first fetch from settling the retry attempt early', async () => {
+  // The `attempt`/`isCurrent` guard: `start()` runs again for every non-auth
+  // retry and PUBLISH_DONE resubscribe, and cancelling a subscription does
+  // not stop callbacks already in flight, so a cancelled first attempt's
+  // late object must not write the retry attempt's presentation.
+  it('ignores objects from a superseded attempt', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
@@ -339,22 +348,15 @@ describe('resolveCatalog', () => {
       reason: 'no such track',
     });
     await vi.advanceTimersByTimeAsync(PAST_FIRST_BACKOFF_MS);
-    expect(fetches).toHaveLength(2);
+    expect(subscriptions).toHaveLength(2);
 
-    // Cancelling a fetch does not stop callbacks already in flight — the
-    // first fetch's late settle must not flush the retry's buffer early.
-    fetches[0]!.handlers.onEnd?.();
-
-    // Still buffering: the retry's live delta waits for its own fetch...
-    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 1, DELTA));
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG_WITH_AUDIO));
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
 
-    // ...and applies in order once that fetch replays the base catalog.
-    fetches[1]!.handlers.onEntry?.(fetchEntry(5, 0, CATALOG));
-    fetches[1]!.handlers.onEnd?.();
+    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
     await flush();
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true);
-    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(1);
+    expect(getTracksByType(deps.state.presentation.get()!, 'audio')).toHaveLength(0);
 
     reactor.destroy();
   });
@@ -363,7 +365,7 @@ describe('resolveCatalog', () => {
   // broadcast started, so the retry cadence is also the join latency.
   it('re-subscribes with backoff after a non-auth subscribe error', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
@@ -379,17 +381,11 @@ describe('resolveCatalog', () => {
 
     await vi.advanceTimersByTimeAsync(PAST_FIRST_BACKOFF_MS);
     expect(subscriptions).toHaveLength(2);
-    expect(fetches).toHaveLength(2);
     expect(subscriptions[0]!.cancelled).toBe(true);
-    expect(fetches[0]!.cancelled).toBe(true);
-    expect(fetches[1]!.options).toMatchObject({ type: 'relative-joining', joiningRequestId: 2, joiningStart: 0 });
+    // Every attempt joins the same way: the current group from its start.
+    expect(subscriptions[1]!.options.parameters).toMatchObject({ locationFilter: CURRENT_GROUP });
 
     // The broadcast appeared: the fresh attempt resolves from its own objects.
-    fetches[1]!.handlers.onError?.({
-      errorCode: REQUEST_ERROR_CODE.INVALID_RANGE,
-      retryInterval: 0,
-      reason: 'no history',
-    });
     subscriptions[1]!.handlers.onObject?.(catalogObject(1, 0, CATALOG));
     await flush();
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true);
@@ -483,18 +479,13 @@ describe('resolveCatalog', () => {
 
   it('does not re-subscribe after an auth-shaped PUBLISH_DONE', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await flush();
     expect(subscriptions).toHaveLength(1);
-
-    // A live catalog object buffered behind the unsettled joining fetch —
-    // the settle timer's drain path, which never checks the attempt token.
-    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
-    expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
 
     // The re-subscribe would carry the same credentials the relay just
     // rejected — unlike TRACK_ENDED (covered below), this must not poll.
@@ -505,11 +496,10 @@ describe('resolveCatalog', () => {
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(subscriptions).toHaveLength(1);
-    // Terminal freezes the state: handles cancelled, and the settle timer
-    // disarmed with the buffer discarded — past the fetch deadline, the
-    // buffered object must NOT have drained into the presentation.
+    // Terminal freezes the state: handle cancelled, and a late object from
+    // the dead attempt must not reach the presentation.
     expect(subscriptions[0]!.cancelled).toBe(true);
-    expect(fetches[0]!.cancelled).toBe(true);
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     consoleError.mockRestore();
@@ -548,12 +538,11 @@ describe('resolveCatalog', () => {
   });
 
   // The refreshed token being rejected too is a terminal state like any
-  // other permanent rejection: freeze it. The second attempt's settle
-  // timer must not keep draining buffered objects into the presentation.
+  // other permanent rejection: freeze it.
   it('freezes the state when the refreshed token is rejected too', async () => {
     vi.useFakeTimers();
     const base = createFakeSessionActor();
-    const { subscriptions, fetches } = base;
+    const { subscriptions } = base;
     const refreshAuthToken = vi.fn(async () => ({}));
     const actor: MoqSessionActor = { ...base.actor, refreshAuthToken };
     const deps = makeDeps(actor, { url: MOQ_URL });
@@ -571,10 +560,6 @@ describe('resolveCatalog', () => {
     await flush();
     expect(subscriptions).toHaveLength(2);
 
-    // A live object buffered behind the refreshed attempt's unsettled
-    // joining fetch — the settle timer's drain path.
-    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
-
     subscriptions[1]!.handlers.onError?.({
       errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
       retryInterval: 0,
@@ -584,7 +569,7 @@ describe('resolveCatalog', () => {
     expect(refreshAuthToken).toHaveBeenCalledOnce();
     expect(subscriptions).toHaveLength(2);
     expect(subscriptions[1]!.cancelled).toBe(true);
-    expect(fetches[1]!.cancelled).toBe(true);
+    subscriptions[1]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     consoleError.mockRestore();
@@ -641,7 +626,7 @@ describe('resolveCatalog', () => {
   // not that the session is unhealthy — poll the track back into existence.
   it('re-subscribes when the publisher ends the catalog track', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
@@ -653,9 +638,7 @@ describe('resolveCatalog', () => {
 
     await vi.advanceTimersByTimeAsync(PAST_FIRST_BACKOFF_MS);
     expect(subscriptions).toHaveLength(2);
-    expect(fetches).toHaveLength(2);
     expect(subscriptions[0]!.cancelled).toBe(true);
-    expect(fetches[0]!.cancelled).toBe(true);
 
     reactor.destroy();
   });
@@ -665,27 +648,19 @@ describe('resolveCatalog', () => {
   // produce a wrong track list.
   it('resets the catalog base across a restart so a delta cannot apply to the pre-outage catalog', async () => {
     vi.useFakeTimers();
-    const { actor, subscriptions, fetches } = createFakeSessionActor();
+    const { actor, subscriptions } = createFakeSessionActor();
     const deps = makeDeps(actor, { url: MOQ_URL });
     const reactor = resolveCatalog.setup(deps);
 
     await flush();
 
-    fetches[0]!.handlers.onEntry?.(fetchEntry(5, 0, CATALOG));
-    fetches[0]!.handlers.onEnd?.();
+    subscriptions[0]!.handlers.onObject?.(catalogObject(5, 0, CATALOG));
     await flush();
     expect(isResolvedPresentation(deps.state.presentation.get())).toBe(true);
 
     subscriptions[0]!.handlers.onDone?.(publishDone);
     await vi.advanceTimersByTimeAsync(PAST_FIRST_BACKOFF_MS);
     expect(subscriptions).toHaveLength(2);
-
-    // Nothing published yet on the restarted track — live-only from here.
-    fetches[1]!.handlers.onError?.({
-      errorCode: REQUEST_ERROR_CODE.INVALID_RANGE,
-      retryInterval: 0,
-      reason: 'no history',
-    });
 
     // A delta from the restarted publisher has no base to apply to, so it is
     // dropped; the last resolved presentation stands.
@@ -767,7 +742,7 @@ describe('resolveCatalog', () => {
     // Leaving 'catalog-active' (here: the source went away) drops the timer.
     deps.state.presentation.set(undefined);
     await flush();
-    expect(vi.getTimerCount()).toBe(0); // retry and settle timers both cleared
+    expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(subscriptions).toHaveLength(1);
 

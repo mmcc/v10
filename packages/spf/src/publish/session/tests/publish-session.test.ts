@@ -319,11 +319,11 @@ describe('createMoqtPublishSession', () => {
 
   it('answers inbound SUBSCRIBE with the request id as the alias and routes REQUEST_UPDATE', async () => {
     const subscribes: IncomingSubscribe[] = [];
-    const updates: { requestId: number }[] = [];
+    const updates: { requestId: number; updateRequestId: number }[] = [];
     const bindings: { trackName: string; trackAlias: number | undefined }[] = [];
     const { session, subscriber } = makePublishHarness({
       onSubscribe: (subscribe) => subscribes.push(subscribe),
-      onRequestUpdate: (update) => updates.push({ requestId: update.requestId }),
+      onRequestUpdate: ({ requestId, updateRequestId }) => updates.push({ requestId, updateRequestId }),
       onTrackBinding: (binding) => bindings.push(binding),
     });
 
@@ -354,7 +354,10 @@ describe('createMoqtPublishSession', () => {
     });
     updated.update({ subscriberPriority: 9 });
     await vi.waitFor(() => {
-      expect(updates).toEqual([{ requestId: updated.requestId }]);
+      // The update is attributed to the subscription it rode in on, while
+      // consuming a Request ID of its own (§10.1).
+      expect(updates).toEqual([{ requestId: updated.requestId, updateRequestId: expect.any(Number) }]);
+      expect(updates[0]?.updateRequestId).not.toBe(updated.requestId);
       expect(updateAcks).toHaveLength(1);
     });
     session.destroy();
@@ -428,7 +431,7 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(subscribe.ended()).toBe(true);
     });
-    // A bare FIN is the draft-19 clean track end. Any byte after
+    // A bare FIN is the clean track end. Any byte after
     // SUBSCRIBE_OK — the old PUBLISH_DONE — makes moq-lite-rs abort the
     // track for every downstream viewer instead of finishing it.
     expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
@@ -616,12 +619,13 @@ describe('createMoqtPublishSession', () => {
       expect(bindings).toEqual([undefined]);
     });
 
-    await sub.send(encodeRequestUpdate(81, { forward: 1 }));
+    // Each REQUEST_UPDATE consumes a Request ID of its own (§10.1).
+    await sub.send(encodeRequestUpdate(83, { forward: 1 }));
     await vi.waitFor(() => {
       expect(bindings.at(-1)).toBe(81);
     });
 
-    await sub.send(encodeRequestUpdate(81, { forward: 0 }));
+    await sub.send(encodeRequestUpdate(85, { forward: 0 }));
     await vi.waitFor(() => {
       expect(bindings.at(-1)).toBeUndefined();
     });
@@ -761,11 +765,11 @@ describe('createMoqtPublishSession', () => {
       expect(solicitation.received).toHaveLength(2);
     });
 
-    // A legal §10.9 update must never be session-fatal; v1 applies no
-    // prefix changes, so per §10.9.1 the update is answered with an
-    // error and the request stream closes — which costs the announce
-    // carrier, surfaced as announce loss.
-    await solicitation.send(encodeRequestUpdate(1, { subscriberPriority: 5 }));
+    // A legal §10.9 update (on a fresh Request ID) must never be
+    // session-fatal; v1 applies no prefix changes, so per §10.9.1 the
+    // update is answered with an error and the request stream closes —
+    // which costs the announce carrier, surfaced as announce loss.
+    await solicitation.send(encodeRequestUpdate(3, { subscriberPriority: 5 }));
     await vi.waitFor(() => {
       expect(updates).toEqual([1]);
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace', 'request-error']);
@@ -797,6 +801,31 @@ describe('createMoqtPublishSession', () => {
     // tracks the same alias and make their subgroup streams
     // indistinguishable — protocol violation, session-fatal.
     await rawSubscribe(pair.server, 'audio', 101);
+    await vi.waitFor(() => {
+      expect(closes).toHaveLength(1);
+    });
+    expect((closes[0] as { error?: unknown }).error).toBeInstanceOf(Error);
+    subscriber.destroy();
+  });
+
+  it('closes the session when a REQUEST_UPDATE reuses a request id', async () => {
+    const closes: unknown[] = [];
+    const { pair, session, subscriber } = makePublishHarness({
+      onClosed: (info) => closes.push(info),
+    });
+
+    await session.ready;
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+
+    const sub = await rawSubscribe(pair.server, 'video', 111);
+
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    });
+
+    // REQUEST_UPDATE consumes a Request ID of its own (§10.1); riding on
+    // the subscription's id is the same duplicate as a repeated SUBSCRIBE.
+    await sub.send(encodeRequestUpdate(111, { subscriberPriority: 9 }));
     await vi.waitFor(() => {
       expect(closes).toHaveLength(1);
     });
@@ -851,7 +880,7 @@ describe('createMoqtPublishSession', () => {
 
     // A filter change is not applied — acknowledging it would leave the
     // peer believing its new range is in effect.
-    await sub.send(encodeRequestUpdate(111, { locationFilter: { type: 'next-group-start' } }));
+    await sub.send(encodeRequestUpdate(113, { locationFilter: { type: 'relative-group', groupsBeforeNext: 0 } }));
     await vi.waitFor(() => {
       expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-error']);
       expect(sub.ended()).toBe(true);
@@ -1288,9 +1317,9 @@ describe('createPublishSessionActor', () => {
   });
 
   // The known relay fleet (moq-lite-rs lineage) hard-closes the session on
-  // draft-19 AUTHORIZATION_TOKEN structures — the token must ride ONLY in
+  // AUTHORIZATION_TOKEN request parameters — the token must ride ONLY in
   // the connect URL (`composePublishConnectUrl`).
-  it('keeps draft-19 auth structures off the wire even with an endpoint token', async () => {
+  it('keeps AUTHORIZATION_TOKEN request parameters off the wire even with an endpoint token', async () => {
     const pair = createTransportPair();
     const setupOptions: { type: number }[] = [];
 
