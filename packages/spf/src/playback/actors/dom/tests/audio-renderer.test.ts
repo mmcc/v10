@@ -306,6 +306,72 @@ describe('createAudioRendererActor', () => {
     renderer.destroy();
   });
 
+  it.each([20_000, 200_000])('preserves a %iµs gap in the incoming audio timeline', async (gapUs) => {
+    const frames = (await encodeTestFrames(8)).map((frame, index) => ({
+      ...frame,
+      timestampUs: frame.timestampUs + (index >= 2 ? gapUs : 0),
+    }));
+    const audioContext = createFakeAudioContext();
+    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.2 });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+
+      await vi.waitFor(
+        () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(150_000 + gapUs),
+        {
+          timeout: 2000,
+        }
+      );
+      // A known media gap is scheduled silence, not a stalled clock:
+      // video can keep advancing while no audio samples are available.
+      audioContext.currentTime = 0.24 + gapUs / 2_000_000;
+      expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(30_000 + gapUs / 2);
+      expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(50_000 + gapUs / 2);
+      audioContext.currentTime = 0.3 + gapUs / 1_000_000;
+      expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(90_000 + gapUs);
+      expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(110_000 + gapUs);
+    } finally {
+      renderer.destroy();
+    }
+  });
+
+  it('does not revive a decoder whose track was cleared while it drained', async () => {
+    const frames = await encodeTestFrames(5);
+    const audioContext = createFakeAudioContext();
+    const createSource = vi.spyOn(audioContext, 'createBufferSource');
+    const flush = AudioDecoder.prototype.flush;
+    let finishDrain!: () => void;
+    const drained = new Promise<void>((resolve) => {
+      finishDrain = resolve;
+    });
+    const pendingFlush = vi
+      .spyOn(AudioDecoder.prototype, 'flush')
+      .mockImplementation(async function (this: AudioDecoder) {
+        await flush.call(this);
+        await drained;
+      });
+    const renderer = createAudioRendererActor({ audioContext });
+
+    try {
+      renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+      await vi.waitFor(() => expect(pendingFlush).toHaveBeenCalled());
+      renderer.setTrack(null, null);
+      const scheduled = createSource.mock.calls.length;
+
+      finishDrain();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(renderer.snapshot.get().context.status).toBe('idle');
+      expect(renderer.getClockTimeUs()).toBeUndefined();
+      expect(createSource).toHaveBeenCalledTimes(scheduled);
+    } finally {
+      finishDrain();
+      renderer.destroy();
+      pendingFlush.mockRestore();
+      createSource.mockRestore();
+    }
+  });
+
   it('re-anchors instead of inserting silence on a large timestamp jump', async () => {
     const frames = await encodeTestFrames(3);
     // Latency catch-up: everything from the third frame on arrives from far

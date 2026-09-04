@@ -102,6 +102,8 @@ const DEFAULT_TICK_INTERVAL_MS = 10;
  * sawtoothing the jitter-buffer depth the latency controller measures.
  */
 const MAX_PENDING_DECODES = 4;
+/** Allow sample rounding without treating a missing audio packet as contiguous. */
+const AUDIO_TIMESTAMP_TOLERANCE_US = 1_000;
 /**
  * Media-time jump beyond which incoming audio is a timeline reset rather than a gap or reorder within the same timeline
  * (see `TIMELINE_DISCONTINUITY_US`). **Both directions.** Forward: a latency catch-up skipped groups, or the
@@ -141,6 +143,9 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   let destroyed = false;
   /** Timestamp of the last chunk fed to the decoder, for discontinuity detection. */
   let lastEnqueuedUs: number | undefined;
+  let lastDecodedDurationUs: number | undefined;
+  let lastDecodedEndUs: number | undefined;
+  let drainingDecoder: AudioDecoder | undefined;
   /** The schedule has no anchor yet: the next one should be placed at the live edge. */
   let needsJoinAnchor = true;
   /**
@@ -228,6 +233,9 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     if (decoder && decoder.state !== 'closed') decoder.close();
 
     decoder = null;
+    drainingDecoder = undefined;
+    lastDecodedDurationUs = undefined;
+    lastDecodedEndUs = undefined;
     // A fresh decoder starts a fresh input timeline: the next chunk fed is
     // not a jump within the old one, so it must not re-trigger the
     // discontinuity restart that closed this decoder — and a gap placement
@@ -289,6 +297,9 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     try {
       if (destroyed || data.numberOfFrames === 0) return;
 
+      lastDecodedDurationUs = data.duration;
+      lastDecodedEndUs = data.timestamp + data.duration;
+
       const buffer = audioContext.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
 
       for (let channel = 0; channel < data.numberOfChannels; channel++) {
@@ -347,7 +358,17 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       let idealStart: number;
 
       if (last) {
-        idealStart = last.endCtx + Math.max(0, data.timestamp - segmentEndMediaUs(last)) / 1_000_000 / currentRate;
+        const mediaEndUs = segmentEndMediaUs(last);
+        const gapS = Math.max(0, data.timestamp - mediaEndUs) / 1_000_000 / currentRate;
+
+        idealStart = last.endCtx + gapS;
+
+        if (gapS > 0) {
+          // The next packet establishes the gap's duration. Advance the
+          // master clock through that known silence so video need not
+          // freeze with each missing audio packet.
+          segments.push({ startCtx: last.endCtx, endCtx: idealStart, mediaUs: mediaEndUs, rate: currentRate });
+        }
       } else {
         idealStart = audioContext.currentTime + scheduleMargin;
 
@@ -408,7 +429,7 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   const tick = (): void => {
     // After a decoder error there is nothing productive to pull into —
     // draining would silently strip the jitter buffer at tick rate.
-    if (destroyed || !source || inner.snapshot.get().context.status === 'error') return;
+    if (destroyed || !source || drainingDecoder || inner.snapshot.get().context.status === 'error') return;
 
     try {
       pruneSegments();
@@ -443,6 +464,46 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
           needsJoinAnchor = true;
           rejoinAnchorArmed = true;
           continue;
+        }
+
+        // Some audio decoders accumulate output timestamps across missing
+        // packets. Even a single short gap then permanently shifts the
+        // audio master clock behind the wire timeline. Drain before
+        // restarting so pending outputs and scheduled audio survive. The
+        // output-end check also handles codecs that split one input into
+        // several outputs: packet duration is only a prompt to check.
+        if (
+          decoder &&
+          lastEnqueuedUs !== undefined &&
+          (lastDecodedDurationUs === undefined ||
+            next.timestampUs - lastEnqueuedUs > lastDecodedDurationUs + AUDIO_TIMESTAMP_TOLERANCE_US)
+        ) {
+          const current = decoder;
+          const timestampUs = next.timestampUs;
+
+          drainingDecoder = current;
+          void current.flush().then(
+            () => {
+              if (decoder !== current || destroyed) return;
+
+              if (lastDecodedEndUs !== undefined && timestampUs - lastDecodedEndUs > AUDIO_TIMESTAMP_TOLERANCE_US) {
+                current.close();
+                decoder = null;
+                lastDecodedDurationUs = undefined;
+                lastDecodedEndUs = undefined;
+              }
+
+              lastEnqueuedUs = undefined;
+              drainingDecoder = undefined;
+            },
+            (error) => {
+              if (decoder !== current || destroyed) return;
+
+              drainingDecoder = undefined;
+              inner.send({ type: 'status', status: 'error', error });
+            }
+          );
+          return;
         }
 
         const active = ensureDecoder();
