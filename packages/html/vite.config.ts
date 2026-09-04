@@ -112,6 +112,10 @@ const cdnPresets = [
 ];
 const mediaDir = 'src/define/media';
 const mediaDirPath = resolve(packageDir, mediaDir);
+// `simple-moq-video` is deliberately kept off the CDN: the MoQ engine has no error slot yet, so the element cannot
+// report a failed transport, an unsupported codec, or a bad catalog. Publishing it would ship a player that fails
+// silently. Remove it from this list once the engine surfaces errors.
+const cdnMediaExclusions = new Set(['simple-moq-video']);
 
 /**
  * Media entries, one bundle per module under `src/define/media` — or per flavor, for a module that is a directory.
@@ -125,6 +129,7 @@ const mediaDirPath = resolve(packageDir, mediaDir);
  * up in a single realm — see the tag-collision note in `define/media/mux-video/spf`.
  */
 const cdnMediaEntries = readdirSync(mediaDirPath, { withFileTypes: true })
+  .filter((entry) => !cdnMediaExclusions.has(basename(entry.name, '.ts')))
   .flatMap((entry) => {
     if (entry.isDirectory()) {
       return globSync(`${mediaDir}/${entry.name}/*.ts`, { cwd: packageDir }).map((src) => {

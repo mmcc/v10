@@ -41,6 +41,21 @@ const presentation = (video: any[], audio: any[] = [], url = 'https://example.co
   ],
 });
 
+// A video selection set with several switching sets — sibling *content*
+// items (a MoQ publisher's camera and screen share), not quality alternates.
+const multiSetPresentation = (...videoSets: any[][]) => ({
+  id: 'pres-multi',
+  url: 'moqt://relay.example.com/live',
+  selectionSets: [
+    {
+      id: 'v',
+      type: 'video',
+      switchingSets: videoSets.map((tracks, index) => ({ id: `vs-${index}`, type: 'video', tracks })),
+    },
+    { id: 'a', type: 'audio', switchingSets: [{ id: 'as', type: 'audio', tracks: [] }] },
+  ],
+});
+
 const vTrack = (over: any) => ({
   type: 'video',
   url: 'https://cdn-a/v.m3u8',
@@ -159,7 +174,7 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
     expect([...host.videoRenditions].map((r: any) => r.active)).toEqual([false, true]);
   });
 
-  it('reflects active by properties, so a non-primary CDN resolved id still lights up its rendition', async () => {
+  it('reflects active through the deduped entry, so a non-primary CDN resolved id still lights up its rendition', async () => {
     engine.state.presentation.set(
       presentation([
         vTrack({ id: 'a-1080', width: 1920, height: 1080, bandwidth: 5_000_000, url: 'https://a/v.m3u8' }),
@@ -170,13 +185,54 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
     await flush();
 
     // The DOM rendition kept the first copy's id ('a-1080'); the engine resolved
-    // the second-CDN copy (as on failover). Property-based reflection still marks
-    // the collapsed rendition active.
+    // the second-CDN copy (as on failover). The resolved id maps back to the
+    // entry the dedupe kept, so the collapsed rendition is still the active one.
     engine.state.selectedVideoTrackId.set('b-1080');
     await flush();
 
     expect([...host.videoRenditions].map((r: any) => r.id)).toEqual(['a-1080', 'a-720']);
     expect([...host.videoRenditions].map((r: any) => r.active)).toEqual([true, false]);
+  });
+
+  it('lights up exactly one entry when sibling switching sets hold same-shaped renditions', async () => {
+    // Camera and screen share are different content with identical
+    // width/height/bitrate. A shape comparison marks both active; only the
+    // switching set the resolved id lives in tells them apart.
+    const shape = { width: 1280, height: 720, bandwidth: 3_000_000 };
+
+    engine.state.presentation.set(
+      multiSetPresentation([vTrack({ id: 'camera-720', ...shape })], [vTrack({ id: 'screen-720', ...shape })])
+    );
+    await flush();
+
+    engine.state.selectedVideoTrackId.set('screen-720');
+    await flush();
+
+    expect([...host.videoRenditions].map((r: any) => r.id)).toEqual(['camera-720', 'screen-720']);
+    expect([...host.videoRenditions].map((r: any) => r.active)).toEqual([false, true]);
+  });
+
+  it('writes the track id alongside the criteria so a cross-set pick can change content', async () => {
+    // The criteria are shape-only and match both sets; without the id the
+    // engine would confine to whichever set comes first (the camera).
+    const shape = { width: 1280, height: 720, bandwidth: 3_000_000 };
+
+    engine.state.presentation.set(
+      multiSetPresentation([vTrack({ id: 'camera-720', ...shape })], [vTrack({ id: 'screen-720', ...shape })])
+    );
+    await flush();
+
+    host.videoRenditions.selectedIndex = 1;
+    await flush();
+    expect(engine.state.selectedVideoTrackId.get()).toBe('screen-720');
+    expect(engine.state.userVideoTrackSelection.get()).toEqual(shape);
+
+    // Auto releases the quality pin but keeps the content item: clearing the
+    // id too would snap the viewer back to the camera.
+    host.videoRenditions.selectedIndex = -1;
+    await flush();
+    expect(engine.state.userVideoTrackSelection.get()).toBeUndefined();
+    expect(engine.state.selectedVideoTrackId.get()).toBe('screen-720');
   });
 
   it('reflects audio enabled by properties across per-CDN copies', async () => {
@@ -211,6 +267,7 @@ describe('HlsVideoMediaMediaTracksMixin', () => {
     host.videoRenditions.selectedIndex = 1;
     await flush();
     expect(engine.state.userVideoTrackSelection.get()).toEqual({ width: 640, height: 360, bandwidth: 800_000 });
+    expect(engine.state.selectedVideoTrackId.get()).toBe('lo');
 
     host.videoRenditions.selectedIndex = -1;
     await flush();

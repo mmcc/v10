@@ -454,6 +454,177 @@ describe('switchVideoTrack', () => {
     });
   });
 
+  describe('content identity (separate switching sets)', () => {
+    // A switching set is one content item's quality alternates; a second
+    // switching set is *different content* (a MoQ publisher's screen share
+    // beside its camera, both `role: 'video'`). Selection enumerates the
+    // rendered set only, so no throughput movement can present a content
+    // change as a quality change.
+    const cameraLadder = [
+      createVideoTrack('camera-360p', 600_000),
+      createVideoTrack('camera-720p', 2_400_000),
+      createVideoTrack('camera-1080p', 4_800_000),
+    ];
+    // Cheaper than every camera rendition — in one switching set this is what
+    // the ranker falls back to when throughput collapses.
+    const screenShare = [createVideoTrack('screen', 200_000)];
+
+    const createMultiSetPresentation = (): Presentation =>
+      ({
+        id: 'presentation-multi-set',
+        url: 'moqt://relay.example.com/live',
+        selectionSets: [
+          {
+            id: 'video-set',
+            type: 'video' as const,
+            // Set ids deliberately differ from every track id so these
+            // tests catch a constraint that wrongly matches set ids.
+            switchingSets: [
+              { id: 'camera-set', type: 'video' as const, tracks: cameraLadder },
+              { id: 'screen-set', type: 'video' as const, tracks: screenShare },
+            ],
+          } as VideoSelectionSet,
+        ],
+      }) as Presentation;
+
+    it('never crosses into another switching set when bandwidth collapses', async () => {
+      const state = makeState({
+        presentation: createMultiSetPresentation(),
+        bandwidthState: createBandwidthState(3_000_000),
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('camera-720p');
+
+      // Below every camera rendition: the over-throughput fallback is the
+      // cheapest *camera*, never the cheaper screen share.
+      state.bandwidthState.set(createBandwidthState(50_000));
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('camera-360p');
+
+      state.bandwidthState.set(createBandwidthState(6_000_000));
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('camera-1080p');
+
+      reactor.destroy();
+    });
+
+    it('honors an explicit cross-set selection and ranks within that set only', async () => {
+      const state = makeState({
+        presentation: createMultiSetPresentation(),
+        bandwidthState: createBandwidthState(3_000_000),
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('camera-720p');
+
+      // The API-level content choice: a direct selection write moves the
+      // active set, and ranking keeps honoring it across bandwidth
+      // changes instead of clobbering back to the camera.
+      state.selectedVideoTrackId.set('screen');
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('screen');
+
+      state.bandwidthState.set(createBandwidthState(6_000_000));
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('screen');
+
+      // Selecting back into the camera set re-enables its ladder — the
+      // manual 360p pick upgrades to the bandwidth-fitting rendition.
+      state.selectedVideoTrackId.set('camera-360p');
+      state.bandwidthState.set(createBandwidthState(3_000_000));
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('camera-720p');
+
+      reactor.destroy();
+    });
+
+    it('lets a durable user selection choose a sibling content set — and it outranks the current pick', async () => {
+      // userVideoTrackSelection is the durable consumer-intent slot: it
+      // survives selection clears (constraint prunes, source hiccups), so
+      // it decides the active set — an explicit content choice must never
+      // silently revert to the default camera.
+      const state = makeState({
+        presentation: createMultiSetPresentation(),
+        bandwidthState: createBandwidthState(3_000_000),
+        selectedVideoTrackId: 'camera-720p',
+        userVideoTrackSelection: { id: 'screen' },
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('screen');
+
+      reactor.destroy();
+    });
+
+    it('keeps an explicit cross-set selection when a quality pin matches both sets', async () => {
+      // width/height/bandwidth is a *rendition* shape, not a content
+      // identity — a screen share can match a camera rendition exactly. The
+      // pin then names no content item, so it must not overrule the id.
+      const shape = { width: 1280, height: 720, bandwidth: 2_400_000 };
+      const state = makeState({
+        presentation: {
+          id: 'presentation-ambiguous-pin',
+          url: 'moqt://relay.example.com/live',
+          selectionSets: [
+            {
+              id: 'video-set',
+              type: 'video' as const,
+              switchingSets: [
+                {
+                  id: 'camera-set',
+                  type: 'video' as const,
+                  tracks: [
+                    createVideoTrack('camera-360p', 600_000),
+                    { ...createVideoTrack('camera-720p', 2_400_000), ...shape },
+                  ],
+                },
+                {
+                  id: 'screen-set',
+                  type: 'video' as const,
+                  tracks: [{ ...createVideoTrack('screen', 2_400_000), ...shape }],
+                },
+              ],
+            } as VideoSelectionSet,
+          ],
+        } as Presentation,
+        bandwidthState: createBandwidthState(3_000_000),
+        selectedVideoTrackId: 'screen',
+        userVideoTrackSelection: shape,
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('screen');
+
+      reactor.destroy();
+    });
+
+    it('falls back to the rendered set when the user selection matches nothing', async () => {
+      // A stale id (e.g. from a previous source) must not strand playback:
+      // no set matches, so the default camera set is ranked as usual.
+      const state = makeState({
+        presentation: createMultiSetPresentation(),
+        bandwidthState: createBandwidthState(3_000_000),
+        userVideoTrackSelection: { id: 'no-such-track' },
+      });
+
+      const reactor = switchVideoTrack.setup({ state });
+
+      await flush();
+      expect(state.selectedVideoTrackId.get()).toBe('camera-720p');
+
+      reactor.destroy();
+    });
+  });
+
   describe('playerResolutionCap (player-resolution cap)', () => {
     const sized = (id: string, bandwidth: number, width: number, height: number): PartiallyResolvedVideoTrack => ({
       ...createVideoTrack(id, bandwidth),
