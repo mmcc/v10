@@ -170,7 +170,12 @@ function resolveStart(filter: LocationFilter | undefined, largest: Location | un
   return { group: largest?.group ?? 0, object: 0 };
 }
 
-export function createRelayHub(): RelayHub {
+export function createRelayHub(
+  options: {
+    /** Delay individual downstream object streams to exercise jitter and late arrivals. */
+    deliveryDelayMs?: (trackName: string, object: Readonly<BufferedObject>) => number;
+  } = {}
+): RelayHub {
   let destroyed = false;
   let nextSubscriberAlias = 1;
   let publisherConnections = 0;
@@ -179,6 +184,7 @@ export function createRelayHub(): RelayHub {
   const trackEnds: ObservedTrackEnd[] = [];
   const tracks = new Map<string, TrackRecord>();
   const closers = new Set<() => void>();
+  const deliveries = new Set<ReturnType<typeof setTimeout>>();
   /** Tracks with standing upstream demand (downstream viewers or test priming). */
   const demand = new Set<string>();
   /** The live publisher connection's per-track pull, when one is connected. */
@@ -286,8 +292,8 @@ export function createRelayHub(): RelayHub {
 
     /**
      * Pull one announced track: a fresh bidi stream per SUBSCRIBE, alias recorded from the publisher's SUBSCRIBE_OK,
-     * held open until one side ends it. A bare FIN from the publisher is the draft-19 clean track end — recorded as
-     * churn, and forwarded to the track's downstream subscribers as PUBLISH_DONE the way a real relay ends the track.
+     * held open until one side ends it. A bare FIN from the publisher is the clean track end — recorded as churn, and
+     * forwarded to the track's downstream subscribers as PUBLISH_DONE the way a real relay ends the track.
      */
     const subscribeUpstream = (trackName: string): void => {
       if (destroyed || connectionClosed || upstreamTracks.has(trackName)) return;
@@ -564,7 +570,21 @@ export function createRelayHub(): RelayHub {
             subscription = {
               trackAlias,
               start: resolveStart(message.parameters.locationFilter, track.largest),
-              deliver: (object) => forwardObject(trackAlias, object),
+              deliver: (object) => {
+                const delay = options.deliveryDelayMs?.(track.name, object) ?? 0;
+
+                if (delay <= 0) {
+                  forwardObject(trackAlias, object);
+                  return;
+                }
+
+                const timer = setTimeout(() => {
+                  deliveries.delete(timer);
+                  forwardObject(trackAlias, object);
+                }, delay);
+
+                deliveries.add(timer);
+              },
               end: (statusCode) => {
                 void writer
                   .write(encodePublishDone(statusCode, 0, ''))
@@ -661,6 +681,10 @@ export function createRelayHub(): RelayHub {
     objectCount: (trackName) => tracks.get(trackName)?.objectsReceived ?? 0,
     destroy() {
       destroyed = true;
+
+      for (const timer of deliveries) clearTimeout(timer);
+
+      deliveries.clear();
 
       for (const close of [...closers]) close();
 

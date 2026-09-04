@@ -37,7 +37,11 @@ import type { PreviewSource } from '../../behaviors/dom/sync-preview';
 import { syncPreview } from '../../behaviors/dom/sync-preview';
 import type { PublishSessionStatus } from '../../behaviors/open-publish-session';
 import { openPublishSession } from '../../behaviors/open-publish-session';
-import type { DataTrackProducer, PublishDataTrackConfig } from '../../behaviors/setup-track-publishers';
+import type {
+  DataTrackProducer,
+  PublishDataTrackConfig,
+  PublishTrackPriorities,
+} from '../../behaviors/setup-track-publishers';
 import { setupTrackPublishers } from '../../behaviors/setup-track-publishers';
 import type { PublishStatsFacts } from '../../behaviors/track-publish-stats';
 import { trackPublishStats } from '../../behaviors/track-publish-stats';
@@ -62,6 +66,7 @@ export type {
   EncoderSupportFacts,
   PreviewSource,
   PublishDataTrackConfig,
+  PublishTrackPriorities,
   PublishEndpoint,
   PublishErrorFacts,
   PublishSessionActor,
@@ -157,6 +162,13 @@ export interface MoqPublishEngineSignals {
 // ============================================================================
 
 export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEngineState, MoqPublishEngineContext> {
+  /**
+   * Relative track importance for MoQ delivery and browser upload scheduling. Defaults to catalog, audio, camera, then
+   * screen. Lower numbers have higher priority; see {@link PublishTrackPriorities}. Invalid values use the default.
+   *
+   * To favor screen sharing over camera video while keeping audio first, set `{ audio: 32, screen: 64, camera: 128 }`.
+   */
+  trackPriorities?: PublishTrackPriorities;
   /** Forced-keyframe cadence; each GoP becomes one MoQ group. */
   groupDurationSec?: number;
   /** Camera video tuning (an array per kind is the simulcast seam, later). */

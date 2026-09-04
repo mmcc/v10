@@ -12,11 +12,13 @@
  * **Data flows only while bound to a subscription.** Announce-and-serve ingest is pull-through: a subgroup stream is
  * only meaningful under a track alias the session bound with a SUBSCRIBE_OK, and an unbound alias is the peer's
  * "unknown track alias" (stream dropped after a 1 s grace). `{type:'bind'}` carries the current subscription's alias;
- * frames arriving unbound are dropped without opening streams. Groups never span bindings — a bind or unbind resets the
- * open group, so a fresh subscription starts at the next keyframe (`groupPerFrame` tracks start at the next frame). For
- * tracks whose frames flow only on _change_ rather than on a cadence — the catalog — waiting for the next frame would
- * stall a new subscription forever, so `replayLastGroupOnBind` retains the latest frame (bound or not) and re-emits it
- * as a fresh group on every bind.
+ * frames arriving unbound are dropped without opening streams. Groups still never span bindings — a bind or unbind
+ * resets the open group — but the reset does not always cost a wait for fresh data: keyframe-grouped tracks replay the
+ * retained in-progress group from object 0 so a subscription that arrives mid-group decodes immediately, while
+ * `groupPerFrame` tracks have no in-progress group to replay and simply start at the next frame. For tracks whose
+ * frames flow only on _change_ rather than on a cadence — the catalog — waiting for the next frame would stall a new
+ * subscription forever, so `replayLastGroupOnBind` retains the latest frame (bound or not) and re-emits it as a fresh
+ * group on every bind.
  *
  * Group mapping follows MSF: video starts a new group on every keyframe (`objectId` resets to 0 — the extraction side
  * recovers the keyframe flag from `objectId === 0`); audio and catalog tracks set `groupPerFrame`, where every frame is
@@ -27,7 +29,7 @@
  * message order. Async completions feed the reactive snapshot counters through internal messages, mirroring
  * `actors/dom/encoder-actor.ts`.
  */
-import type { MessageActor } from '../../core/actors/create-machine-actor';
+import type { ActorStateDefinition, MessageActor } from '../../core/actors/create-machine-actor';
 import { createMachineActor } from '../../core/actors/create-machine-actor';
 import { SerialRunner, Task } from '../../core/tasks/task';
 import type { PropertyPair } from '../../media/moq/loc';
@@ -65,6 +67,13 @@ export interface TrackPublisherCounters {
   queuedGroups: number;
   /** Timestamp of the most recently written object; NaN before the first. */
   lastTimestampUs: number;
+  /**
+   * Group ID of the Largest Object written to the wire (§5.1.2); -1 before the first object. Paired with
+   * `largestObjectId`, this is what the session reports as LARGEST_OBJECT in SUBSCRIBE_OK.
+   */
+  largestGroupId: number;
+  /** Object ID of the Largest Object within `largestGroupId`; -1 before the first object. */
+  largestObjectId: number;
 }
 
 export type TrackPublisherMessage =
@@ -131,7 +140,7 @@ interface GroupCell {
 
 /** Snapshot-context updates driven by the async stream work. */
 type InternalMessage =
-  | { type: 'object-written'; bytes: number; timestampUs: number }
+  | { type: 'object-written'; bytes: number; timestampUs: number; groupId: number; objectId: number }
   | { type: 'group-opened' }
   | { type: 'group-finished' }
   | { type: 'groups-dropped'; count: number };
@@ -159,6 +168,13 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
   let boundAlias: number | undefined;
   /** Latest frame, retained for replay-on-bind (bound or not). */
   let lastFrame: Extract<TrackPublisherMessage, { type: 'frame' }> | undefined;
+  /**
+   * Frames of the in-progress group (keyframe + deltas so far), retained for non-`groupPerFrame` tracks — bound or not
+   * — so a bind mid-group can replay the group from object 0. A fresh subscription (the relay's `relative-group 1`
+   * upstream join) needs a decodable start, and a subgroup stream that begins partway through a group is dropped by the
+   * peer. Reset on each keyframe; group-per-frame tracks use `replayLastGroupOnBind` instead.
+   */
+  let currentGroupFrames: Extract<TrackPublisherMessage, { type: 'frame' }>[] = [];
 
   // Assigned right after createMachineActor returns; the runner tasks only
   // complete asynchronously, well after construction.
@@ -270,7 +286,13 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
             endOfGroup: true,
           });
           await cell.writer.writeObject({ objectId, properties: frame.properties, payload: frame.payload });
-          inner?.send({ type: 'object-written', bytes: frame.payload.length, timestampUs: frame.timestampUs });
+          inner?.send({
+            type: 'object-written',
+            bytes: frame.payload.length,
+            timestampUs: frame.timestampUs,
+            groupId: cell.groupId,
+            objectId,
+          });
 
           if (groupPerFrame) finishCell(cell);
         })
@@ -289,10 +311,35 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
           if (signal.aborted || cell.aborted) return;
 
           await cell.writer!.writeObject({ objectId, properties: frame.properties, payload: frame.payload });
-          inner?.send({ type: 'object-written', bytes: frame.payload.length, timestampUs: frame.timestampUs });
+          inner?.send({
+            type: 'object-written',
+            bytes: frame.payload.length,
+            timestampUs: frame.timestampUs,
+            groupId: cell.groupId,
+            objectId,
+          });
         })
       )
       .catch(failCell(cell));
+  };
+
+  /**
+   * Replay the retained in-progress group as a fresh group under the current binding — the instant-join path for a
+   * subscription that arrived mid-group. Opens one stream, writes the retained frames as objects 0..n-1, and leaves the
+   * group open (`currentCell`) so live deltas continue extending it and the next keyframe FINs it.
+   */
+  const openReplayGroup = (frames: readonly Extract<TrackPublisherMessage, { type: 'frame' }>[]): void => {
+    const cell: GroupCell = { groupId: nextGroupId++, trackAlias: boundAlias!, aborted: false };
+
+    openCells.push(cell);
+    scheduleOpen(cell, frames[0]!);
+
+    let objectId = 1;
+
+    for (let index = 1; index < frames.length; index++) scheduleWrite(cell, objectId++, frames[index]!);
+
+    currentCell = cell;
+    nextObjectId = objectId;
   };
 
   const scheduleFin = (cell: GroupCell): void => {
@@ -326,6 +373,50 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
     return dropped.length;
   };
 
+  type CounterHandlers = Pick<
+    NonNullable<ActorStateDefinition<TrackPublisherUserState, TrackPublisherCounters, Message, undefined>['on']>,
+    InternalMessage['type']
+  >;
+
+  /**
+   * Counter bookkeeping shared verbatim between `publishing` and `ended`: once a group's stream work is scheduled, its
+   * async completions still land on the snapshot the same way whether or not a live frame can extend the group
+   * further.
+   */
+  const counterHandlers = {
+    'object-written': (msg, { context, setContext }) => {
+      const isLarger =
+        msg.groupId > context.largestGroupId ||
+        (msg.groupId === context.largestGroupId && msg.objectId > context.largestObjectId);
+
+      setContext({
+        ...context,
+        publishedObjects: context.publishedObjects + 1,
+        bytesSent: context.bytesSent + msg.bytes,
+        lastTimestampUs: msg.timestampUs,
+        largestGroupId: isLarger ? msg.groupId : context.largestGroupId,
+        largestObjectId: isLarger ? msg.objectId : context.largestObjectId,
+      });
+    },
+    'group-opened': (_, { context, setContext }) => {
+      setContext({ ...context, openedGroups: context.openedGroups + 1 });
+    },
+    'group-finished': (_, { context, setContext }) => {
+      setContext({
+        ...context,
+        publishedGroups: context.publishedGroups + 1,
+        queuedGroups: openCells.length,
+      });
+    },
+    'groups-dropped': (msg, { context, setContext }) => {
+      setContext({
+        ...context,
+        droppedGroups: context.droppedGroups + msg.count,
+        queuedGroups: openCells.length,
+      });
+    },
+  } satisfies CounterHandlers;
+
   inner = createMachineActor<TrackPublisherUserState, TrackPublisherCounters, Message>({
     initial: 'publishing',
     context: {
@@ -336,12 +427,23 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
       bytesSent: 0,
       queuedGroups: 0,
       lastTimestampUs: Number.NaN,
+      largestGroupId: -1,
+      largestObjectId: -1,
     },
     states: {
       publishing: {
         on: {
           frame: (msg, { context, setContext }) => {
             if (replayLastGroupOnBind) lastFrame = msg;
+
+            // Retain the in-progress group (bound or not) so a later bind
+            // replays it from object 0 — a keyframe starts a fresh group,
+            // a decodable delta extends it, and a delta before the first
+            // keyframe has nothing to extend.
+            if (!groupPerFrame) {
+              if (msg.keyframe) currentGroupFrames = [msg];
+              else if (currentGroupFrames.length > 0) currentGroupFrames.push(msg);
+            }
 
             // Unbound: no subscription is reading this track — a stream
             // opened now would carry an alias the peer never registered.
@@ -393,24 +495,31 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
             // drop), and stale serial work would delay the new
             // subscription's first data behind it. Video resumes at its
             // next keyframe under the new alias.
-            if (boundAlias !== undefined) {
-              const droppedNow = dropQueuedGroups('the subscription was replaced with the group unfinished');
+            let droppedNow = 0;
 
-              if (droppedNow > 0) {
-                setContext({
-                  ...context,
-                  queuedGroups: openCells.length,
-                  droppedGroups: context.droppedGroups + droppedNow,
-                });
-              }
+            if (boundAlias !== undefined) {
+              droppedNow = dropQueuedGroups('the subscription was replaced with the group unfinished');
             }
 
             boundAlias = msg.trackAlias;
 
-            // The new subscription must not wait for the next change-driven
-            // frame; the re-sent frame takes the ordinary path (queued
-            // behind this message, boundAlias already set).
+            // Instant join: catalog-shaped tracks re-send their latest
+            // change-driven frame (queued behind this message, boundAlias
+            // already set); keyframe-grouped tracks replay the in-progress
+            // group from object 0 so a mid-group subscriber decodes without
+            // waiting for the next keyframe.
+            const replayedGroup = !replayLastGroupOnBind && !groupPerFrame && currentGroupFrames.length > 0;
+
             if (replayLastGroupOnBind && lastFrame) inner?.send(lastFrame);
+            else if (replayedGroup) openReplayGroup(currentGroupFrames);
+
+            if (droppedNow > 0 || replayedGroup) {
+              setContext({
+                ...context,
+                queuedGroups: openCells.length,
+                droppedGroups: context.droppedGroups + droppedNow,
+              });
+            }
           },
           unbind: (_, { context, setContext }) => {
             if (boundAlias === undefined) return;
@@ -437,62 +546,14 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
 
             transition('ended');
           },
-          'object-written': (msg, { context, setContext }) => {
-            setContext({
-              ...context,
-              publishedObjects: context.publishedObjects + 1,
-              bytesSent: context.bytesSent + msg.bytes,
-              lastTimestampUs: msg.timestampUs,
-            });
-          },
-          'group-opened': (_, { context, setContext }) => {
-            setContext({ ...context, openedGroups: context.openedGroups + 1 });
-          },
-          'group-finished': (_, { context, setContext }) => {
-            setContext({
-              ...context,
-              publishedGroups: context.publishedGroups + 1,
-              queuedGroups: openCells.length,
-            });
-          },
-          'groups-dropped': (msg, { context, setContext }) => {
-            setContext({
-              ...context,
-              droppedGroups: context.droppedGroups + msg.count,
-              queuedGroups: openCells.length,
-            });
-          },
+          ...counterHandlers,
         },
       },
       ended: {
         // Late frames are ignored; queued work still drains, so the
         // counter updates keep landing.
         on: {
-          'object-written': (msg, { context, setContext }) => {
-            setContext({
-              ...context,
-              publishedObjects: context.publishedObjects + 1,
-              bytesSent: context.bytesSent + msg.bytes,
-              lastTimestampUs: msg.timestampUs,
-            });
-          },
-          'group-opened': (_, { context, setContext }) => {
-            setContext({ ...context, openedGroups: context.openedGroups + 1 });
-          },
-          'group-finished': (_, { context, setContext }) => {
-            setContext({
-              ...context,
-              publishedGroups: context.publishedGroups + 1,
-              queuedGroups: openCells.length,
-            });
-          },
-          'groups-dropped': (msg, { context, setContext }) => {
-            setContext({
-              ...context,
-              droppedGroups: context.droppedGroups + msg.count,
-              queuedGroups: openCells.length,
-            });
-          },
+          ...counterHandlers,
         },
       },
     },

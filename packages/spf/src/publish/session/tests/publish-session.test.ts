@@ -4,6 +4,7 @@ import { toLocFrame } from '../../../media/moq/loc';
 import { packageLocFrame } from '../../../media/moq/loc-packaging';
 import { applyMoqCatalogUpdate } from '../../../media/moq/parse-catalog';
 import { utf8Decode, utf8Encode } from '../../../network/moqt/bytes';
+import { StreamReader } from '../../../network/moqt/bytes';
 import {
   type ControlMessage,
   ControlMessageDeframer,
@@ -18,7 +19,7 @@ import {
   TRACK_PROPERTY,
   type TrackNamespace,
 } from '../../../network/moqt/control-messages';
-import type { MoqtObject } from '../../../network/moqt/object-stream';
+import { type MoqtObject, readFetchHeader, STREAM_TYPE } from '../../../network/moqt/object-stream';
 import { createMoqtSession, type MoqtSession } from '../../../network/moqt/session';
 import {
   openRawRequest,
@@ -66,6 +67,134 @@ function collectTrack(
   );
 
   return { objects, aliases, subscription };
+}
+
+/**
+ * A publish session facing a raw peer with no subscribe driver: the peer completes SETUP by hand and watches the
+ * publisher's uni streams for fill fetch streams, recording each FETCH_HEADER's Request ID and whether the publisher
+ * reset the stream (the fill-failure signal) or FINed it. `finish()` destroys the session and releases the observer's
+ * reader — the transport pair never ends its incoming-stream queues, so a pending `read()` would otherwise outlive the
+ * test.
+ */
+async function makeFillHarness({
+  reliableReset = true,
+  openFillStream,
+}: {
+  reliableReset?: boolean;
+  openFillStream?: () => Promise<WritableStream<Uint8Array>>;
+} = {}) {
+  const pair = createTransportPair();
+  const openUniStream = pair.client.createUnidirectionalStream.bind(pair.client);
+  let openedControl = false;
+
+  pair.client.createUnidirectionalStream = async () => {
+    if (openedControl && openFillStream) return openFillStream();
+
+    openedControl = true;
+    const stream = await openUniStream();
+    const getWriter = stream.getWriter.bind(stream);
+
+    // This zero-buffer pipe settles writes only once the peer has read
+    // them, so its reliable prefix is already delivered at commit time.
+    if (reliableReset) stream.getWriter = () => Object.assign(getWriter(), { commit() {} });
+
+    return stream;
+  };
+
+  const session = createMoqtPublishSession(pair.client);
+  const fills: { requestId: number; reset: boolean }[] = [];
+  const streams = pair.server.incomingUnidirectionalStreams.getReader();
+
+  void (async () => {
+    while (true) {
+      const { done, value } = await streams.read();
+      if (done) break;
+
+      void (async () => {
+        const reader = new StreamReader(value);
+        const type = await reader.readVarint().catch(() => -1);
+        if (type !== STREAM_TYPE.FETCH_HEADER) return;
+
+        const { requestId } = await readFetchHeader(reader);
+
+        // The publisher resets after the FETCH_HEADER; the drain throws.
+        try {
+          while (!(await reader.atEnd())) await reader.readUint8();
+
+          fills.push({ requestId, reset: false });
+        } catch {
+          fills.push({ requestId, reset: true });
+        }
+      })();
+    }
+  })();
+
+  const control = await pair.server.createUnidirectionalStream();
+
+  await control.getWriter().write(encodeSetup());
+  await session.ready;
+
+  return {
+    pair,
+    session,
+    fills,
+    finish: async () => {
+      session.destroy();
+      await streams.cancel();
+    },
+  };
+}
+
+/** A buffered send stream: reset discards everything except the explicitly committed prefix. */
+function makeBufferedFillStream() {
+  const chunks: Uint8Array[] = [];
+  let committed = 0;
+  let readIndex = 0;
+  let reset: unknown;
+  let pendingRead: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const deliver = () => {
+    if (!pendingRead) return;
+
+    const controller = pendingRead;
+    const limit = reset ? committed : chunks.length;
+
+    if (readIndex < limit) {
+      pendingRead = undefined;
+      controller.enqueue(chunks[readIndex++]!);
+    } else if (reset) {
+      pendingRead = undefined;
+      controller.error(reset);
+    }
+  };
+  const readable = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        pendingRead = controller;
+        deliver();
+      },
+    },
+    { highWaterMark: 0 }
+  );
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      chunks.push(chunk);
+      deliver();
+    },
+    abort(reason) {
+      reset = reason;
+      deliver();
+    },
+  });
+  const getWriter = writable.getWriter.bind(writable);
+
+  writable.getWriter = () =>
+    Object.assign(getWriter(), {
+      commit() {
+        committed = chunks.length;
+      },
+    });
+
+  return { writable, readable, reset: () => reset };
 }
 
 describe('createMoqtPublishSession', () => {
@@ -859,6 +988,288 @@ describe('createMoqtPublishSession', () => {
       expect(closes).toHaveLength(1);
     });
     subscriber.destroy();
+  });
+
+  it('reports the track Largest Object in SUBSCRIBE_OK once content exists', async () => {
+    const { pair, session, subscriber } = makePublishHarness();
+
+    await session.ready;
+    let largest: { group: number; object: number } | undefined;
+
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video', getLargestObject: () => largest });
+
+    // No content yet — SUBSCRIBE_OK omits LARGEST_OBJECT (§10.2.17).
+    const early = await rawSubscribe(pair.server, 'video', 201);
+
+    await vi.waitFor(() => {
+      expect(early.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    });
+    const earlyOk = early.received[0];
+
+    expect(earlyOk?.kind).toBe('subscribe-ok');
+
+    if (earlyOk?.kind === 'subscribe-ok') expect(earlyOk.parameters.largestObject).toBeUndefined();
+
+    // Once objects have been written, the next SUBSCRIBE_OK carries it
+    // (length-prefixed, the way moq-lite-rs decodes it).
+    largest = { group: 35, object: 28 };
+    const later = await rawSubscribe(pair.server, 'video', 203);
+
+    await vi.waitFor(() => {
+      expect(later.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    });
+    const laterOk = later.received[0];
+
+    expect(laterOk?.kind).toBe('subscribe-ok');
+
+    if (laterOk?.kind === 'subscribe-ok') expect(laterOk.parameters.largestObject).toEqual({ group: 35, object: 28 });
+
+    session.destroy();
+    subscriber.destroy();
+  });
+
+  it('opens and resets a fill fetch stream for an inbound FILL_PARAMETERS', async () => {
+    const { pair, session, fills, finish } = await makeFillHarness();
+
+    session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => ({ group: 4, object: 2 }),
+    });
+
+    await openRawRequest(
+      pair.server,
+      encodeSubscribe({
+        requestId: 205,
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        parameters: {
+          forward: 1,
+          locationFilter: { type: 'next-object' },
+          fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+        },
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(fills).toEqual([{ requestId: 205, reset: true }]);
+    });
+    await finish();
+  });
+
+  it('opens no fill fetch stream for an empty fill range (§5.1.3)', async () => {
+    const { pair, session, fills, finish } = await makeFillHarness();
+    let largest: { group: number; object: number } | undefined;
+
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video', getLargestObject: () => largest });
+    const subscribeWithFill = async (requestId: number, fill: Parameters<typeof encodeSubscribe>[0]['parameters']) => {
+      const request = await openRawRequest(
+        pair.server,
+        encodeSubscribe({
+          requestId,
+          trackNamespace: NAMESPACE,
+          trackName: 'video',
+          parameters: { forward: 1, locationFilter: { type: 'next-object' }, ...fill },
+        })
+      );
+
+      await vi.waitFor(() => {
+        expect(request.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+      });
+    };
+
+    // Nothing published yet: there is nothing to fill, whatever the filter.
+    await subscribeWithFill(207, {
+      fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+    });
+
+    // With content, a fill from the Next Object or the Next Group starts
+    // past Largest Object, and an omitted fill filter inherits the
+    // subscription's Next Object filter.
+    largest = { group: 4, object: 2 };
+    await subscribeWithFill(209, { fillParameters: { locationFilter: { type: 'next-object' } } });
+    await subscribeWithFill(211, {
+      fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 0 } },
+    });
+    await subscribeWithFill(213, { fillParameters: {} });
+
+    // Control: a fill of the current group is nonempty and is answered —
+    // and it is the only fill stream the peer ever saw.
+    await subscribeWithFill(215, {
+      fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+    });
+    await vi.waitFor(() => {
+      expect(fills).toEqual([{ requestId: 215, reset: true }]);
+    });
+    await finish();
+  });
+
+  it('keys a fill requested by REQUEST_UPDATE to the update Request ID', async () => {
+    const { pair, session, fills, finish } = await makeFillHarness();
+    let largest = { group: 4, object: 2 };
+
+    session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => largest,
+    });
+    const sub = await rawSubscribe(pair.server, 'video', 217);
+
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    });
+
+    // An empty-range fill is acknowledged like any update but opens no
+    // stream; a nonempty one opens (and resets) a stream carrying the
+    // update's own Request ID, not the subscription's.
+    await sub.send(encodeRequestUpdate(219, { fillParameters: { locationFilter: { type: 'next-object' } } }));
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok']);
+    });
+    largest = { group: 8, object: 3 };
+    await sub.send(
+      encodeRequestUpdate(221, { fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } } })
+    );
+    await vi.waitFor(() => {
+      expect(fills).toEqual([{ requestId: 221, reset: true }]);
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok', 'request-ok']);
+    });
+    expect(sub.received[2]).toMatchObject({ parameters: { largestObject: { group: 8, object: 3 } } });
+    await finish();
+  });
+
+  it('preserves the fill header when the peer reads only after the reset', async () => {
+    const fill = makeBufferedFillStream();
+    const { pair, session, finish } = await makeFillHarness({ openFillStream: async () => fill.writable });
+
+    session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => ({ group: 4, object: 2 }),
+    });
+    await openRawRequest(
+      pair.server,
+      encodeSubscribe({
+        requestId: 223,
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        parameters: { fillParameters: {} },
+      })
+    );
+    await vi.waitFor(() => expect(fill.reset()).toBeDefined());
+
+    const reader = new StreamReader(fill.readable);
+
+    expect(await reader.readVarint()).toBe(STREAM_TYPE.FETCH_HEADER);
+    expect(await readFetchHeader(reader)).toEqual({ requestId: 223 });
+    await expect(reader.atEnd()).rejects.toThrow('fill fetch streams are not served');
+    await finish();
+  });
+
+  it.each(['cancel', 'stop-reading', 'replace', 'end', 'destroy'] as const)(
+    'aborts backpressured fills when subscriptions %s',
+    async (action) => {
+      let writing = false;
+      const aborted = vi.fn();
+      const writable = new WritableStream<Uint8Array>({
+        write(_, controller) {
+          writing = true;
+          return new Promise<void>((_, reject) => {
+            controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+          });
+        },
+        abort: aborted,
+      });
+      const getWriter = writable.getWriter.bind(writable);
+
+      writable.getWriter = () => Object.assign(getWriter(), { commit() {} });
+
+      const { pair, session, finish } = await makeFillHarness({ openFillStream: async () => writable });
+      const track = session.registerTrack({
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        getLargestObject: () => ({ group: 4, object: 2 }),
+      });
+      const sub = await rawSubscribe(pair.server, 'video', 225);
+
+      await vi.waitFor(() => expect(sub.received[0]?.kind).toBe('subscribe-ok'));
+      await sub.send(encodeRequestUpdate(227, { fillParameters: {} }));
+      await vi.waitFor(() => expect(writing).toBe(true));
+
+      if (action === 'cancel') await sub.reset();
+      else if (action === 'stop-reading') await sub.abandonReads();
+      else if (action === 'replace') await rawSubscribe(pair.server, 'video', 229);
+      else if (action === 'destroy') session.destroy();
+      else track.end();
+
+      await vi.waitFor(() => expect(aborted).toHaveBeenCalledOnce());
+      await finish();
+    }
+  );
+
+  it('resets a pending fill open that completes after cancellation without writing its header', async () => {
+    let resolveOpen!: (stream: WritableStream<Uint8Array>) => void;
+    const openFillStream = vi.fn(
+      () =>
+        new Promise<WritableStream<Uint8Array>>((resolve) => {
+          resolveOpen = resolve;
+        })
+    );
+    const { pair, session, finish } = await makeFillHarness({ openFillStream });
+
+    session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => ({ group: 4, object: 2 }),
+    });
+    const sub = await rawSubscribe(pair.server, 'video', 231);
+
+    await vi.waitFor(() => expect(sub.received[0]?.kind).toBe('subscribe-ok'));
+    await sub.send(encodeRequestUpdate(233, { fillParameters: {} }));
+    await vi.waitFor(() => expect(openFillStream).toHaveBeenCalledOnce());
+    await sub.reset();
+    await vi.waitFor(() => expect(sub.ended()).toBe(true));
+
+    const write = vi.fn();
+    const abort = vi.fn();
+
+    resolveOpen(new WritableStream<Uint8Array>({ write, abort }));
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    expect(write).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it('rejects nonempty fills without reliable reset support while allowing ordinary subscriptions', async () => {
+    const { pair, session, fills, finish } = await makeFillHarness({ reliableReset: false });
+
+    session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => ({ group: 4, object: 2 }),
+    });
+    const rejected = await openRawRequest(
+      pair.server,
+      encodeSubscribe({
+        requestId: 235,
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        parameters: { fillParameters: {} },
+      })
+    );
+
+    await vi.waitFor(() => expect(rejected.ended()).toBe(true));
+    expect(rejected.received).toMatchObject([{ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED }]);
+
+    const sub = await rawSubscribe(pair.server, 'video', 237);
+
+    await vi.waitFor(() => expect(sub.received[0]?.kind).toBe('subscribe-ok'));
+    await sub.send(encodeRequestUpdate(239, { fillParameters: { locationFilter: { type: 'next-object' } } }));
+    await vi.waitFor(() => expect(sub.received[1]?.kind).toBe('request-ok'));
+    await sub.send(encodeRequestUpdate(241, { fillParameters: {} }));
+    await vi.waitFor(() => expect(sub.ended()).toBe(true));
+    expect(sub.received[2]).toMatchObject({ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED });
+    expect(fills).toEqual([]);
+    await finish();
   });
 
   it('rejects a subscription update it cannot apply instead of acknowledging it', async () => {

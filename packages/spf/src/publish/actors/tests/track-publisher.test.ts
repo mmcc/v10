@@ -574,7 +574,7 @@ describe('createTrackPublisherActor', () => {
     publisher.destroy();
   });
 
-  it('joins at the next keyframe after a bind', async () => {
+  it('replays the retained in-progress group from object 0 on bind', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
 
@@ -590,22 +590,87 @@ describe('createTrackPublisherActor', () => {
       });
     };
 
-    sendFrame(0, true); // unbound — dropped
+    // A whole group — keyframe and a delta — is produced before any
+    // subscription. Unbound, it opens no stream but is retained.
+    sendFrame(0, true);
+    sendFrame(33_333, false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(factory.streams).toHaveLength(0);
+
+    // The subscription binds mid-group: the retained group replays from
+    // object 0 (the keyframe) so the subscriber decodes without waiting
+    // for the next keyframe, and live frames extend it.
     publisher.send({ type: 'bind', trackAlias: 9 });
-    sendFrame(33_333, false); // bound, but no open group to extend — dropped
-    sendFrame(2_000_000, true); // the join point
-    sendFrame(2_033_333, false);
+    sendFrame(66_666, false);
+    sendFrame(2_000_000, true); // the next group boundary
     publisher.send({ type: 'end' });
 
     await vi.waitFor(() => {
-      expect(factory.streams).toHaveLength(1);
+      expect(factory.streams).toHaveLength(2);
       expect(factory.streams[0]!.closed).toBe(true);
+      expect(factory.streams[1]!.closed).toBe(true);
     });
-    const { header, objects } = await parseSubgroup(factory.streams[0]!);
+    const first = await parseSubgroup(factory.streams[0]!);
 
-    expect(header.trackAlias).toBe(9);
-    expect(objects.map((o) => o.objectId)).toEqual([0, 1]);
-    expect(toLocFrame(objects[0]!)!.timestampUs).toBe(2_000_000);
+    expect(first.header.trackAlias).toBe(9);
+    expect(first.objects.map((o) => o.objectId)).toEqual([0, 1, 2]);
+    expect(toLocFrame(first.objects[0]!)!.timestampUs).toBe(0);
+    expect(toLocFrame(first.objects[2]!)!.timestampUs).toBe(66_666);
+
+    const second = await parseSubgroup(factory.streams[1]!);
+
+    expect(second.header.groupId).toBe(1);
+    expect(toLocFrame(second.objects[0]!)!.timestampUs).toBe(2_000_000);
+    publisher.destroy();
+  });
+
+  it('tracks the Largest Object it has written on the snapshot', async () => {
+    const factory = makeStreamFactory();
+    const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
+
+    expect(counters(publisher).largestGroupId).toBe(-1);
+    expect(counters(publisher).largestObjectId).toBe(-1);
+
+    publisher.send({ type: 'bind', trackAlias: 5 });
+
+    const key0 = locFrame(0, [1], new Uint8Array([7]));
+
+    publisher.send({
+      type: 'frame',
+      payload: key0.payload,
+      properties: key0.properties,
+      keyframe: true,
+      timestampUs: 0,
+    });
+    const delta = locFrame(33_333, [2]);
+
+    publisher.send({
+      type: 'frame',
+      payload: delta.payload,
+      properties: delta.properties,
+      keyframe: false,
+      timestampUs: 33_333,
+    });
+    await vi.waitFor(() => {
+      expect(counters(publisher).largestGroupId).toBe(0);
+      expect(counters(publisher).largestObjectId).toBe(1);
+    });
+
+    const key1 = locFrame(66_666, [3], new Uint8Array([7]));
+
+    publisher.send({
+      type: 'frame',
+      payload: key1.payload,
+      properties: key1.properties,
+      keyframe: true,
+      timestampUs: 66_666,
+    });
+    await vi.waitFor(() => {
+      // A new group resets the object count — the Largest Object is the
+      // (group, object) pair, not the running object total.
+      expect(counters(publisher).largestGroupId).toBe(1);
+      expect(counters(publisher).largestObjectId).toBe(0);
+    });
     publisher.destroy();
   });
 
@@ -660,7 +725,7 @@ describe('createTrackPublisherActor', () => {
     publisher.destroy();
   });
 
-  it('starts a fresh group under the new alias on rebind and drops the old queue', async () => {
+  it('replays the in-progress group under the new alias on rebind and drops the old queue', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream });
 
@@ -687,17 +752,24 @@ describe('createTrackPublisherActor', () => {
 
     // The old binding's open group dies with its subscription (a stream
     // under the replaced alias is the peer's unknown-alias drop); the new
-    // binding starts a fresh group under the new alias.
+    // binding replays the in-progress group from object 0 under its own
+    // alias, then continues live.
     await vi.waitFor(() => {
-      expect(factory.streams).toHaveLength(2);
+      expect(factory.streams).toHaveLength(3);
       expect(factory.streams[0]!.aborted).toBe(true);
       expect(factory.streams[1]!.closed).toBe(true);
+      expect(factory.streams[2]!.closed).toBe(true);
     });
     expect(counters(publisher).droppedGroups).toBe(1);
-    const second = await parseSubgroup(factory.streams[1]!);
+    const replay = await parseSubgroup(factory.streams[1]!);
 
-    expect(second.header.trackAlias).toBe(3);
-    expect(second.header.groupId).toBe(1);
+    expect(replay.header.trackAlias).toBe(3);
+    expect(toLocFrame(replay.objects[0]!)!.timestampUs).toBe(0);
+
+    const next = await parseSubgroup(factory.streams[2]!);
+
+    expect(next.header.trackAlias).toBe(3);
+    expect(toLocFrame(next.objects[0]!)!.timestampUs).toBe(2_000_000);
     publisher.destroy();
   });
 
@@ -818,23 +890,32 @@ describe('createTrackPublisherActor', () => {
     });
     expect(onError).not.toHaveBeenCalled();
 
-    // While unbound, frames drop.
+    // While unbound, a keyframe opens no stream but is retained as the
+    // in-progress group.
     factory.gate = false;
     sendKey(2_000_000);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(factory.streams).toHaveLength(1);
 
-    // A new subscription re-binds and publishing resumes at its keyframe.
+    // A new subscription re-binds: the retained keyframe replays (instant
+    // join) under the new alias, then publishing resumes live.
     publisher.send({ type: 'bind', trackAlias: 8 });
     sendKey(4_000_000);
     publisher.send({ type: 'end' });
     await vi.waitFor(() => {
-      expect(factory.streams).toHaveLength(2);
+      expect(factory.streams).toHaveLength(3);
       expect(factory.streams[1]!.closed).toBe(true);
+      expect(factory.streams[2]!.closed).toBe(true);
     });
-    const { header } = await parseSubgroup(factory.streams[1]!);
+    const replay = await parseSubgroup(factory.streams[1]!);
 
-    expect(header.trackAlias).toBe(8);
+    expect(replay.header.trackAlias).toBe(8);
+    expect(toLocFrame(replay.objects[0]!)!.timestampUs).toBe(2_000_000);
+
+    const resumed = await parseSubgroup(factory.streams[2]!);
+
+    expect(resumed.header.trackAlias).toBe(8);
+    expect(toLocFrame(resumed.objects[0]!)!.timestampUs).toBe(4_000_000);
     publisher.destroy();
   });
 });

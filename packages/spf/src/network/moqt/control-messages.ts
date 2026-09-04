@@ -482,6 +482,33 @@ export function decodeLocationFilter(bytes: Uint8Array): LocationFilter {
   return filter;
 }
 
+/**
+ * Whether a Location filter, evaluated with the fetch rules of §5.1.2, selects no Objects. A fetch range — and so a
+ * subscription's fill range (§5.1.3) — is capped at Largest Object: with no Largest Object nothing exists to fetch, the
+ * Next Object and Next Group both lie past it, an absolute start past it selects nothing, and a bounded absolute range
+ * whose end precedes its start is empty. A publisher opens no fill fetch stream for an empty range.
+ */
+export function isEmptyFetchRange(filter: LocationFilter, largestObject: Location | undefined): boolean {
+  if (largestObject === undefined) return true;
+
+  switch (filter.type) {
+    case 'none':
+      return false;
+    case 'next-object':
+      return true;
+    case 'relative-group':
+      return filter.groupsBeforeNext === 0;
+    case 'absolute': {
+      const { start, endGroupDelta, endObject } = filter;
+      if (compareLocations(start, largestObject) > 0) return true;
+
+      // The end group is a non-negative delta from the start group, so
+      // only a same-group end can precede the start.
+      return endGroupDelta === 0 && endObject !== undefined && endObject < start.object;
+    }
+  }
+}
+
 // ============================================================================
 // Message Parameters (§10.2)
 // ============================================================================
