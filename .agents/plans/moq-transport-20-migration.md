@@ -283,8 +283,39 @@ sandbox's loopback relay pulls upstream with `relative-group 1`.
   FILL_PARAMETERS pulled out of the update's "unsupported" set so it no longer
   rejects the update. `encodeFetchHeader` added to `object-stream.ts`.
 
-All spf test projects pass (node 353, browser 130); typecheck passes. Not yet
-verified live against the relay fleet.
+All spf test projects pass; typecheck passes. PR #42 review fixes landed as
+`40c22e90f` (empty fill ranges open no stream, §5.1.3).
+
+**Live pass (2026-09-04, headless Chromium ↔ relay.mux.dev anonymous,
+`moq-lite-rs`; the fleet runs moq-relay 0.14.15; publisher = PR #42 head):**
+the `moq-publisher` sandbox's synthetic stream under `anon/<name>`, viewed by
+the engine's own session driver joining through the relay. Drivers live in the
+worktree's `node_modules/.moq-phase5-publish.mjs` (taps WebTransport in-page
+and decodes both directions of every request stream plus each subgroup
+header) and `.moq-phase5-probe.mjs`.
+
+- The relay's upstream SUBSCRIBE per track is `relative-group 1`, Forward 1,
+  priority 255, group order descending, and never carries FILL_PARAMETERS —
+  even when the downstream viewer requested a fill the relay served it from
+  its cache. The open-and-reset path stays covered by unit tests only.
+- In-progress-group replay: on both upstream binds the first video subgroup
+  stream opened 1 ms after the SUBSCRIBE and carried the retained group from
+  object 0 (8 objects, then 15 on the rebind); the viewer's first video object
+  landed 46–48 ms after its SUBSCRIBE_OK. Control: a run where the relay
+  subscribed before the track publisher had retained a keyframe waited for the
+  next keyframe (870 ms), the pre-Phase-5 behavior.
+- LARGEST_OBJECT: the first-round SUBSCRIBE_OKs omitted it (nothing written
+  yet); after the relay re-subscribed they carried `{18,54}` video,
+  `{1899,0}` audio, `{0,0}` catalog, and the relay accepted them (session
+  stayed live, delivery continued).
+- Relay lifecycle: the relay drops its upstream subscriptions 30 s after the
+  last viewer leaves (STOP_SENDING on the request streams); the publisher
+  unbinds cleanly (subscriber count back to 0, the unfinished group counted as
+  dropped). Anonymous relay.mux.dev announces only under the `anon` prefix; a
+  namespace outside it never matches its SUBSCRIBE_NAMESPACE and `publish()`
+  never resolves. No decode failures and no data-stream resets over ~3 min.
+- Not yet run against sjc.relay.mux.global (needs a put+get token); the same
+  drivers take `RELAY`/`HOST`, `TOKEN`, and `NS=<root>/<name>`.
 
 Branch points on a `draft: 19 | 20` value in `createMoqtSession` config:
 
