@@ -216,6 +216,35 @@ describe('composite define registration', () => {
     });
   });
 
+  describe('publisher/ui', () => {
+    it('registers video-publisher before the publisher UI elements', async () => {
+      const before = spy.mock.calls.length;
+
+      await import('../publisher/ui');
+      const batch = batchSince(before);
+
+      // Provider must be first (context handshake during upgrade).
+      expect(batch[0]).toBe('video-publisher');
+
+      expect(batch).toContain('media-camera-button');
+      expect(batch).toContain('media-camera-radio-group');
+      expect(batch).toContain('media-capture-placeholder');
+      expect(batch).toContain('media-connection-indicator');
+      expect(batch).toContain('media-enable-devices-button');
+      expect(batch).toContain('media-mic-button');
+      expect(batch).toContain('media-mic-radio-group');
+      expect(batch).toContain('media-publish-badge');
+      expect(batch).toContain('media-publish-button');
+      expect(batch).toContain('media-publish-timer');
+      expect(batch).toContain('media-screen-share-button');
+
+      // Shared elements already registered by earlier composites — safeDefine skips them.
+      expect(batch).not.toContain('media-container');
+      expect(batch).not.toContain('media-controls');
+      expect(batch).not.toContain('media-menu');
+    });
+  });
+
   // ── Final state ──────────────────────────────────────────────────────
 
   describe('registry completeness', () => {

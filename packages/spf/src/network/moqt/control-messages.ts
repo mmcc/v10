@@ -93,6 +93,19 @@ export const PARAMETER_TYPE = {
   INCLUDE_PROPERTIES: 0x35,
 } as const;
 
+/**
+ * Track Property types (§10.8) — the KVP block trailing SUBSCRIBE_OK / PUBLISH / FETCH_OK. A registry of its own,
+ * distinct from both Setup Options and message parameters.
+ */
+export const TRACK_PROPERTY = {
+  /**
+   * Units-per-second for the track's object TIMESTAMP extensions. Declaring it in SUBSCRIBE_OK is what opts the track
+   * into timestamp forwarding on moq-lite-rs relays — without it they parse and discard the extensions and re-stamp
+   * frames on arrival.
+   */
+  TIMESCALE: 0x08,
+} as const;
+
 /** REQUEST_ERROR codes (§15.11.2). */
 export const REQUEST_ERROR_CODE = {
   INTERNAL_ERROR: 0x0,
@@ -467,6 +480,33 @@ export function decodeLocationFilter(bytes: Uint8Array): LocationFilter {
   if (endObject !== undefined) filter.endObject = endObject;
 
   return filter;
+}
+
+/**
+ * Whether a Location filter, evaluated with the fetch rules of §5.1.2, selects no Objects. A fetch range — and so a
+ * subscription's fill range (§5.1.3) — is capped at Largest Object: with no Largest Object nothing exists to fetch, the
+ * Next Object and Next Group both lie past it, an absolute start past it selects nothing, and a bounded absolute range
+ * whose end precedes its start is empty. A publisher opens no fill fetch stream for an empty range.
+ */
+export function isEmptyFetchRange(filter: LocationFilter, largestObject: Location | undefined): boolean {
+  if (largestObject === undefined) return true;
+
+  switch (filter.type) {
+    case 'none':
+      return false;
+    case 'next-object':
+      return true;
+    case 'relative-group':
+      return filter.groupsBeforeNext === 0;
+    case 'absolute': {
+      const { start, endGroupDelta, endObject } = filter;
+      if (compareLocations(start, largestObject) > 0) return true;
+
+      // The end group is a non-negative delta from the start group, so
+      // only a same-group end can precede the start.
+      return endGroupDelta === 0 && endObject !== undefined && endObject < start.object;
+    }
+  }
 }
 
 // ============================================================================
@@ -1075,6 +1115,27 @@ export function encodePublishNamespace(request: PublishNamespaceRequest): Uint8A
   writeTrackNamespace(body, request.trackNamespace);
   encodeMessageParameters(body, request.parameters);
   return frameMessage(MESSAGE_TYPE.PUBLISH_NAMESPACE, body);
+}
+
+/**
+ * NAMESPACE (§10.19) — announce one namespace on an accepted inbound SUBSCRIBE_NAMESPACE request stream. The body is
+ * the namespace suffix relative to that stream's subscribed prefix and nothing else: peers bound-check the tuple
+ * against the frame length (moq-lite-rs treats even a zero parameter count as a malformed entry and kills the announce
+ * stream), so no parameter block is written.
+ */
+export function encodeNamespace(trackNamespaceSuffix: TrackNamespace): Uint8Array {
+  const body = new ByteWriter();
+
+  writeTrackNamespace(body, trackNamespaceSuffix);
+  return frameMessage(MESSAGE_TYPE.NAMESPACE, body);
+}
+
+/** NAMESPACE_DONE (§10.20) — retract a NAMESPACE announcement (same body shape). */
+export function encodeNamespaceDone(trackNamespaceSuffix: TrackNamespace): Uint8Array {
+  const body = new ByteWriter();
+
+  writeTrackNamespace(body, trackNamespaceSuffix);
+  return frameMessage(MESSAGE_TYPE.NAMESPACE_DONE, body);
 }
 
 // ============================================================================

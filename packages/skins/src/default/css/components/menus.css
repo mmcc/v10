@@ -140,6 +140,13 @@
     }
   }
 
+  .media-menu__group {
+    &[data-availability="unavailable"],
+    &[data-availability="unsupported"] {
+      display: none;
+    }
+  }
+
   .media-menu__item {
     justify-content: space-between;
     font-variant-numeric: tabular-nums;

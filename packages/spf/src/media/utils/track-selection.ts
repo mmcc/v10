@@ -9,6 +9,7 @@ import type {
   VideoTrack,
 } from '../types';
 import { isResolvedTrack } from '../types';
+import { findTrack } from './tracks';
 
 /** State shape for track selection. Minimal shape containing presentation and selected track IDs. */
 export interface TrackSelectionState {
@@ -51,10 +52,12 @@ export function getSelectedTrack<T extends TrackType>(
   // Get track ID based on type
   const trackIdKey = SelectedTrackIdKeyByType[type];
   const trackId = state[trackIdKey];
+  if (!trackId) return undefined as any;
 
-  return presentation.selectionSets
-    .find(({ type: selectionSetType }) => selectionSetType === type)
-    ?.switchingSets[0]?.tracks.find(({ id }) => id === trackId) as any;
+  // findTrack searches every switching set — the selected id may point at
+  // a sibling content set (an explicit MoQ screen-share selection), which
+  // consumers of the selected track must still resolve.
+  return findTrack(presentation, type, trackId) as any;
 }
 
 /**

@@ -15,14 +15,20 @@ Icons are grouped into visual sets. Each set contains the same icon names with d
 
 | Icon | React Export | HTML Export |
 | --- | --- | --- |
+| `camera` | `CameraIcon` | `cameraIcon` |
+| `camera-off` | `CameraOffIcon` | `cameraOffIcon` |
 | `fullscreen-enter` | `FullscreenEnterIcon` | `fullscreenEnterIcon` |
 | `fullscreen-exit` | `FullscreenExitIcon` | `fullscreenExitIcon` |
+| `mic` | `MicIcon` | `micIcon` |
+| `mic-off` | `MicOffIcon` | `micOffIcon` |
 | `pause` | `PauseIcon` | `pauseIcon` |
 | `pip-enter` | `PipEnterIcon` | `pipEnterIcon` |
 | `pip-exit` | `PipExitIcon` | `pipExitIcon` |
 | `play` | `PlayIcon` | `playIcon` |
 | `restart` | `RestartIcon` | `restartIcon` |
+| `screen-share` | `ScreenShareIcon` | `screenShareIcon` |
 | `seek` | `SeekIcon` | `seekIcon` |
+| `signal` | `SignalIcon` | `signalIcon` |
 | `spinner` | `SpinnerIcon` | `spinnerIcon` |
 | `volume-high` | `VolumeHighIcon` | `volumeHighIcon` |
 | `volume-low` | `VolumeLowIcon` | `volumeLowIcon` |

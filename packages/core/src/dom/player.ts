@@ -2,6 +2,9 @@ import type {
   Media,
   MediaAudioTrackState,
   MediaBufferState,
+  MediaCaptureDevicesState,
+  MediaCaptureSourceState,
+  MediaCaptureTracksState,
   MediaControlsState,
   MediaErrorState,
   MediaFullscreenState,
@@ -9,6 +12,8 @@ import type {
   MediaPictureInPictureState,
   MediaPlaybackRateState,
   MediaPlaybackState,
+  MediaPublishState,
+  MediaPublishStatsState,
   MediaQualityState,
   MediaRemotePlaybackState,
   MediaSourceState,
@@ -214,6 +219,21 @@ export type LiveAudioFeatures = [
   typeof metadataFeature,
 ];
 
+/**
+ * Features for a publisher (broadcast) player. Composes the publish and capture feature slices with the controls,
+ * fullscreen, and error features needed by the surrounding UI.
+ */
+export type PublisherFeatures = [
+  PlayerFeature<MediaPublishState>,
+  PlayerFeature<MediaCaptureDevicesState>,
+  PlayerFeature<MediaCaptureSourceState>,
+  PlayerFeature<MediaCaptureTracksState>,
+  PlayerFeature<MediaPublishStatsState>,
+  PlayerFeature<MediaControlsState>,
+  PlayerFeature<MediaFullscreenState>,
+  PlayerFeature<MediaErrorState>,
+];
+
 export type VideoPlayerStore = PlayerStore<VideoFeatures>;
 
 export type AudioPlayerStore = PlayerStore<AudioFeatures>;
@@ -223,3 +243,5 @@ export type BackgroundPlayerStore = PlayerStore<BackgroundFeatures>;
 export type LiveVideoPlayerStore = PlayerStore<LiveVideoFeatures>;
 
 export type LiveAudioPlayerStore = PlayerStore<LiveAudioFeatures>;
+
+export type PublisherStore = PlayerStore<PublisherFeatures>;

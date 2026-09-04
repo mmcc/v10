@@ -1,0 +1,202 @@
+/* ==========================================================================
+   Capture (placeholder overlay, enable-devices CTA, device toggle buttons)
+   ========================================================================== */
+
+/* Capture placeholder — covers the media area (like poster/overlay) until a
+   local capture stream is active. Visible for idle/acquiring/denied/ended. */
+.media-default-skin .media-capture-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-content: center;
+  color: oklch(1 0 0);
+  text-align: center;
+  background: var(--media-capture-placeholder-background, oklch(0.2 0 0));
+  border-radius: inherit;
+
+  &[data-capture-state="active"] {
+    display: none;
+  }
+}
+
+.media-default-skin .media-capture-placeholder__content {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--media-spacing) * 3);
+  align-items: center;
+  max-width: calc(var(--media-spacing) * 80);
+  padding: calc(var(--media-spacing) * 4);
+}
+
+.media-default-skin .media-capture-placeholder__icon {
+  width: calc(var(--media-icon-size) * 2);
+  height: calc(var(--media-icon-size) * 2);
+  opacity: 0.5;
+}
+
+.media-default-skin .media-capture-placeholder__message {
+  font-size: var(--media-font-size-medium);
+  overflow-wrap: anywhere;
+  opacity: 0.7;
+
+  /* While idle/ended the message would repeat the enable-devices CTA text —
+     let the CTA carry it and only show acquiring/denied guidance here. */
+  &[data-capture-state="idle"],
+  &[data-capture-state="ended"] {
+    display: none;
+  }
+}
+
+/* State-driven overrides (after the base rules for ascending specificity) */
+.media-default-skin .media-capture-placeholder[data-capture-state="acquiring"] .media-capture-placeholder__content {
+  opacity: 0.7;
+}
+
+.media-default-skin .media-capture-placeholder[data-capture-state="denied"] .media-capture-placeholder__message {
+  color: var(--media-publish-live-color);
+  opacity: 1;
+}
+
+/* Enable devices CTA — primary treatment; pairs with `.media-button`. */
+.media-default-skin .media-button--enable-devices {
+  font-weight: 500;
+  color: oklch(0 0 0);
+  text-shadow: none;
+  background: oklch(1 0 0);
+
+  &[data-capture-state="acquiring"] {
+    cursor: progress;
+    opacity: 0.7;
+
+    &:active {
+      scale: 1;
+    }
+  }
+}
+
+/* --- Device split control (capture toggle + its device picker) --- */
+
+/* Pairs a capture toggle with the caret that opens its device picker, so the
+   picker reads as an affordance on the toggle it belongs to instead of a peer
+   control in the bar. The wrapper carries the hover/focus pill spanning both
+   segments; each segment keeps its own subtle background, which stacks on top
+   so the hovered hit target stays legible. */
+.media-default-skin .media-device-control {
+  display: flex;
+  align-items: center;
+  border-radius: calc(Infinity * 1px);
+  transition: background-color 150ms ease-out;
+
+  &:hover,
+  &:focus-within {
+    background-color: oklch(from currentColor l c h / 0.1);
+  }
+}
+
+/* Segments sit flush inside a control, so the group holding them needs more
+   room than the shared 1px — proximity is what shows the pairing. */
+.media-default-skin .media-button-group--devices {
+  gap: calc(var(--media-spacing) * 2);
+}
+
+/* Caret segment — narrower and dimmer than the toggle so it reads as part of
+   the toggle rather than a control of its own, but never below the 24px
+   minimum target size. Pairs with `.media-button` and `.media-button--subtle`
+   (not `--icon`, which forces a square). */
+.media-default-skin .media-device-control__caret {
+  position: relative;
+  display: grid;
+  width: calc(var(--media-spacing) * 6);
+  padding: 0;
+
+  & .media-icon {
+    width: calc(var(--media-spacing) * 3.5);
+    height: calc(var(--media-spacing) * 3.5);
+    opacity: 0.65;
+    filter: drop-shadow(0 1px 0 var(--media-shadow-current-color));
+    /* The chevron asset points right; aim it at the menu, which opens above. */
+    rotate: -90deg;
+    transition:
+      rotate 150ms ease-out,
+      opacity 150ms ease-out;
+  }
+
+  &:hover .media-icon,
+  &:focus-visible .media-icon,
+  &[aria-expanded="true"] .media-icon {
+    opacity: 1;
+  }
+
+  /* Point back at the toggle while the picker is open. */
+  &[aria-expanded="true"] .media-icon {
+    rotate: 90deg;
+  }
+
+  /* Hairline seam marking the split. */
+  &::before {
+    position: absolute;
+    inset-block: 30%;
+    inset-inline-start: 0;
+    width: 1px;
+    content: "";
+    background-color: oklch(from currentColor l c h / 0.25);
+  }
+
+  /* Hide the caret (and thereby its menu) when the adjacent menu's radio group
+     reports no device choice to make, mirroring how availability hides buttons
+     elsewhere (see button.css). With the caret gone the wrapper pill hugs the
+     lone toggle, so the control looks untouched. */
+  &:has(+ media-menu media-camera-radio-group[data-availability="unavailable"]),
+  &:has(+ media-menu media-mic-radio-group[data-availability="unavailable"]) {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    & .media-icon {
+      transition-duration: 0ms;
+    }
+  }
+}
+
+/* Screen share toggle — active affordance while sharing (mirrors the
+   `[aria-expanded]` treatment on subtle buttons, slightly stronger). */
+.media-default-skin .media-button--screen-share[data-sharing] {
+  background-color: oklch(from currentColor l c h / 0.15);
+}
+
+/* Self-view mirror — flip the local camera preview horizontally so movement
+   matches what publishers expect from a mirror. Unconditional in v1: it also
+   flips screen-share previews (text reads backwards); a capture-source data
+   attribute can scope this later. Only the local preview is mirrored — the
+   published stream is untouched. */
+.media-default-skin--publisher ::slotted(video),
+.media-default-skin--publisher video {
+  scale: -1 1;
+}
+
+/* --- Camera/mic icon state (mirrors shared/css/video/icon-state.css) --- */
+
+/* All icons hidden by default */
+.media-button--camera .media-icon--camera,
+.media-button--camera .media-icon--camera-off,
+.media-button--mic .media-icon--mic,
+.media-button--mic .media-icon--mic-off {
+  display: none;
+  opacity: 0;
+}
+
+/* Active icon per state */
+.media-button--camera:not([data-muted]) .media-icon--camera,
+.media-button--camera[data-muted] .media-icon--camera-off,
+.media-button--mic:not([data-muted]) .media-icon--mic,
+.media-button--mic[data-muted] .media-icon--mic-off {
+  display: block;
+  opacity: 1;
+}
+
+/* Muted affordance — tint the visible (slashed) icon. */
+.media-button--camera[data-muted] .media-icon,
+.media-button--mic[data-muted] .media-icon {
+  color: var(--media-publish-live-color);
+}

@@ -1,0 +1,19 @@
+{
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "WebWorker"],
+    "exactOptionalPropertyTypes": false,
+    "declarationDir": "../../../types/publish/behaviors"
+  },
+  "references": [
+    { "path": "../../../../utils" },
+    { "path": "../../core" },
+    { "path": "../../network" },
+    { "path": "../../media" },
+    { "path": "../actors" },
+    { "path": "../session" }
+  ],
+  "include": ["./*.ts", "./tests/**/*.ts"],
+  "exclude": ["./dom/**"]
+}

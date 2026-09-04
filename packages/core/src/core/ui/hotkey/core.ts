@@ -4,6 +4,8 @@ export type HotkeyActionName =
   | 'toggleFullscreen'
   | 'toggleSubtitles'
   | 'togglePictureInPicture'
+  | 'toggleMicMuted'
+  | 'toggleCameraMuted'
   | 'seekStep'
   | 'volumeStep'
   | 'speedUp'

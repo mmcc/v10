@@ -1,0 +1,9 @@
+/* -------------------------------------------------------------------------- */
+/* Supporting @keyframes and @theme for Tailwind CSS (publisher skins)        */
+/* -------------------------------------------------------------------------- */
+
+@import "./global/video/keyframes.css";
+
+@theme {
+  --animate-media-pulse: media-pulse 2s ease-in-out infinite;
+}
