@@ -59,6 +59,10 @@ import { type BidirectionalStreamLike, openRequestStream, type RequestStream } f
 /**
  * Structural subset of `WebTransport` the session driver needs. A real `WebTransport` instance satisfies this; tests
  * provide an in-memory fake (the same seam pattern as SPF's fetch injection).
+ *
+ * Publish-side fill failure signaling requires writers with WebTransport's `commit()` method, which preserves the
+ * written prefix across a reset. Support is detected on the control stream's writer and must be consistent across
+ * outgoing streams. Without it, nonempty fill requests are rejected with NOT_SUPPORTED.
  */
 export interface MoqtTransport {
   readonly incomingUnidirectionalStreams: ReadableStream<ReadableStream<Uint8Array>>;
