@@ -67,7 +67,7 @@ import { type BidirectionalStreamLike, openRequestStream, type RequestStream } f
 export interface MoqtTransport {
   readonly incomingUnidirectionalStreams: ReadableStream<ReadableStream<Uint8Array>>;
   readonly incomingBidirectionalStreams: ReadableStream<BidirectionalStreamLike>;
-  createUnidirectionalStream(): Promise<WritableStream<Uint8Array>>;
+  createUnidirectionalStream(options?: { sendOrder?: number }): Promise<WritableStream<Uint8Array>>;
   createBidirectionalStream(): Promise<BidirectionalStreamLike>;
   close(closeInfo?: { closeCode?: number; reason?: string }): void;
   readonly closed: Promise<unknown>;

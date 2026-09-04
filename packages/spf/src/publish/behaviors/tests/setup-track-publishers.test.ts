@@ -33,7 +33,7 @@ function makeSessionActor() {
   });
 
   disposals.push(() => actor.destroy());
-  return { actor, peer, server: pair.server };
+  return { actor, peer, server: pair.server, client: pair.client };
 }
 
 function setupBehavior(config: SetupTrackPublishersConfig = {}) {
@@ -58,6 +58,63 @@ function setupBehavior(config: SetupTrackPublishersConfig = {}) {
 describe('setupTrackPublishers', () => {
   afterEach(() => {
     for (const dispose of disposals.splice(0)) dispose();
+
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { name: 'default', priorities: undefined, expected: [0, 128, 192, 64] },
+    { name: 'custom', priorities: { audio: 0, camera: 255, screen: 32 }, expected: [0, 255, 32, 0] },
+    { name: 'invalid', priorities: { audio: NaN, camera: -1, screen: 256, catalog: 0.5 }, expected: [0, 128, 192, 64] },
+  ])('carries $name track priorities on the wire and into upload scheduling', async ({ priorities, expected }) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { actor, peer, server, client } = makeSessionActor();
+    const open = vi.spyOn(client, 'createUnidirectionalStream');
+    const { state, context } = setupBehavior({
+      trackPriorities: priorities,
+      dataTracks: [{ name: 'overlay', priority: 17 }],
+    });
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG, screen: VIDEO_CONFIG, audio: AUDIO_CONFIG });
+    context.publishSessionActor.set(actor);
+    void solicitNamespace(server, []);
+    await vi.waitFor(() => expect(context.audioTrackPublisher.get()).toBeDefined());
+
+    const received: Record<string, number | undefined> = {};
+    const names = ['catalog', 'video', 'screen', 'audio', 'overlay'];
+
+    for (const trackName of names) {
+      peer.subscribe(
+        { trackNamespace: ENDPOINT.namespace, trackName },
+        {
+          onObject: (object) => {
+            received[trackName] = object.priority;
+          },
+        }
+      );
+    }
+
+    await vi.waitFor(() => expect(Object.keys(actor.snapshot.get().context.trackBindings)).toHaveLength(names.length));
+
+    for (const slot of [
+      'catalogTrackPublisher',
+      'videoTrackPublisher',
+      'screenTrackPublisher',
+      'audioTrackPublisher',
+    ] as const) {
+      context[slot]
+        .get()!
+        .send({ type: 'frame', payload: new Uint8Array([1]), properties: [], keyframe: true, timestampUs: 0 });
+    }
+
+    context.dataTrackProducers.get()!.overlay!.publish(new Uint8Array([1]));
+    await vi.waitFor(() => expect(Object.keys(received)).toHaveLength(names.length));
+    expect(names.map((name) => received[name])).toEqual([...expected, 17]);
+
+    for (const priority of [...expected, 17]) {
+      expect(open).toHaveBeenCalledWith({ sendOrder: -1 - priority });
+    }
   });
 
   it('registers catalog + active tracks and publishes the actor slots once the session is ready', async () => {

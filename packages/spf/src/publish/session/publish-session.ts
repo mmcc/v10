@@ -141,7 +141,7 @@ export interface MoqtPublishSession {
   /** Register one servable track; the peer's SUBSCRIBEs are answered from this registry. */
   registerTrack(options: RegisterTrackOptions): RegisteredTrack;
   /** Open a unidirectional data stream (for a track publisher's subgroups). */
-  openUniStream(): Promise<WritableStream<Uint8Array>>;
+  openUniStream(options?: { sendOrder?: number }): Promise<WritableStream<Uint8Array>>;
   /**
    * Orderly stop: FIN every live subscription's stream and retract the announce (NAMESPACE_DONE), give those writes a
    * bounded window to reach the wire (closing a WebTransport discards queued data), then close the transport.
@@ -554,7 +554,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     track.doneFlushed = Promise.all(writes).then(() => {});
   }
 
-  openUniStream(): Promise<WritableStream<Uint8Array>> {
+  openUniStream(options?: { sendOrder?: number }): Promise<WritableStream<Uint8Array>> {
     // Refuse rather than touch the transport once the session is going
     // away. Encoders keep producing frames for a beat after a peer kills
     // the session, and hammering createUnidirectionalStream() on a
@@ -565,7 +565,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       return Promise.reject(new Error('moq publish session: closed'));
     }
 
-    return this.#transport.createUnidirectionalStream();
+    return this.#transport.createUnidirectionalStream(options);
   }
 
   /**

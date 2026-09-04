@@ -62,6 +62,31 @@ export const VIDEO_TRACK_NAME = 'video';
 export const SCREEN_TRACK_NAME = 'screen';
 export const AUDIO_TRACK_NAME = 'audio';
 
+/**
+ * Publisher priorities for the built-in tracks. Integers from 0 (highest) to 255 (lowest); omitted entries use catalog
+ * 0, audio 64, camera 128, and screen 192. Applied to both MoQ subgroup headers and local WebTransport send order.
+ * Relay scheduling also depends on subscriber priorities and the relay's policy.
+ */
+export interface PublishTrackPriorities {
+  catalog?: number;
+  audio?: number;
+  camera?: number;
+  screen?: number;
+}
+
+const DEFAULT_TRACK_PRIORITIES = { catalog: 0, audio: 64, camera: 128, screen: 192 } as const;
+const DEFAULT_DATA_TRACK_PRIORITY = 128;
+
+function resolvePriority(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+
+  if (Number.isInteger(value) && value >= 0 && value <= 255) return value;
+
+  if (__DEV__) console.warn(`[moq-publish] track priority must be an integer from 0 to 255; using ${fallback}`);
+
+  return fallback;
+}
+
 /** Track names the engine publishes itself — refused for data tracks. */
 const RESERVED_TRACK_NAMES: ReadonlySet<string> = new Set([
   CATALOG_TRACK_NAME,
@@ -81,6 +106,8 @@ export interface PublishDataTrackConfig {
    * naming one (or duplicating another data track) is dropped with a dev warning.
    */
   name: string;
+  /** Publisher priority, 0 (highest) to 255 (lowest). Defaults to 128; invalid values use the default. */
+  priority?: number;
   /**
    * MSF role label emitted on the track's catalog entry (e.g. `'data'`). Any non-media value keeps the track out of a
    * subscriber's renderable set; omitted, the entry carries no role and is classified the same way from its absent
@@ -184,6 +211,8 @@ export interface SetupTrackPublishersContext {
 }
 
 export interface SetupTrackPublishersConfig {
+  /** Built-in track priorities; lower numbers are served first. */
+  trackPriorities?: PublishTrackPriorities;
   /** Groups the transport may fall behind before dropping to the keyframe. */
   maxQueuedGroups?: number;
   /**
@@ -209,6 +238,7 @@ interface PublisherCluster {
   session: MoqtPublishSession;
   namespace: string[];
   maxQueuedGroups?: number | undefined;
+  priorities: Required<PublishTrackPriorities>;
   /** Creation order; teardown quiesces in reverse. */
   created: {
     handle: RegisteredTrack;
@@ -221,10 +251,14 @@ interface PublisherCluster {
 function addTrackPublisher(
   cluster: PublisherCluster,
   trackName: string,
-  options: { groupPerFrame: boolean; replayLastGroupOnBind?: boolean }
+  options: { groupPerFrame: boolean; replayLastGroupOnBind?: boolean; priority: number }
 ): TrackPublisherActor {
   const publisher = createTrackPublisherActor({
-    openUniStream: () => cluster.session.openUniStream(),
+    // WebTransport orders larger values first. Keep all media below the
+    // default order (0) of control/request streams so congestion cannot
+    // starve the signaling needed to stop or change a subscription.
+    openUniStream: () => cluster.session.openUniStream({ sendOrder: -1 - options.priority }),
+    priority: options.priority,
     groupPerFrame: options.groupPerFrame,
     replayLastGroupOnBind: options.replayLastGroupOnBind === true,
     maxQueuedGroups: cluster.maxQueuedGroups,
@@ -330,12 +364,19 @@ function setupTrackPublishersSetup({
               session,
               namespace: endpoint.namespace,
               maxQueuedGroups: config.maxQueuedGroups,
+              priorities: {
+                catalog: resolvePriority(config.trackPriorities?.catalog, DEFAULT_TRACK_PRIORITIES.catalog),
+                audio: resolvePriority(config.trackPriorities?.audio, DEFAULT_TRACK_PRIORITIES.audio),
+                camera: resolvePriority(config.trackPriorities?.camera, DEFAULT_TRACK_PRIORITIES.camera),
+                screen: resolvePriority(config.trackPriorities?.screen, DEFAULT_TRACK_PRIORITIES.screen),
+              },
               created: [],
             };
 
             // Catalog first — the subscription anchor every player joins on.
             context.catalogTrackPublisher.set(
               addTrackPublisher(next, CATALOG_TRACK_NAME, {
+                priority: next.priorities.catalog,
                 groupPerFrame: true,
                 replayLastGroupOnBind: true,
               })
@@ -347,6 +388,7 @@ function setupTrackPublishersSetup({
 
             for (const track of dataTracks) {
               const publisher = addTrackPublisher(next, track.name, {
+                priority: resolvePriority(track.priority, DEFAULT_DATA_TRACK_PRIORITY),
                 groupPerFrame: true,
                 replayLastGroupOnBind: track.replayLastOnSubscribe,
               });
@@ -397,15 +439,30 @@ function setupTrackPublishersSetup({
             if (!current || !encodings) return;
 
             if (encodings.camera && peek(context.videoTrackPublisher) === undefined) {
-              context.videoTrackPublisher.set(addTrackPublisher(current, VIDEO_TRACK_NAME, { groupPerFrame: false }));
+              context.videoTrackPublisher.set(
+                addTrackPublisher(current, VIDEO_TRACK_NAME, {
+                  groupPerFrame: false,
+                  priority: current.priorities.camera,
+                })
+              );
             }
 
             if (encodings.screen && peek(context.screenTrackPublisher) === undefined) {
-              context.screenTrackPublisher.set(addTrackPublisher(current, SCREEN_TRACK_NAME, { groupPerFrame: false }));
+              context.screenTrackPublisher.set(
+                addTrackPublisher(current, SCREEN_TRACK_NAME, {
+                  groupPerFrame: false,
+                  priority: current.priorities.screen,
+                })
+              );
             }
 
             if (encodings.audio && peek(context.audioTrackPublisher) === undefined) {
-              context.audioTrackPublisher.set(addTrackPublisher(current, AUDIO_TRACK_NAME, { groupPerFrame: true }));
+              context.audioTrackPublisher.set(
+                addTrackPublisher(current, AUDIO_TRACK_NAME, {
+                  groupPerFrame: true,
+                  priority: current.priorities.audio,
+                })
+              );
             }
           },
 

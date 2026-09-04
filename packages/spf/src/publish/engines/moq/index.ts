@@ -26,6 +26,7 @@ export type {
   MoqPublishEngineState,
   PreviewSource,
   PublishDataTrackConfig,
+  PublishTrackPriorities,
   PublishEndpoint,
   PublishErrorFacts,
   PublishSessionActor,
