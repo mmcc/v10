@@ -34,6 +34,8 @@ import {
   encodeRequestOk,
   encodeSetup,
   encodeSubscribeOk,
+  type FillParameters,
+  isEmptyFetchRange,
   type KeyValuePair,
   type Location,
   MESSAGE_TYPE,
@@ -559,11 +561,31 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   /**
-   * A subscription (or REQUEST_UPDATE) carrying FILL_PARAMETERS requests a fill fetch stream (§5.1.3). This origin
-   * serves no fills, so it meets the §5.1.3.1 requirement the honest way: open a uni stream, write the FETCH_HEADER
-   * carrying the initiating Request ID so the subscriber can correlate the failure, then reset it. A reset is the
-   * fill-failure signal — a FIN would falsely claim the fill range is empty. The known relays never send
-   * FILL_PARAMETERS today; this keeps a peer that does from stalling on a fill that never arrives.
+   * Whether a SUBSCRIBE or REQUEST_UPDATE carrying FILL_PARAMETERS calls for a fill fetch stream (§5.1.3.1): only while
+   * Forward State is 1, only for a subscription that is still live, and only when the fill range is nonempty. The fill
+   * range is the filter inside FILL_PARAMETERS — else the subscription's own — evaluated as a fetch against the track's
+   * Largest Object; an empty range, or one starting past Largest Object, opens no stream at all (§5.1.3), so a peer
+   * asking to fill from the Next Object, or before the track has content, is simply not answered.
+   */
+  #fillRequested(
+    track: TrackRecord,
+    subscriber: SubscriberStream,
+    subscription: MessageParameters,
+    fill: FillParameters | undefined
+  ): boolean {
+    if (fill === undefined || !subscriber.forwarding || subscriber.finished) return false;
+
+    const filter = fill.locationFilter ?? subscription.locationFilter ?? { type: 'none' };
+
+    return !isEmptyFetchRange(filter, track.getLargestObject?.());
+  }
+
+  /**
+   * Answer a nonempty fill request (see `#fillRequested`). This origin serves no fills, so it meets the §5.1.3.1
+   * requirement the honest way: open a uni stream, write the FETCH_HEADER carrying the initiating Request ID so the
+   * subscriber can correlate the failure, then reset it. A reset is the fill-failure signal — a FIN would falsely claim
+   * the fill range was delivered in full. The known relays never send FILL_PARAMETERS today; this keeps a peer that
+   * does from stalling on a fill that never arrives.
    */
   #openAndResetFill(requestId: number): void {
     void (async () => {
@@ -990,9 +1012,10 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     }
 
     // FILL_PARAMETERS on the SUBSCRIBE requests a fill fetch stream, but
-    // only while Forward State is 1 (§5.1.3.1). We serve none — open and
-    // reset it (below) rather than leave the peer waiting.
-    if (subscribe.parameters.fillParameters !== undefined && subscriber.forwarding) {
+    // only while Forward State is 1 and only for a nonempty fill range
+    // (§5.1.3). We serve none — open and reset it rather than leave the
+    // peer waiting.
+    if (this.#fillRequested(track, subscriber, subscribe.parameters, subscribe.parameters.fillParameters)) {
       this.#openAndResetFill(subscribe.requestId);
     }
 
@@ -1024,10 +1047,10 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
             }
           }
 
-          // A fill requested while Forward State is 1 opens (and, here,
-          // immediately resets) a fill fetch stream keyed by the update's
-          // own Request ID (§5.1.3.1).
-          if (fillParameters !== undefined && subscriber.forwarding) {
+          // A nonempty fill requested while Forward State is 1 opens (and,
+          // here, immediately resets) a fill fetch stream keyed by the
+          // update's own Request ID (§5.1.3.1); an empty range opens none.
+          if (this.#fillRequested(track, subscriber, subscribe.parameters, fillParameters)) {
             this.#openAndResetFill(message.requestId);
           }
 

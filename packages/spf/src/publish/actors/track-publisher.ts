@@ -12,11 +12,13 @@
  * **Data flows only while bound to a subscription.** Announce-and-serve ingest is pull-through: a subgroup stream is
  * only meaningful under a track alias the session bound with a SUBSCRIBE_OK, and an unbound alias is the peer's
  * "unknown track alias" (stream dropped after a 1 s grace). `{type:'bind'}` carries the current subscription's alias;
- * frames arriving unbound are dropped without opening streams. Groups never span bindings — a bind or unbind resets the
- * open group, so a fresh subscription starts at the next keyframe (`groupPerFrame` tracks start at the next frame). For
- * tracks whose frames flow only on _change_ rather than on a cadence — the catalog — waiting for the next frame would
- * stall a new subscription forever, so `replayLastGroupOnBind` retains the latest frame (bound or not) and re-emits it
- * as a fresh group on every bind.
+ * frames arriving unbound are dropped without opening streams. Groups still never span bindings — a bind or unbind
+ * resets the open group — but the reset does not always cost a wait for fresh data: keyframe-grouped tracks replay the
+ * retained in-progress group from object 0 so a subscription that arrives mid-group decodes immediately, while
+ * `groupPerFrame` tracks have no in-progress group to replay and simply start at the next frame. For tracks whose
+ * frames flow only on _change_ rather than on a cadence — the catalog — waiting for the next frame would stall a new
+ * subscription forever, so `replayLastGroupOnBind` retains the latest frame (bound or not) and re-emits it as a fresh
+ * group on every bind.
  *
  * Group mapping follows MSF: video starts a new group on every keyframe (`objectId` resets to 0 — the extraction side
  * recovers the keyframe flag from `objectId === 0`); audio and catalog tracks set `groupPerFrame`, where every frame is
@@ -27,7 +29,7 @@
  * message order. Async completions feed the reactive snapshot counters through internal messages, mirroring
  * `actors/dom/encoder-actor.ts`.
  */
-import type { MessageActor } from '../../core/actors/create-machine-actor';
+import type { ActorStateDefinition, MessageActor } from '../../core/actors/create-machine-actor';
 import { createMachineActor } from '../../core/actors/create-machine-actor';
 import { SerialRunner, Task } from '../../core/tasks/task';
 import type { PropertyPair } from '../../media/moq/loc';
@@ -371,6 +373,50 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
     return dropped.length;
   };
 
+  type CounterHandlers = Pick<
+    NonNullable<ActorStateDefinition<TrackPublisherUserState, TrackPublisherCounters, Message, undefined>['on']>,
+    InternalMessage['type']
+  >;
+
+  /**
+   * Counter bookkeeping shared verbatim between `publishing` and `ended`: once a group's stream work is scheduled, its
+   * async completions still land on the snapshot the same way whether or not a live frame can extend the group
+   * further.
+   */
+  const counterHandlers = {
+    'object-written': (msg, { context, setContext }) => {
+      const isLarger =
+        msg.groupId > context.largestGroupId ||
+        (msg.groupId === context.largestGroupId && msg.objectId > context.largestObjectId);
+
+      setContext({
+        ...context,
+        publishedObjects: context.publishedObjects + 1,
+        bytesSent: context.bytesSent + msg.bytes,
+        lastTimestampUs: msg.timestampUs,
+        largestGroupId: isLarger ? msg.groupId : context.largestGroupId,
+        largestObjectId: isLarger ? msg.objectId : context.largestObjectId,
+      });
+    },
+    'group-opened': (_, { context, setContext }) => {
+      setContext({ ...context, openedGroups: context.openedGroups + 1 });
+    },
+    'group-finished': (_, { context, setContext }) => {
+      setContext({
+        ...context,
+        publishedGroups: context.publishedGroups + 1,
+        queuedGroups: openCells.length,
+      });
+    },
+    'groups-dropped': (msg, { context, setContext }) => {
+      setContext({
+        ...context,
+        droppedGroups: context.droppedGroups + msg.count,
+        queuedGroups: openCells.length,
+      });
+    },
+  } satisfies CounterHandlers;
+
   inner = createMachineActor<TrackPublisherUserState, TrackPublisherCounters, Message>({
     initial: 'publishing',
     context: {
@@ -500,74 +546,14 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
 
             transition('ended');
           },
-          'object-written': (msg, { context, setContext }) => {
-            const isLarger =
-              msg.groupId > context.largestGroupId ||
-              (msg.groupId === context.largestGroupId && msg.objectId > context.largestObjectId);
-
-            setContext({
-              ...context,
-              publishedObjects: context.publishedObjects + 1,
-              bytesSent: context.bytesSent + msg.bytes,
-              lastTimestampUs: msg.timestampUs,
-              largestGroupId: isLarger ? msg.groupId : context.largestGroupId,
-              largestObjectId: isLarger ? msg.objectId : context.largestObjectId,
-            });
-          },
-          'group-opened': (_, { context, setContext }) => {
-            setContext({ ...context, openedGroups: context.openedGroups + 1 });
-          },
-          'group-finished': (_, { context, setContext }) => {
-            setContext({
-              ...context,
-              publishedGroups: context.publishedGroups + 1,
-              queuedGroups: openCells.length,
-            });
-          },
-          'groups-dropped': (msg, { context, setContext }) => {
-            setContext({
-              ...context,
-              droppedGroups: context.droppedGroups + msg.count,
-              queuedGroups: openCells.length,
-            });
-          },
+          ...counterHandlers,
         },
       },
       ended: {
         // Late frames are ignored; queued work still drains, so the
         // counter updates keep landing.
         on: {
-          'object-written': (msg, { context, setContext }) => {
-            const isLarger =
-              msg.groupId > context.largestGroupId ||
-              (msg.groupId === context.largestGroupId && msg.objectId > context.largestObjectId);
-
-            setContext({
-              ...context,
-              publishedObjects: context.publishedObjects + 1,
-              bytesSent: context.bytesSent + msg.bytes,
-              lastTimestampUs: msg.timestampUs,
-              largestGroupId: isLarger ? msg.groupId : context.largestGroupId,
-              largestObjectId: isLarger ? msg.objectId : context.largestObjectId,
-            });
-          },
-          'group-opened': (_, { context, setContext }) => {
-            setContext({ ...context, openedGroups: context.openedGroups + 1 });
-          },
-          'group-finished': (_, { context, setContext }) => {
-            setContext({
-              ...context,
-              publishedGroups: context.publishedGroups + 1,
-              queuedGroups: openCells.length,
-            });
-          },
-          'groups-dropped': (msg, { context, setContext }) => {
-            setContext({
-              ...context,
-              droppedGroups: context.droppedGroups + msg.count,
-              queuedGroups: openCells.length,
-            });
-          },
+          ...counterHandlers,
         },
       },
     },
