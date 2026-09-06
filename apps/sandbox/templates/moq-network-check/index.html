@@ -36,8 +36,8 @@
   </style>
   <h1>MoQ relay network check</h1>
   <p>
-    Run this on the network where publishing fails. It checks WebTransport handshakes to four relay destinations using
-    <code>moqt-20</code>. It needs no token, camera, or microphone.
+    Run this on the network where publishing fails. It compares four Mux relays with the MOQtail ABR demo's Chicago
+    relay from this same page, using each service's supported protocol. It needs no token, camera, or microphone.
   </p>
   <p>
     A successful handshake confirms transport connectivity. Media playback and token permissions require separate
@@ -49,6 +49,7 @@
     <thead>
       <tr>
         <th scope="col">Relay</th>
+        <th scope="col">Protocol</th>
         <th scope="col">Handshake</th>
         <th scope="col">Time</th>
       </tr>
@@ -58,7 +59,13 @@
   <p>Copy the results below back into our conversation. If possible, repeat on the working network.</p>
   <pre id="results"></pre>
   <script type="module">
-    const hosts = ['sjc.relay.mux.global', 'iad.relay.mux.global', 'fra.relay.mux.global', 'relay.mux.dev'];
+    const targets = [
+      { host: 'relay.n1.ord.moqtail.dev', protocol: 'moqt-18' },
+      { host: 'sjc.relay.mux.global', protocol: 'moqt-20' },
+      { host: 'iad.relay.mux.global', protocol: 'moqt-20' },
+      { host: 'fra.relay.mux.global', protocol: 'moqt-20' },
+      { host: 'relay.mux.dev', protocol: 'moqt-20' },
+    ];
     const run = document.querySelector('#run');
     const rows = document.querySelector('#rows');
     const status = document.querySelector('#status');
@@ -67,6 +74,7 @@
       run.disabled = true;
       rows.replaceChildren();
       const report = {
+        checkVersion: 2,
         browser: navigator.userAgent,
         pageOrigin: location.origin,
         time: new Date().toISOString(),
@@ -74,17 +82,18 @@
       };
       try {
         if (!globalThis.WebTransport) throw new Error('WebTransport is unavailable in this browser context.');
-        for (const host of hosts) {
+        for (const { host, protocol } of targets) {
           status.textContent = `Checking ${host}…`;
           const row = rows.insertRow();
           row.insertCell().textContent = host;
+          row.insertCell().textContent = protocol;
           const outcome = row.insertCell();
           const elapsed = row.insertCell();
           outcome.textContent = 'Connecting…';
           let transport;
           let timer;
           const start = performance.now();
-          const check = { host, protocols: ['moqt-20'] };
+          const check = { host, protocols: [protocol] };
           try {
             transport = new WebTransport(`https://${host}/`, { protocols: check.protocols });
             transport.closed.catch(() => {});
