@@ -36,8 +36,8 @@
   </style>
   <h1>MoQ relay network check</h1>
   <p>
-    Run this on the network where publishing fails. It compares four Mux relays with the MOQtail ABR demo's Chicago
-    relay from this same page, using each service's supported protocol. It needs no token, camera, or microphone.
+    Run this on the network where publishing fails. It compares MOQtail Watch Party on UDP port 4446 with five relays on
+    UDP port 443 from this same page. It needs no token, camera, or microphone.
   </p>
   <p>
     A successful handshake confirms transport connectivity. Media playback and token permissions require separate
@@ -49,6 +49,7 @@
     <thead>
       <tr>
         <th scope="col">Relay</th>
+        <th scope="col">UDP port</th>
         <th scope="col">Protocol</th>
         <th scope="col">Handshake</th>
         <th scope="col">Time</th>
@@ -60,6 +61,7 @@
   <pre id="results"></pre>
   <script type="module">
     const targets = [
+      { host: 'watch-party.moqtail.dev', port: 4446, protocol: 'moqt-16' },
       { host: 'relay.n1.ord.moqtail.dev', protocol: 'moqt-18' },
       { host: 'sjc.relay.mux.global', protocol: 'moqt-20' },
       { host: 'iad.relay.mux.global', protocol: 'moqt-20' },
@@ -74,7 +76,7 @@
       run.disabled = true;
       rows.replaceChildren();
       const report = {
-        checkVersion: 2,
+        checkVersion: 3,
         browser: navigator.userAgent,
         pageOrigin: location.origin,
         time: new Date().toISOString(),
@@ -82,10 +84,11 @@
       };
       try {
         if (!globalThis.WebTransport) throw new Error('WebTransport is unavailable in this browser context.');
-        for (const { host, protocol } of targets) {
-          status.textContent = `Checking ${host}…`;
+        for (const { host, protocol, port = 443 } of targets) {
+          status.textContent = `Checking ${host}:${port}…`;
           const row = rows.insertRow();
           row.insertCell().textContent = host;
+          row.insertCell().textContent = String(port);
           row.insertCell().textContent = protocol;
           const outcome = row.insertCell();
           const elapsed = row.insertCell();
@@ -93,9 +96,9 @@
           let transport;
           let timer;
           const start = performance.now();
-          const check = { host, protocols: [protocol] };
+          const check = { host, port, protocols: [protocol] };
           try {
-            transport = new WebTransport(`https://${host}/`, { protocols: check.protocols });
+            transport = new WebTransport(`https://${host}:${port}/`, { protocols: check.protocols });
             transport.closed.catch(() => {});
             await Promise.race([
               transport.ready,
