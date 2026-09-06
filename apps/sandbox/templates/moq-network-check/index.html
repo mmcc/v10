@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MoQ relay network check</title>
+  <style>
+    body {
+      max-width: 850px;
+      margin: 3rem auto;
+      padding: 0 1rem;
+      font: 16px/1.5 system-ui;
+      color: #18202a;
+    }
+    button {
+      padding: 0.65rem 1rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+    }
+    th,
+    td {
+      text-align: left;
+      padding: 0.6rem;
+      border-bottom: 1px solid #d3d8df;
+    }
+    pre {
+      padding: 1rem;
+      background: #f3f5f7;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  </style>
+  <h1>MoQ relay network check</h1>
+  <p>
+    Run this on the network where publishing fails. It checks WebTransport handshakes to four relay destinations using
+    <code>moqt-20</code>. It needs no token, camera, or microphone.
+  </p>
+  <p>
+    A successful handshake confirms transport connectivity. Media playback and token permissions require separate
+    checks.
+  </p>
+  <button id="run">Run checks</button>
+  <p id="status" role="status">Ready.</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Relay</th>
+        <th scope="col">Handshake</th>
+        <th scope="col">Time</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p>Copy the results below back into our conversation. If possible, repeat on the working network.</p>
+  <pre id="results"></pre>
+  <script type="module">
+    const hosts = ['sjc.relay.mux.global', 'iad.relay.mux.global', 'fra.relay.mux.global', 'relay.mux.dev'];
+    const run = document.querySelector('#run');
+    const rows = document.querySelector('#rows');
+    const status = document.querySelector('#status');
+    const results = document.querySelector('#results');
+    run.addEventListener('click', async () => {
+      run.disabled = true;
+      rows.replaceChildren();
+      const report = {
+        browser: navigator.userAgent,
+        pageOrigin: location.origin,
+        time: new Date().toISOString(),
+        checks: [],
+      };
+      try {
+        if (!globalThis.WebTransport) throw new Error('WebTransport is unavailable in this browser context.');
+        for (const host of hosts) {
+          status.textContent = `Checking ${host}…`;
+          const row = rows.insertRow();
+          row.insertCell().textContent = host;
+          const outcome = row.insertCell();
+          const elapsed = row.insertCell();
+          outcome.textContent = 'Connecting…';
+          let transport;
+          let timer;
+          const start = performance.now();
+          const check = { host, protocols: ['moqt-20'] };
+          try {
+            transport = new WebTransport(`https://${host}/`, { protocols: check.protocols });
+            transport.closed.catch(() => {});
+            await Promise.race([
+              transport.ready,
+              new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('No completed handshake within 8 seconds')), 8000);
+              }),
+            ]);
+            check.result = 'connected';
+            check.negotiatedProtocol = transport.protocol;
+          } catch (error) {
+            check.result = 'failed';
+            check.error = error.message;
+          } finally {
+            clearTimeout(timer);
+            check.elapsedMs = Math.round(performance.now() - start);
+            try {
+              transport?.close();
+            } catch {}
+          }
+          outcome.textContent = check.result;
+          elapsed.textContent = `${check.elapsedMs} ms`;
+          report.checks.push(check);
+          results.textContent = JSON.stringify(report, null, 2);
+        }
+        status.textContent = 'Finished. The results are ready to copy.';
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        run.disabled = false;
+      }
+    });
+  </script>
+</html>
