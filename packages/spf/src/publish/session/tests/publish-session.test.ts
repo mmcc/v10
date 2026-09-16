@@ -1011,7 +1011,7 @@ describe('createMoqtPublishSession', () => {
     if (earlyOk?.kind === 'subscribe-ok') expect(earlyOk.parameters.largestObject).toBeUndefined();
 
     // Once objects have been written, the next SUBSCRIBE_OK carries it
-    // (length-prefixed, the way moq-lite-rs decodes it).
+    // (two bare varints, as moq-relay 0.14.17 decodes it).
     largest = { group: 35, object: 28 };
     const later = await rawSubscribe(pair.server, 'video', 203);
 

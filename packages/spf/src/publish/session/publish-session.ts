@@ -600,8 +600,8 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
    * Answer a nonempty fill request (see `#fillRequested`). This origin serves no fills, so it meets the §5.1.3.1
    * requirement the honest way: open a uni stream, write the FETCH_HEADER carrying the initiating Request ID so the
    * subscriber can correlate the failure, then reset it. A reset is the fill-failure signal — a FIN would falsely claim
-   * the fill range was delivered in full. The known relays never send FILL_PARAMETERS today; this keeps a peer that
-   * does from stalling on a fill that never arrives.
+   * the fill range was delivered in full. Moq-relay 0.14.17 requests the current group this way; the reliable reset
+   * keeps that join from waiting on a fill that never arrives.
    */
   #openAndResetFill(requestId: number, subscriber: SubscriberStream): void {
     const fill: FillStream = {};
@@ -1014,7 +1014,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
 
     try {
       // Report the track's Largest Object once content exists (§10.2.17
-      // MUST; the relay decodes it length-prefixed) so a `relative-group`
+      // MUST; two bare varints) so a `relative-group`
       // subscriber can resolve its join. Declaring the timescale is what
       // keeps object TIMESTAMP extensions flowing through moq-lite-rs
       // relays — undeclared, they parse and discard them and re-stamp
