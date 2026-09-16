@@ -9,7 +9,7 @@ code on `mmcc/moq` and `mmcc/moq-publisher` pinned draft-19
 not change; loc.ts already uses the loc-04 property IDs that draft-20 §15.8
 now mirrors, so no LOC/MSF code moves.
 
-The relay fleet (mux.global and relay.mux.dev, both updated 2026-09-02) runs
+As of the original 2026-09-02 pass, the relay fleet (mux.global and relay.mux.dev) ran
 moq-relay 0.14.14, released 2026-09-01, which added `moqt-20` in moq-dev/moq
 PR #3255. The update does not affect our draft-19 sessions: the relay keeps
 its old behavior on `moqt-19` (current-group replay, no LARGEST_OBJECT). That implementation is the
@@ -17,6 +17,29 @@ only draft-20 peer we talk to, so this plan follows its wire behavior where
 the spec text is ambiguous, and calls out each place it does.
 
 Temporary implementation notes — delete before merge per `AGENTS.md`.
+
+**Issue #45 verification (2026-09-16, moq-relay 0.14.17):** the shared codec
+uses bare Locations in both directions. Fixed-byte tests pin SUBSCRIBE_OK,
+REQUEST_OK, multi-byte IDs, following parameters/properties, and truncation.
+INCLUDE_PROPERTIES keeps its length prefix.
+
+A local `moqdev/moq-relay:0.14.17` container and Playwright Chromium exercised
+the publisher and subscriber worktrees together over WebTransport (`moqt-20`).
+The initial viewer received 129 objects; a late viewer decoded Largest Object
+`{255,128}` and received the same 129 cached objects. After all viewers
+cancelled, the relay released its upstream pull and requested it again with
+Next Object plus `FILL_PARAMETERS StartGroup=1`.
+
+**Publisher live blocker (follow-up [#46](https://github.com/mmcc/v10/issues/46)):**
+Chromium bundled with Playwright 1.59.1 has no
+writer `commit()`, including with experimental web-platform features enabled.
+The existing publisher therefore rejects that nonempty fill with
+`NOT_SUPPORTED` / "fill requires reliable stream reset" before SUBSCRIBE_OK.
+This is separate from Location framing: the live publisher re-subscribe/fill
+pass remains incomplete. In-process tests cover a successful pull with content,
+a correlated fill header followed by reset, and subsequent live delivery.
+Browser-compatible fill serving or a transport with reliable-reset support is
+still needed for this publisher scenario against 0.14.17.
 
 ## What changed on the wire (draft-19 → draft-20)
 
@@ -92,11 +115,13 @@ terms, a Next Object subscription plus a `StartGroup=1` fill (§5.1.6).
 We do not need fills for the relay path (next section), so requesting them
 is deferred work.
 
-## What moq-relay 0.14.14 does (moq-dev/moq PR #3255)
+## What moq-relay does (0.14.14 baseline, updated for 0.14.17)
 
 Verified against `rs/moq-net/src/ietf/{filter,subscribe,fetch,parameters,
 publisher,subscriber}.rs` and `js/net/src/ietf/{filter,parameters}.ts` on
-`main` at 2026-09-02.
+`main` at 2026-09-02. The framing and upstream-pull notes below incorporate
+[moq-dev/moq#3561](https://github.com/moq-dev/moq/pull/3561) and
+[moq-dev/moq#3325](https://github.com/moq-dev/moq/pull/3325), shipped in 0.14.17.
 
 - **Negotiation.** Server accepts `moqt-20` through `moqt-14` plus the moq-lite
   ALPNs and picks by the client's offered ALPN. moq-dev's JS client offers a
@@ -112,8 +137,10 @@ publisher,subscriber}.rs` and `js/net/src/ietf/{filter,parameters}.ts` on
   moq-lite (start of the latest group). On draft-19 and earlier the relay keeps
   its old behavior (whole current group replayed for Next Object; absolute
   filters ignored).
-- **The relay's own subscriber joins upstream publishers with `Relative(1)`**
-  and no fill, and refuses any fetch stream it did not ask for.
+- **In 0.14.17, the relay joins upstream publishers with `Next Object` plus
+  `FILL_PARAMETERS` containing `StartGroup=1`.** The live stream starts after
+  Largest Object; a separate fill requests the current group's head. In
+  0.14.14 the upstream pull used `Relative(1)` without a fill.
 - **Fills are served, single-group only.** A `FILL_PARAMETERS` whose range
   resolves to one group is served from the cache as a real fetch stream
   (`FETCH_HEADER` + objects with absolute first IDs and timestamp properties +
@@ -135,14 +162,10 @@ publisher,subscriber}.rs` and `js/net/src/ietf/{filter,parameters}.ts` on
   AUTHORIZATION_TOKEN (0x03), so the URL-token-only auth rule still holds.
   REQUEST_UPDATE accepts 0x02, 0x06, 0x10, 0x20, 0x21, 0x23. `forward: 0` is
   rejected.
-- **`LARGEST_OBJECT` (0x09) is framed length-prefixed** — a varint length then
-  two varints — on every draft, and its decoder requires that framing. The
-  spec text (§10.2) says a Location parameter is two bare varints. moq-dev
-  argues odd parameter types get a length by the Key-Value-Pair parity rule
-  and lists this as a spec conflict. Because the relay only sends it on
-  draft-20, our draft-19 sessions are unaffected today; on draft-20 our bare
-  decode would desync the parameter list and kill every SUBSCRIBE_OK with
-  content.
+- **`LARGEST_OBJECT` (0x09) is two bare varints (Group, Object) in 0.14.17
+  on draft-17 and newer**, matching §10.2. Draft-14 through -16 keep the
+  length prefix. Older relays used a length prefix on all drafts; our
+  draft-20-only codec now uses the bare form for both encoding and decoding.
 - **`INCLUDE_PROPERTIES` (0x35) is framed length-prefixed with a single byte
   inside**, again by parity, although §10.2.21 calls it a uint8. The relay
   obeys it as a publisher and sends it only to opt out (which its upstream
@@ -154,8 +177,8 @@ publisher,subscriber}.rs` and `js/net/src/ietf/{filter,parameters}.ts` on
 - **Subgroup streams are checked against the Object ID:** the first object's
   delta must be its absolute ID and later deltas must be contiguous. A stream
   that starts partway through a group, or has a gap, is dropped per-stream.
-- Not implemented by the relay: PUBLISH_STATE_NOTIFY, requesting fills as a
-  subscriber, multi-group fills.
+- The 0.14.14 baseline did not implement PUBLISH_STATE_NOTIFY or multi-group
+  fills. Upstream fill requests are now exercised by the 0.14.17 pull.
 
 ## Consequences for our engine
 
@@ -178,10 +201,10 @@ publisher,subscriber}.rs` and `js/net/src/ietf/{filter,parameters}.ts` on
    unchanged.** Optional improvement: join video with `Relative(1)` for an
    instant, decodable start; the renderer already fast-forwards a backlog
    behind the edge.
-4. **`LARGEST_OBJECT` decode must be length-prefixed on draft-20** or the
-   session dies on the first SUBSCRIBE_OK with content. Use the relay's framing
-   on every draft (we never send it as a subscriber; nothing else sends it on
-   19) and cite the conflict in the codec comment.
+4. **`LARGEST_OBJECT` must encode and decode as two bare varints for
+   0.14.17.** Both SUBSCRIBE_OK and REQUEST_OK can carry it once content
+   exists. Keep INCLUDE_PROPERTIES length-prefixed; its framing did not
+   change.
 5. **Fills are not needed** for playback against the relay. Decode
    `FILL_PARAMETERS` and `INCLUDE_PROPERTIES` so a peer sending them does not
    kill a session (the publisher branch receives SUBSCRIBE), but requesting
@@ -189,16 +212,21 @@ publisher,subscriber}.rs` and `js/net/src/ietf/{filter,parameters}.ts` on
 6. **FETCH stays draft-19-only** in practice: keep the joining FETCH on the 19
    path, send none on 20. Implement the spec-shaped draft-20 encoder/decoder
    for completeness and tests, not for the relay.
-7. **Publisher branch:** the relay will subscribe upstream with `Relative(1)`.
-   If the publisher only delivers from the next object, the relay drops that
-   mid-group stream and the join degrades to the next group boundary. Serving
-   the current group from object 0 (retaining the in-progress group's frames)
-   restores the instant join. The publisher must also send `LARGEST_OBJECT`
-   (length-prefixed) in SUBSCRIBE_OK on draft-20 (spec MUST once content
-   exists; the relay decodes it that way) and accept 0x23/0x35 on inbound
-   SUBSCRIBE.
+7. **Publisher branch:** the 0.14.17 upstream pull uses Next Object plus a
+   current-group fill. This origin does not serve historical fills: for a
+   nonempty fill it sends a FETCH_HEADER with the initiating Request ID,
+   commits the header, and resets the stream. The relay can then finish the
+   failed fill and continue live; omitting the stream would stall the joined
+   group. Without reliable reset support, the publisher rejects the fill
+   with NOT_SUPPORTED. Report Largest Object as bare varints in SUBSCRIBE_OK
+   and REQUEST_OK, and test joins both before and after content exists.
 
 ## Rollout
+
+**0.14.17 compatibility cutover (#45, 2026-09-16):** ship the bare-location
+codec together with the relay upgrade. There is no safe wire auto-detection:
+old clients fail against 0.14.17 and new clients cannot use older relays'
+length-prefixed locations. INCLUDE_PROPERTIES remains unchanged.
 
 The whole fleet speaks `moqt-20`, so a hard cutover is viable and is the
 smaller change. Offering `['moqt-20', 'moqt-19']` and reading the negotiated
@@ -281,8 +309,8 @@ Branch points on a `draft: 19 | 20` value in `createMoqtSession` config:
   the relay does). Draft-19 tag form: `next-object` → 0x2, `relative-group 0`
   → 0x1, `relative-group N>0` → throw (no tag can express it), `absolute` →
   0x3/0x4, `endObject` → throw on 19.
-- `LARGEST_OBJECT`: encode and decode as length-prefixed `{group, object}`
-  varints on every draft; comment cites the §10.2 conflict and PR #3255.
+- `LARGEST_OBJECT`: encode and decode as two bare `{group, object}` varints
+  on draft-20, matching moq-relay 0.14.17 and PR #3561.
 - `MessageParameters`: add `fillParameters?: MessageParameters` (nested
   `encodeMessageParameters`; decoder enforces the allow-list and rejects it on
   draft-19) and `includeProperties?: 0 | 1` (length-prefixed single byte;
@@ -300,8 +328,8 @@ Branch points on a `draft: 19 | 20` value in `createMoqtSession` config:
 `status: 'timed-out'`; update Type Flags comments (behavior already matches).
 
 Tests: golden vectors for each LOCATION_FILTER field count and the
-`{0,0}`-omission rule; length-prefixed LARGEST_OBJECT byte-pinned against
-moq-dev's vector `[0x01, 0x09, 0x04, 0x80, 0xff, 0x80, 0x80]` for
+`{0,0}`-omission rule; bare LARGEST_OBJECT byte-pinned against
+moq-dev's vector `[0x01, 0x09, 0x80, 0xff, 0x80, 0x80]` for
 `{255, 128}`; INCLUDE_PROPERTIES framing and range check; FILL_PARAMETERS
 nesting and allow-list violation; draft-20 FETCH round-trip;
 PUBLISH_STATE_NOTIFY decode; 0x20C entries.
@@ -320,7 +348,7 @@ PUBLISH_STATE_NOTIFY decode; 0x20C entries.
   Request ID): deferred to Phase 6; until then an unexpected fetch stream for a
   subscription id is cancelled, not fatal.
 - Tests: PUBLISH_STATE_NOTIFY on a subscription vs a fetch stream;
-  REQUEST_UPDATE id uniqueness; length-prefixed LARGEST_OBJECT in SUBSCRIBE_OK
+  REQUEST_UPDATE id uniqueness; bare LARGEST_OBJECT in SUBSCRIBE_OK
   reaches `onOk`.
 
 ### Phase 3 — playback (`packages/spf/src/playback/`)
@@ -352,7 +380,7 @@ PUBLISH_STATE_NOTIFY decode; 0x20C entries.
   draft-19 SETUP / SUBSCRIBE / SUBSCRIBE_OK / FETCH-reject and already replay
   the newest buffered group. Under 20: parse the field-list LOCATION_FILTER,
   replay the current group only for `Relative(≥1)` (mirror the relay's strict
-  Next Object), tolerate 0x23/0x35, send length-prefixed LARGEST_OBJECT, and
+  Next Object), tolerate 0x23/0x35, send bare LARGEST_OBJECT, and
   drop the FETCH branch. Update the `moqt-19` / draft-19 comments in
   `spf-moq-player/main.ts`, `index.html`, `moq-relay-interop/main.ts`,
   `adapt-latency-target.ts`, and the `moq-session.ts` header.
@@ -370,10 +398,11 @@ driver on the shared codec, so Phase 1 lands the decode. Publisher-specific:
   `Relative(1)` subscriber gets the group from object 0 with contiguous IDs
   (the relay drops a stream that starts partway through). Without this the
   relay's upstream join degrades to the next group.
-- Send `LARGEST_OBJECT` (length-prefixed) in SUBSCRIBE_OK on draft-20 once
+- Send `LARGEST_OBJECT` (two bare varints) in SUBSCRIBE_OK on draft-20 once
   the track has content.
-- Inbound `FILL_PARAMETERS`: honest minimum is open-and-reset (§5.1.3.1); the
-  relay never sends one today.
+- Inbound `FILL_PARAMETERS`: honest minimum is a reliably delivered header
+  followed by reset (§5.1.3.1); relay 0.14.17 requests a current-group fill.
+  Without writer `commit()`, the existing publisher rejects nonempty fills.
 - Inbound FETCH decode shape follows the draft; keep rejecting.
 - REQUEST_UPDATE now consumes its own Request ID: the "every inbound request
   ID ever seen" check must accept it as a new id.
