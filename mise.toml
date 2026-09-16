@@ -3,7 +3,7 @@
 # mise is not required. `.node-version`/`.nvmrc` (Node) and `packageManager`
 # (pnpm) stay the source of truth, so nvm, Volta, and CI never drift from this
 # file. See "Using mise" in CONTRIBUTING.md.
-min_version = "2025.1.0"
+min_version = "2025.4.6"
 
 [settings]
 # Resolve Node from `.nvmrc`/`.node-version` instead of duplicating the pin.

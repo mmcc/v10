@@ -928,15 +928,15 @@ function tomlTable(text, name) {
 
   const body = lines.slice(start + 1);
   const end = body.findIndex((line) => /^\s*\[/.test(line));
+
   return (end === -1 ? body : body.slice(0, end)).join('\n');
 }
 
 /**
- * `mise.toml` is optional contributor convenience, so this check is a no-op
- * without it. When present, its pnpm pin must match `packageManager` — mise
- * users would otherwise silently run a different pnpm than CI. Node stays out
- * of `[tools]` on purpose: mise reads `.nvmrc`/`.node-version`, keeping one
- * Node pin shared with nvm, Volta, and `actions/setup-node`.
+ * `mise.toml` is optional contributor convenience, so this check is a no-op without it. When present, its pnpm pin must
+ * match `packageManager` — mise users would otherwise silently run a different pnpm than CI. Node stays out of
+ * `[tools]` on purpose: mise reads `.nvmrc`/`.node-version`, keeping one Node pin shared with nvm, Volta, and
+ * `actions/setup-node`.
  */
 function checkMiseToolPins() {
   const warnings = [];
@@ -965,7 +965,7 @@ function checkMiseToolPins() {
   }
 
   // Without the opt-in, mise ignores the Node version files and pins no Node.
-  if (!/idiomatic_version_file_enable_tools\s*=\s*\[[^\]]*["']node["']/.test(settings ?? '')) {
+  if (!/^\s*idiomatic_version_file_enable_tools\s*=\s*\[[^\]]*["']node["']/m.test(settings ?? '')) {
     warnings.push('mise.toml: [settings] idiomatic_version_file_enable_tools must include "node" so .nvmrc is honored');
   }
 
