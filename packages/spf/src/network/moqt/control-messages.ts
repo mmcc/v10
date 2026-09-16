@@ -296,6 +296,9 @@ function readReasonPhrase(reader: ByteReader): string {
   return utf8Decode(reader.readBytes(length));
 }
 
+// Message parameters use per-type encodings: LARGEST_OBJECT is a bare Location
+// (§10.2), including with moq-relay 0.14.17+ on draft-17 and newer (moq-dev/moq#3561).
+// This engine speaks draft-20 only; older relays' length prefix is incompatible.
 function writeLocation(writer: ByteWriter, location: Location): void {
   writer.writeVarint(location.group);
   writer.writeVarint(location.object);
@@ -303,28 +306,6 @@ function writeLocation(writer: ByteWriter, location: Location): void {
 
 function readLocation(reader: ByteReader): Location {
   return { group: reader.readVarint(), object: reader.readVarint() };
-}
-
-/**
- * LARGEST_OBJECT rides inside a length prefix. §10.2 defines a Location parameter as two bare varints, but moq-relay —
- * the peer this engine is deployed against — applies the Key-Value-Pair parity rule to the odd type 0x09 and frames it
- * with a Length on every draft (moq-dev/moq#3255 records it as a spec conflict). The two forms are indistinguishable on
- * the wire, so the codec follows the relay.
- */
-function writeLocationParameter(writer: ByteWriter, location: Location): void {
-  const value = new ByteWriter(16);
-
-  writeLocation(value, location);
-  writer.writeLengthPrefixed(value.toBytes());
-}
-
-function readLocationParameter(reader: ByteReader): Location {
-  const value = new ByteReader(reader.readBytes(reader.readVarint()));
-  const location = readLocation(value);
-
-  if (value.remaining !== 0) throw new MoqtProtocolError('Location parameter has trailing bytes');
-
-  return location;
 }
 
 // ============================================================================
@@ -602,7 +583,7 @@ function collectParameterEntries(parameters: MessageParameters): ParameterEntry[
   }
 
   if (parameters.largestObject !== undefined) {
-    push(PARAMETER_TYPE.LARGEST_OBJECT, (w) => writeLocationParameter(w, parameters.largestObject!));
+    push(PARAMETER_TYPE.LARGEST_OBJECT, (w) => writeLocation(w, parameters.largestObject!));
   }
 
   if (parameters.forward !== undefined) {
@@ -732,7 +713,7 @@ export function decodeMessageParameters(reader: ByteReader, scope: ParameterScop
         parameters.expires = reader.readVarint();
         break;
       case PARAMETER_TYPE.LARGEST_OBJECT:
-        parameters.largestObject = readLocationParameter(reader);
+        parameters.largestObject = readLocation(reader);
         break;
       case PARAMETER_TYPE.FORWARD: {
         const forward = reader.readUint8();
@@ -772,7 +753,7 @@ export function decodeMessageParameters(reader: ByteReader, scope: ParameterScop
       case PARAMETER_TYPE.INCLUDE_PROPERTIES: {
         // §10.2.21 calls the value a uint8; moq-relay frames it
         // length-prefixed by the odd-type parity rule (moq-dev/moq#3255),
-        // and the codec follows the relay — see `writeLocationParameter`.
+        // including in 0.14.17; the bare Location change does not apply here.
         const value = reader.readBytes(reader.readVarint());
 
         if (value.length !== 1 || value[0]! > 1) {

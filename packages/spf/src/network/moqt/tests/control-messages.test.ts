@@ -17,6 +17,7 @@ import {
   encodePublishNamespace,
   encodePublishStateNotify,
   encodeRequestError,
+  encodeRequestOk,
   encodeSetup,
   encodeSubscribe,
   encodeSubscribeOk,
@@ -163,6 +164,15 @@ describe('encodeFetch', () => {
 });
 
 describe('encodeSubscribeOk', () => {
+  it('matches relay 0.14.17 framing with content and trailing track properties', () => {
+    const wire = Uint8Array.of(0x04, 0x00, 0x09, 0x07, 0x01, 0x09, 0x80, 0xff, 0x80, 0x80, 0x02, 0x01);
+    const parameters = { largestObject: { group: 255, object: 128 } };
+    const trackProperties = [{ type: 0x02, value: 1 }];
+
+    expect(encodeSubscribeOk(7, parameters, trackProperties)).toEqual(wire);
+    expect(decodeAll(wire)).toEqual([{ kind: 'subscribe-ok', trackAlias: 7, parameters, trackProperties }]);
+  });
+
   it('round-trips alias, parameters, and track properties', () => {
     const [message] = decodeAll(
       encodeSubscribeOk(7, { expires: 30_000, largestObject: { group: 41, object: 12 } }, [{ type: 0x02, value: 1 }])
@@ -174,6 +184,16 @@ describe('encodeSubscribeOk', () => {
       parameters: { expires: 30_000, largestObject: { group: 41, object: 12 } },
     });
     expect(message).toHaveProperty('trackProperties', [{ type: 0x02, value: 1 }]);
+  });
+});
+
+describe('encodeRequestOk', () => {
+  it('matches relay 0.14.17 framing when acknowledging an update after content exists', () => {
+    const wire = Uint8Array.of(0x07, 0x00, 0x06, 0x01, 0x09, 0x80, 0xff, 0x80, 0x80);
+    const parameters = { largestObject: { group: 255, object: 128 } };
+
+    expect(encodeRequestOk(parameters)).toEqual(wire);
+    expect(decodeAll(wire)).toEqual([{ kind: 'request-ok', parameters, trackProperties: [] }]);
   });
 });
 
@@ -348,26 +368,32 @@ describe('encodeMessageParameters', () => {
     expect(() => decodeMessageParameters(new ByteReader(writer.toBytes()))).toThrow(MoqtProtocolError);
   });
 
-  // §10.2 calls LARGEST_OBJECT a bare Location; moq-relay frames it with a
-  // length by the odd-type parity rule, and the codec follows the relay.
-  // Vector from moq-dev/moq `test_param_location_wire_vectors`.
-  it('frames LARGEST_OBJECT length-prefixed, byte-for-byte with moq-relay', () => {
-    const bytes = encodeParameters({ largestObject: { group: 255, object: 128 } });
+  // Draft-17+ vector from moq-dev/moq#3561, shipped in moq-relay 0.14.17.
+  it('frames LARGEST_OBJECT as two bare varints, byte-for-byte with moq-relay', () => {
+    const parameters = { largestObject: { group: 255, object: 128 } };
+    const wire = Uint8Array.of(0x01, 0x09, 0x80, 0xff, 0x80, 0x80);
 
-    expect(Array.from(bytes)).toEqual([0x01, 0x09, 0x04, 0x80, 0xff, 0x80, 0x80]);
-    expect(decodeMessageParameters(new ByteReader(bytes))).toEqual({ largestObject: { group: 255, object: 128 } });
+    expect(encodeParameters(parameters)).toEqual(wire);
+    expect(decodeMessageParameters(new ByteReader(wire))).toEqual(parameters);
   });
 
-  it('rejects a LARGEST_OBJECT value with trailing bytes', () => {
-    const writer = new ByteWriter();
+  it.each([
+    [0x01, 0x09],
+    [0x01, 0x09, 0x00],
+    [0x01, 0x09, 0x80],
+    [0x01, 0x09, 0x00, 0x80],
+  ])('rejects a truncated LARGEST_OBJECT (case %#)', (...wire) => {
+    expect(() => decodeControlMessage({ type: MESSAGE_TYPE.REQUEST_OK, body: Uint8Array.from(wire) })).toThrow(
+      MoqtProtocolError
+    );
+  });
 
-    writer.writeVarint(1);
-    writer.writeVarint(PARAMETER_TYPE.LARGEST_OBJECT);
-    writer.writeVarint(3); // length: two varints plus a stray byte
-    writer.writeVarint(1);
-    writer.writeVarint(2);
-    writer.writeUint8(0);
-    expect(() => decodeMessageParameters(new ByteReader(writer.toBytes()))).toThrow(/trailing bytes/);
+  it('keeps parameters following a small LARGEST_OBJECT aligned', () => {
+    const parameters: MessageParameters = { largestObject: { group: 0, object: 1 }, forward: 1, includeProperties: 0 };
+    const wire = Uint8Array.of(0x03, 0x09, 0x00, 0x01, 0x07, 0x01, 0x25, 0x01, 0x00);
+
+    expect(encodeParameters(parameters)).toEqual(wire);
+    expect(decodeMessageParameters(new ByteReader(wire))).toEqual(parameters);
   });
 
   it('frames INCLUDE_PROPERTIES as a length-prefixed byte and rejects values other than 0 and 1', () => {
