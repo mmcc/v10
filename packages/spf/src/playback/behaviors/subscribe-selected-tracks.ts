@@ -319,9 +319,10 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
                 recoveryTarget === current ? currentStatus : recoveryTarget === pending ? pendingStatus : undefined;
 
               // Track arrivals only during recovery; a latched flag survives
-              // drains between reactive updates. Normal playback continues
-              // to observe status transitions rather than every frame.
-              if (recoveredStatus === 'active' && recoveryTarget.snapshot.get().context.hasFreshFrame) {
+              // drains between reactive updates, including fresh tail media
+              // arriving after PUBLISH_DONE. Normal playback continues to
+              // observe status transitions rather than every frame.
+              if (recoveredStatus !== undefined && recoveryTarget.snapshot.get().context.hasFreshFrame) {
                 recoveryTarget = undefined;
                 retryAttempts = 0;
               } else if (recoveryTarget.track.id !== selectedId) {

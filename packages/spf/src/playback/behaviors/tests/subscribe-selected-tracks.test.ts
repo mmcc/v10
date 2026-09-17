@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { signal } from '../../../core/signals/primitives';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
-import { PUBLISH_DONE_STATUS } from '../../../network/moqt/control-messages';
+import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
 import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import {
@@ -1089,6 +1089,116 @@ describe.each([
       await vi.advanceTimersByTimeAsync(10_000);
       expect(h.subscriptions).toHaveLength(count);
       expect(h.target()?.snapshot.get().context.status).toBe('error');
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  it(`counts fresh ${mode} tail media delivered after PUBLISH_DONE in the same batch`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      h.subscriptions.at(-1)!.handlers.onDone?.({
+        statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+        streamCount: 1,
+        reason: 'ended',
+      });
+      h.frame(101, 0, 60_100_000);
+
+      while (h.target()?.dequeue()) {
+        /* Drain the fresh tail before observers run. */
+      }
+
+      await vi.advanceTimersByTimeAsync(0);
+      await h.expectRetry(100);
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  if (mode !== 'handoff') {
+    it(`counts fresh ${mode} tail media after observing the ended status`, async () => {
+      const h = await setupRecovery();
+
+      try {
+        await h.end();
+        await h.expectRetry(100);
+        h.accept();
+        h.frame(100, 2, 60_000_000);
+        h.subscriptions.at(-1)!.handlers.onDone?.({
+          statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+          streamCount: 1,
+          reason: 'ended',
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.target()?.snapshot.get().context.status).toBe('ended');
+        h.frame(101, 0, 60_100_000);
+
+        while (h.target()?.dequeue()) {
+          /* Drain the buffered tail. */
+        }
+
+        await vi.advanceTimersByTimeAsync(0);
+        await h.expectRetry(100);
+      } finally {
+        h.reactor.destroy();
+      }
+    });
+  }
+
+  it(`preserves ${mode} retry accounting when fresh media and auth expiry are batched`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      h.frame(100, 3, 60_100_000);
+      h.subscriptions.at(-1)!.handlers.onError?.({
+        errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+        retryInterval: 0,
+        reason: 'expired',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      h.accept(0, 0);
+      await vi.advanceTimersByTimeAsync(0);
+      await h.end();
+      await h.expectRetry(200);
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  it(`preserves ${mode} retry accounting when a retired auth subscription delivers late media`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      const retired = h.subscriptions.at(-1)!;
+
+      retired.handlers.onError?.({
+        errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+        retryInterval: 0,
+        reason: 'expired',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      h.accept(0, 0);
+      retired.handlers.onObject?.({
+        groupId: 100,
+        objectId: 3,
+        subgroupId: 0,
+        status: 'normal',
+        properties: [{ type: 0x10, value: 60_100_000 }],
+        payload: new Uint8Array([1]),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await h.end();
+      await h.expectRetry(200);
     } finally {
       h.reactor.destroy();
     }

@@ -169,6 +169,118 @@ describe('createTrackSubscriberActor', () => {
     subscriber.destroy();
   });
 
+  it('clears latched freshness as soon as auth refresh retires the subscription', async () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth: async () => ({}) });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 1, parameters: {}, trackProperties: [] });
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+    handlers.onError?.({ errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN, retryInterval: 0, reason: 'expired' });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+    expect(subscriber.snapshot.get().context.frameCount).toBe(1);
+    await Promise.resolve();
+
+    const refreshed = subscriptions[1]!.handlers;
+
+    refreshed.onOk?.({ trackAlias: 2, parameters: { largestObject: { group: 42, object: 0 } }, trackProperties: [] });
+    refreshed.onObject?.(locObject(42, 0, 2_000));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+    refreshed.onObject?.(locObject(42, 1, 3_000));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+    subscriber.destroy();
+  });
+
+  it.each(['refreshing', 'before-ok', 'after-ok'] as const)(
+    'ignores retired subscription callbacks while %s',
+    async (stage) => {
+      const { session, subscriptions } = createFakeSession();
+      const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth: async () => ({}) });
+      const { handlers } = subscriptions[0]!;
+
+      handlers.onOk?.({ trackAlias: 1, parameters: { largestObject: { group: 41, object: 0 } }, trackProperties: [] });
+      handlers.onObject?.(locObject(41, 0, 1_000));
+      handlers.onError?.({ errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN, retryInterval: 0, reason: 'expired' });
+
+      if (stage !== 'refreshing') await Promise.resolve();
+
+      const accept = () =>
+        subscriptions[1]!.handlers.onOk?.({
+          trackAlias: 2,
+          parameters: { largestObject: { group: 0, object: 0 } },
+          trackProperties: [],
+        });
+
+      if (stage === 'after-ok') accept();
+
+      const before = subscriber.snapshot.get().context;
+
+      handlers.onObject?.(locObject(42, 0, 2_000));
+      handlers.onOk?.({ trackAlias: 1, parameters: {}, trackProperties: [{ type: 0x08, value: 1000 }] });
+      handlers.onDone?.({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 0, reason: 'old attempt' });
+      handlers.onError?.({ errorCode: REQUEST_ERROR_CODE.UNAUTHORIZED, retryInterval: 0, reason: 'old attempt' });
+      expect(subscriber.snapshot.get().context).toEqual(before);
+      expect(subscriptions[0]!.cancelled).toBe(true);
+
+      if (stage === 'refreshing') await Promise.resolve();
+
+      if (stage !== 'after-ok') accept();
+
+      expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+      subscriptions[1]!.handlers.onObject?.(locObject(0, 1, 10));
+      expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+      expect(subscriber.peek()).toMatchObject({ groupId: 0, objectId: 1, timestampUs: 10 });
+      subscriber.destroy();
+    }
+  );
+
+  it('does not let retired callbacks re-arm or disarm the refreshed subscription’s watchdog', async () => {
+    vi.useFakeTimers();
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({
+      session,
+      track: TRACK,
+      refreshAuth: async () => ({}),
+      stallTimeoutMs: 100,
+    });
+    const retired = subscriptions[0]!.handlers;
+
+    retired.onError?.({ errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN, retryInterval: 0, reason: 'expired' });
+    await Promise.resolve();
+    subscriptions[1]!.handlers.onOk?.({ trackAlias: 2, parameters: {}, trackProperties: [] });
+
+    await vi.advanceTimersByTimeAsync(90);
+    retired.onObject?.(locObject(41, 0, 1000));
+    retired.onDone?.({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 0, reason: 'old attempt' });
+    expect(subscriber.snapshot.get().context.status).toBe('active');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(subscriber.snapshot.get().context.status).toBe('error');
+    expect(subscriptions[1]!.cancelled).toBe(true);
+    subscriber.destroy();
+  });
+
+  it('retains pre-OK fresh media within the refreshed subscription', async () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth: async () => ({}) });
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await Promise.resolve();
+
+    const { handlers } = subscriptions[1]!;
+
+    handlers.onObject?.(locObject(0, 1, 10));
+    subscriber.dequeue();
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+    handlers.onOk?.({ trackAlias: 2, parameters: { largestObject: { group: 0, object: 0 } }, trackProperties: [] });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+    subscriber.destroy();
+  });
+
   it('buffers frames in (group, object) order despite out-of-order arrival', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });

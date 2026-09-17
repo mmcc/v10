@@ -53,8 +53,8 @@ export interface TrackSubscriberContext {
   hasDecodableFrame: boolean;
   /**
    * A valid media frame arrived beyond this subscription's SUBSCRIBE_OK LARGEST_OBJECT boundary (moqt-20 §10.2.17).
-   * Latched across buffer drains so recovery observers cannot miss progress. Acceptance and cached replay alone leave
-   * this false. An omitted boundary means the publisher had no objects yet, so its first media frame is fresh.
+   * Latched across buffer drains until auth refresh retires the attempt. Acceptance and cached replay alone leave this
+   * false. An omitted boundary means the publisher had no objects yet, so its first media frame is fresh.
    */
   hasFreshFrame: boolean;
   /** Jitter-buffer stats for latency control. */
@@ -118,6 +118,7 @@ export interface CreateTrackSubscriberOptions {
 }
 
 type SubscriberMessage =
+  | { type: 'reset-freshness' }
   | { type: 'subscribed'; hasFreshFrame: boolean }
   | {
       type: 'frame-buffered';
@@ -373,6 +374,8 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
     { status: 'pending', hasDecodableFrame: false, hasFreshFrame: false, frameCount: 0 },
     (context, message) => {
       switch (message.type) {
+        case 'reset-freshness':
+          return context.hasFreshFrame ? { ...context, hasFreshFrame: false } : context;
         case 'subscribed':
           return {
             ...context,
@@ -541,31 +544,52 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   };
 
   const subscribe = (parameters: MessageParameters): void => {
+    // REQUEST_ERROR can leave subgroup callbacks in flight. Retire this
+    // attempt before awaiting auth so its callbacks cannot mutate the next
+    // attempt's buffer, freshness boundary, measurements, or watchdog.
+    let retired = false;
+
     subscribeAccepted = false;
     largestObject = undefined;
     latestMediaLocation = undefined;
+    inner.send({ type: 'reset-freshness' });
     subscription = session.subscribe(
       { trackNamespace: track.moq.namespace, trackName: track.moq.name, parameters },
       {
         onOk: (ok) => {
+          if (destroyed || retired) return;
+
           trackTimescale = parseTrackTimescale(ok.trackProperties);
           largestObject = ok.parameters.largestObject;
           subscribeAccepted = true;
           inner.send({ type: 'subscribed', hasFreshFrame: hasFreshMedia() });
         },
-        onObject: handleObject,
+        onObject: (object) => {
+          if (retired) return;
+
+          handleObject(object);
+        },
         onDone: (done) => {
+          if (destroyed || retired) return;
+
           disarmStallTimer();
           // An auth-shaped end is not worth re-subscribing: the replacement
           // carries the same credentials the relay just rejected.
           inner.send({ type: 'done', done, unrecoverable: !isRetryablePublishDoneStatus(done.statusCode) });
         },
         onError: (error) => {
+          if (destroyed || retired) return;
+
+          retired = true;
           disarmStallTimer();
 
           if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN) {
             if (options.refreshAuth && !authRetried) {
               authRetried = true;
+              // Clear immediately: a reactive flush may run while the token
+              // promise is pending, before subscribe() resets the boundary.
+              inner.send({ type: 'reset-freshness' });
+              subscription?.cancel();
               void options
                 .refreshAuth()
                 .then((refreshed) => {
@@ -574,11 +598,13 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
                   resetArrivalBaseline();
                   subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
                 })
-                .catch((refreshError) =>
+                .catch((refreshError) => {
+                  if (destroyed) return;
+
                   // The provider could not supply a fresh token — as
                   // terminal as a rejected refresh (see `unrecoverable`).
-                  inner.send({ type: 'error', error: refreshError, unrecoverable: true })
-                );
+                  inner.send({ type: 'error', error: refreshError, unrecoverable: true });
+                });
               return;
             }
 
