@@ -26,11 +26,12 @@
  * on a broadcaster blip), the relay refused it, or the subscriber's stall watchdog gave up. The actor reports that as a
  * terminal snapshot status (`'ended'`/`'error'`); this behavior destroys the dead actor(s) and re-subscribes the same
  * selection at the live edge (the initial-join filter, exactly the suspend/rejoin path) after a capped backoff
- * (`subscribeRetry`). An `'ended'` subscription first plays out its buffered tail — late subgroups keep arriving after
- * PUBLISH_DONE by design — where an `'error'`/stall death has nothing worth draining. Deaths the actor marks
- * `unrecoverable` (permanent rejections, spent auth) are not rejoined at all: the corpse holds its slot until the
- * selection moves. Replacing the actor rides the renderers' existing swap path — decoder reconfigure, clock re-anchor —
- * so a broadcaster restart with reset timestamps re-anchors instead of stalling.
+ * (`subscribeRetry`). Acceptance or cached replay does not reset the backoff: the replacement must receive fresh media
+ * beyond its SUBSCRIBE_OK's LARGEST_OBJECT boundary. An `'ended'` subscription first plays out its buffered tail — late
+ * subgroups keep arriving after PUBLISH_DONE by design — where an `'error'`/stall death has nothing worth draining.
+ * Deaths the actor marks `unrecoverable` (permanent rejections, spent auth) are not rejoined at all: the corpse holds
+ * its slot until the selection moves. Replacing the actor rides the renderers' existing swap path — decoder
+ * reconfigure, clock re-anchor — so a broadcaster restart with reset timestamps re-anchors instead of stalling.
  *
  * Sole writer of its type's `*SubscriberActor` + `pending*SubscriberActor` slots (renderers and latency/bandwidth
  * behaviors only read). Slot reads inside the effect use `peek` — the effect re-fires on selection/session/
@@ -211,10 +212,9 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempts = 0;
   /**
-   * The subscriber the last recovery created, until it proves healthy. The backoff may only reset on _that_ actor going
-   * `'active'` — a healthy current is exactly what keeps playing while a handoff retry fails over and over, so any
-   * reset keyed on the steady state (rather than on the replacement itself) re-runs every handoff retry at attempt 0
-   * and never spends a finite budget.
+   * The subscriber the last recovery created, until it delivers fresh media. Only that actor can reset the backoff: a
+   * healthy current keeps playing while a handoff retry fails over and over, so any reset keyed on the steady state
+   * (rather than on the replacement itself) re-runs every handoff retry at attempt 0 and never spends a finite budget.
    */
   let recoveryTarget: TrackSubscriberActor | undefined;
 
@@ -310,7 +310,7 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
             const pendingStatus = pendingStatusSignal.get();
 
             // The outage is over only when the recovery's own replacement
-            // reaches the relay (SUBSCRIBE_OK / a first frame) — see
+            // delivers fresh media beyond the relay's cached boundary — see
             // `recoveryTarget`. It may sit in either slot: a live-edge
             // rejoin recreates the current, a handoff retry recreates the
             // pending (and promotion moves it across).
@@ -318,7 +318,11 @@ function setupSubscribeSelectedTrack<S extends SelectionKey, Sub extends Subscri
               const recoveredStatus =
                 recoveryTarget === current ? currentStatus : recoveryTarget === pending ? pendingStatus : undefined;
 
-              if (recoveredStatus === 'active') {
+              // Track arrivals only during recovery; a latched flag survives
+              // drains between reactive updates, including fresh tail media
+              // arriving after PUBLISH_DONE. Normal playback continues to
+              // observe status transitions rather than every frame.
+              if (recoveredStatus !== undefined && recoveryTarget.snapshot.get().context.hasFreshFrame) {
                 recoveryTarget = undefined;
                 retryAttempts = 0;
               } else if (recoveryTarget.track.id !== selectedId) {
