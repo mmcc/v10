@@ -93,6 +93,82 @@ describe('createTrackSubscriberActor', () => {
     expect(subscriptions[0]!.cancelled).toBe(true);
   });
 
+  it.each([
+    { group: 41, object: 3 },
+    { group: 42, object: 0 },
+  ])('requires valid media beyond SUBSCRIBE_OK largest object before reporting freshness: %j', (location) => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 1, parameters: { largestObject: { group: 41, object: 2 } }, trackProperties: [] });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+
+    // Out-of-order cache replay, including the exact advertised edge.
+    handlers.onObject?.(locObject(41, 2, 2_000));
+    handlers.onObject?.(locObject(40, 0, 0));
+    handlers.onObject?.(locObject(41, 0, 1_000));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+
+    // A newer status object or an object without LOC timing is not media progress.
+    handlers.onObject?.({ ...locObject(43, 0, 3_000), status: 'end-of-group' });
+    handlers.onObject?.({ ...locObject(43, 0, 3_000), properties: [] });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+
+    // Object positions, not timestamps, establish freshness.
+    handlers.onObject?.(locObject(location.group, location.object, 0));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+
+    while (subscriber.dequeue()) {
+      /* Drain. */
+    }
+
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+    subscriber.destroy();
+  });
+
+  it('requires a media frame even when SUBSCRIBE_OK advertises an empty track', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 1, parameters: {}, trackProperties: [] });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+    handlers.onObject?.(locObject(0, 0, 0));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+    subscriber.destroy();
+  });
+
+  it.each([0, 1])('checks already drained pre-OK media against the advertised boundary: object %i', (objectId) => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onObject?.(locObject(0, objectId, 0));
+    subscriber.dequeue();
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+    handlers.onOk?.({ trackAlias: 1, parameters: { largestObject: { group: 0, object: 0 } }, trackProperties: [] });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(objectId > 0);
+    subscriber.destroy();
+  });
+
+  it('does not carry pre-refresh media into a new auth subscription’s freshness boundary', async () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, refreshAuth: async () => ({}) });
+    const { handlers } = subscriptions[0]!;
+
+    handlers.onOk?.({ trackAlias: 1, parameters: { largestObject: { group: 41, object: 0 } }, trackProperties: [] });
+    handlers.onObject?.(locObject(41, 0, 0));
+    handlers.onError?.({ errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN, retryInterval: 0, reason: 'expired' });
+    await Promise.resolve();
+
+    subscriptions[1]!.handlers.onOk?.({ trackAlias: 2, parameters: {}, trackProperties: [] });
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(false);
+    subscriptions[1]!.handlers.onObject?.(locObject(42, 0, 1_000));
+    expect(subscriber.snapshot.get().context.hasFreshFrame).toBe(true);
+    subscriber.destroy();
+  });
+
   it('buffers frames in (group, object) order despite out-of-order arrival', () => {
     const { session, subscriptions } = createFakeSession();
     const subscriber = createTrackSubscriberActor({ session, track: TRACK });
