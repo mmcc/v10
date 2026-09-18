@@ -21,8 +21,9 @@ import { createTransitionActor, type TransitionActor } from '../../core/actors/c
 import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
 import type { MoqTrack } from '../../media/moq/parse-catalog';
 import { TIMELINE_DISCONTINUITY_US } from '../../media/moq/timeline';
-import type { LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
+import type { Location, LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
 import {
+  compareLocations,
   isRetryablePublishDoneStatus,
   isRetryableRequestErrorCode,
   REQUEST_ERROR_CODE,
@@ -50,6 +51,12 @@ export interface TrackSubscriberContext {
   status: TrackSubscriberStatus;
   /** True once a keyframe-led group is buffered — safe to hand off to a decoder. */
   hasDecodableFrame: boolean;
+  /**
+   * A valid media frame arrived beyond this subscription's SUBSCRIBE_OK LARGEST_OBJECT boundary (moqt-20 §10.2.17).
+   * Latched across buffer drains until auth refresh retires the attempt. Acceptance and cached replay alone leave this
+   * false. An omitted boundary means the publisher had no objects yet, so its first media frame is fresh.
+   */
+  hasFreshFrame: boolean;
   /** Jitter-buffer stats for latency control. */
   frameCount: number;
   newestTimestampUs?: number;
@@ -111,9 +118,11 @@ export interface CreateTrackSubscriberOptions {
 }
 
 type SubscriberMessage =
-  | { type: 'subscribed' }
+  | { type: 'reset-freshness' }
+  | { type: 'subscribed'; hasFreshFrame: boolean }
   | {
       type: 'frame-buffered';
+      hasFreshFrame: boolean;
       frame: JitterFrame;
       newestTimestampUs: number;
       totalBytes: number;
@@ -166,6 +175,17 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
    * origin published, which is the same number until something in the path rescales it.
    */
   let trackTimescale: number | undefined;
+  let subscribeAccepted = false;
+  let largestObject: Location | undefined;
+  let latestMediaLocation: Location | undefined;
+
+  // Compare within this subscription, not across publishers: a replacement
+  // can restart both object numbering and timestamps. Keep the admitted
+  // frontier even after drain in case data arrives before SUBSCRIBE_OK.
+  const hasFreshMedia = (): boolean =>
+    subscribeAccepted &&
+    latestMediaLocation !== undefined &&
+    (largestObject === undefined || compareLocations(latestMediaLocation, largestObject) > 0);
 
   // The jitter buffer proper. Objects can arrive out of order (each MSF
   // object rides its own stream), so insertion keeps (group, object)
@@ -351,11 +371,17 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   };
 
   const inner = createTransitionActor<TrackSubscriberContext, SubscriberMessage>(
-    { status: 'pending', hasDecodableFrame: false, frameCount: 0 },
+    { status: 'pending', hasDecodableFrame: false, hasFreshFrame: false, frameCount: 0 },
     (context, message) => {
       switch (message.type) {
+        case 'reset-freshness':
+          return context.hasFreshFrame ? { ...context, hasFreshFrame: false } : context;
         case 'subscribed':
-          return context.status === 'pending' ? { ...context, status: 'active' } : context;
+          return {
+            ...context,
+            status: context.status === 'pending' ? 'active' : context.status,
+            hasFreshFrame: context.hasFreshFrame || message.hasFreshFrame,
+          };
         case 'frame-buffered': {
           const { frame } = message;
 
@@ -363,6 +389,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
             ...context,
             status: context.status === 'pending' ? 'active' : context.status,
             hasDecodableFrame: context.hasDecodableFrame || frame.isKey,
+            hasFreshFrame: context.hasFreshFrame || message.hasFreshFrame,
             frameCount: frames.length,
             newestTimestampUs: message.newestTimestampUs,
             oldestTimestampUs: frames[0]?.timestampUs,
@@ -422,6 +449,12 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
 
     const frame: JitterFrame = { groupId: object.groupId, objectId: object.objectId, ...loc };
 
+    const location = { group: frame.groupId, object: frame.objectId };
+
+    if (latestMediaLocation === undefined || compareLocations(location, latestMediaLocation) > 0) {
+      latestMediaLocation = location;
+    }
+
     insertFrame(frame);
     // Before the arrival accounting below: adopting a new timeline restarts
     // the measurements, and this frame must seed the fresh baseline rather
@@ -448,6 +481,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
 
     inner.send({
       type: 'frame-buffered',
+      hasFreshFrame: hasFreshMedia(),
       frame,
       newestTimestampUs: newestTimestampUs!,
       totalBytes,
@@ -510,26 +544,52 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
   };
 
   const subscribe = (parameters: MessageParameters): void => {
+    // REQUEST_ERROR can leave subgroup callbacks in flight. Retire this
+    // attempt before awaiting auth so its callbacks cannot mutate the next
+    // attempt's buffer, freshness boundary, measurements, or watchdog.
+    let retired = false;
+
+    subscribeAccepted = false;
+    largestObject = undefined;
+    latestMediaLocation = undefined;
+    inner.send({ type: 'reset-freshness' });
     subscription = session.subscribe(
       { trackNamespace: track.moq.namespace, trackName: track.moq.name, parameters },
       {
         onOk: (ok) => {
+          if (destroyed || retired) return;
+
           trackTimescale = parseTrackTimescale(ok.trackProperties);
-          inner.send({ type: 'subscribed' });
+          largestObject = ok.parameters.largestObject;
+          subscribeAccepted = true;
+          inner.send({ type: 'subscribed', hasFreshFrame: hasFreshMedia() });
         },
-        onObject: handleObject,
+        onObject: (object) => {
+          if (retired) return;
+
+          handleObject(object);
+        },
         onDone: (done) => {
+          if (destroyed || retired) return;
+
           disarmStallTimer();
           // An auth-shaped end is not worth re-subscribing: the replacement
           // carries the same credentials the relay just rejected.
           inner.send({ type: 'done', done, unrecoverable: !isRetryablePublishDoneStatus(done.statusCode) });
         },
         onError: (error) => {
+          if (destroyed || retired) return;
+
+          retired = true;
           disarmStallTimer();
 
           if (error.errorCode === REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN) {
             if (options.refreshAuth && !authRetried) {
               authRetried = true;
+              // Clear immediately: a reactive flush may run while the token
+              // promise is pending, before subscribe() resets the boundary.
+              inner.send({ type: 'reset-freshness' });
+              subscription?.cancel();
               void options
                 .refreshAuth()
                 .then((refreshed) => {
@@ -538,11 +598,13 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
                   resetArrivalBaseline();
                   subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
                 })
-                .catch((refreshError) =>
+                .catch((refreshError) => {
+                  if (destroyed) return;
+
                   // The provider could not supply a fresh token — as
                   // terminal as a rejected refresh (see `unrecoverable`).
-                  inner.send({ type: 'error', error: refreshError, unrecoverable: true })
-                );
+                  inner.send({ type: 'error', error: refreshError, unrecoverable: true });
+                });
               return;
             }
 

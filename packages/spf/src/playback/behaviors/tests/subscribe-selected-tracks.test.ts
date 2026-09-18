@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { signal } from '../../../core/signals/primitives';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
-import type { MoqtSession } from '../../../network/moqt/session';
+import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
+import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
-import type {
-  CreateTrackSubscriberOptions,
-  TrackSubscriberActor,
-  TrackSubscriberContext,
+import {
+  createTrackSubscriberActor,
+  type CreateTrackSubscriberOptions,
+  type TrackSubscriberActor,
+  type TrackSubscriberContext,
 } from '../../actors/track-subscriber';
 import { subscribeSelectedAudioTrack, subscribeSelectedVideoTrack } from '../subscribe-selected-tracks';
 
@@ -71,6 +73,7 @@ interface FakeSubscriber extends TrackSubscriberActor {
   becomeDecodable(oldestTimestampUs?: number): void;
   /** Simulate SUBSCRIBE_OK — the subscription reached the relay. */
   activate(): void;
+  receiveFreshFrame(): void;
   /** Simulate the jitter buffer holding `frameCount` frames. */
   buffer(frameCount: number): void;
   /** Simulate an unrecoverable death (see `TrackSubscriberContext.unrecoverable`). */
@@ -91,7 +94,12 @@ function createFakeSubscriberFactory({
   const factory = ((options: CreateTrackSubscriberOptions) => {
     const snapshot = signal({
       value: 'active' as const,
-      context: { status: initialStatus, hasDecodableFrame: false, frameCount: 0 } as TrackSubscriberContext,
+      context: {
+        status: initialStatus,
+        hasDecodableFrame: false,
+        hasFreshFrame: false,
+        frameCount: 0,
+      } as TrackSubscriberContext,
     });
     const subscriber: FakeSubscriber = {
       options,
@@ -109,6 +117,9 @@ function createFakeSubscriberFactory({
       },
       activate() {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, status: 'active' } });
+      },
+      receiveFreshFrame() {
+        snapshot.set({ value: 'active', context: { ...snapshot.get().context, hasFreshFrame: true } });
       },
       buffer(frameCount: number) {
         snapshot.set({ value: 'active', context: { ...snapshot.get().context, frameCount } });
@@ -135,8 +146,7 @@ function createFakeSubscriberFactory({
   return { factory, created: created as FakeSubscriber[] };
 }
 
-function makeSessionActor(): MoqSessionActor {
-  const session = { ready: Promise.resolve() } as unknown as MoqtSession;
+function makeSessionActor(session = { ready: Promise.resolve() } as unknown as MoqtSession): MoqSessionActor {
   const sessionSnapshot = signal({
     value: 'active' as const,
     context: { status: 'ready', session } as MoqSessionActorContext,
@@ -563,9 +573,7 @@ describe('subscribeSelectedVideoTrack', () => {
 
     it('escalates the handoff retry backoff until the replacement proves healthy', async () => {
       const deps = makeDeps();
-      // Real subscribers start 'pending' and only turn 'active' on
-      // SUBSCRIBE_OK — a relay that keeps refusing the switch target never
-      // activates it, which is what lets the backoff escalate.
+      // Rejected handoffs never deliver media, so retries share one budget.
       const { factory, created } = createFakeSubscriberFactory({ initialStatus: 'pending' });
       const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { createTrackSubscriber: factory } });
 
@@ -589,9 +597,10 @@ describe('subscribeSelectedVideoTrack', () => {
       await vi.advanceTimersByTimeAsync(600);
       expect(created).toHaveLength(4);
 
-      // A replacement that reaches the relay resets the backoff: the next
+      // A replacement that delivers fresh media resets the backoff: the next
       // failure retries within the initial-delay window again.
       created[3]!.activate();
+      created[3]!.receiveFreshFrame();
       await vi.advanceTimersByTimeAsync(0);
       created[3]!.die('error');
       await vi.advanceTimersByTimeAsync(700);
@@ -911,5 +920,317 @@ describe('subscribeSelectedAudioTrack', () => {
 
       reactor.destroy();
     });
+  });
+});
+
+// Real subscribers keep these recovery tests sensitive to SUBSCRIBE_OK,
+// cached LOC objects, and the starvation watchdog rather than fake health flags.
+describe.each([
+  { name: 'subscribeSelectedVideoTrack', mode: 'video' },
+  { name: 'subscribeSelectedVideoTrack', mode: 'handoff' },
+  { name: 'subscribeSelectedAudioTrack', mode: 'audio' },
+] as const)('$name', ({ mode }) => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  async function setupRecovery() {
+    const subscriptions: { handlers: SubscriptionHandlers; cancel: ReturnType<typeof vi.fn> }[] = [];
+    const session: MoqtSession = {
+      ready: Promise.resolve(),
+      subscribe(_options, handlers = {}) {
+        const subscription = { handlers, cancel: vi.fn() };
+
+        subscriptions.push(subscription);
+        return { requestId: subscriptions.length, update: vi.fn(), cancel: subscription.cancel };
+      },
+      fetch: () => ({ requestId: 0, cancel: vi.fn() }),
+      trackStatus: vi.fn(),
+      close: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const config = {
+      createTrackSubscriber: (options: CreateTrackSubscriberOptions) =>
+        createTrackSubscriberActor({
+          ...options,
+          // This fixture holds the old handoff track healthy without a renderer.
+          stallTimeoutMs: mode === 'handoff' && subscriptions.length === 0 ? 0 : options.stallTimeoutMs,
+        }),
+      subscribeRetry: { initialDelayMs: 100, maxDelayMs: 250, maxAttempts: 3 },
+      subscribeStallTimeoutMs: 1000,
+    };
+    const deps = makeDeps();
+    const audioDeps = makeAudioDeps();
+
+    deps.context.moqSessionActor.set(makeSessionActor(session));
+    audioDeps.context.moqSessionActor.set(makeSessionActor(session));
+    const reactor =
+      mode === 'audio'
+        ? subscribeSelectedAudioTrack.setup({ ...audioDeps, config })
+        : subscribeSelectedVideoTrack.setup({ ...deps, config });
+    const slot = mode === 'audio' ? audioDeps.context.audioSubscriberActor : deps.context.videoSubscriberActor;
+
+    audioDeps.state.selectedAudioTrackId.set(MAIN_AUDIO.id);
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.advanceTimersByTimeAsync(0);
+
+    if (mode === 'handoff') {
+      // The old track's fresh delivery must not heal a failed handoff target.
+      subscriptions[0]!.handlers.onOk?.({ trackAlias: 0, parameters: {}, trackProperties: [] });
+      subscriptions[0]!.handlers.onObject?.({
+        groupId: 0,
+        objectId: 0,
+        subgroupId: 0,
+        status: 'normal',
+        properties: [{ type: 0x10, value: 0 }],
+        payload: new Uint8Array([1]),
+      });
+      deps.state.currentTime.set(0); // Keep the healthy old track playing through the retry.
+      deps.state.selectedVideoTrackId.set(SD.id);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    const target = () => (mode === 'handoff' ? deps.context.pendingVideoSubscriberActor.get() : slot.get());
+    const handlers = () => subscriptions.at(-1)!.handlers;
+    const accept = (group = 100, object = 2) =>
+      handlers().onOk?.({
+        trackAlias: subscriptions.length,
+        parameters: { largestObject: { group, object } },
+        trackProperties: [],
+      });
+    const frame = (groupId: number, objectId: number, timestampUs: number) =>
+      handlers().onObject?.({
+        groupId,
+        objectId,
+        subgroupId: 0,
+        status: 'normal',
+        properties: [{ type: 0x10, value: timestampUs }],
+        payload: new Uint8Array([1]),
+      });
+    const end = async () => {
+      handlers().onDone?.({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 0, reason: 'ended' });
+
+      while (target()?.dequeue()) {
+        /* Drain the buffered tail before rejoining. */
+      }
+
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    const expectRetry = async (delay: number) => {
+      const count = subscriptions.length;
+
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(subscriptions).toHaveLength(count);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(subscriptions).toHaveLength(count + 1);
+    };
+
+    return { reactor, subscriptions, target, accept, frame, end, expectRetry };
+  }
+
+  it.each([false, true])(
+    `preserves capped delays and exhausts ${mode} recovery with cached media: %s`,
+    async (cached) => {
+      const h = await setupRecovery();
+
+      try {
+        h.accept();
+        h.frame(100, 2, 60_000_000);
+        await h.end();
+
+        for (const delay of [100, 200, 250]) {
+          await h.expectRetry(delay);
+          h.accept();
+          // Flush acceptance independently: this is the original reset bug.
+          await vi.advanceTimersByTimeAsync(0);
+
+          if (cached) {
+            h.frame(99, 0, 59_000_000);
+            h.frame(100, 0, 59_900_000);
+            h.frame(100, 2, 60_000_000);
+            await vi.advanceTimersByTimeAsync(0);
+          }
+
+          await h.end();
+        }
+
+        const count = h.subscriptions.length;
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.subscriptions).toHaveLength(count);
+        expect(h.target()?.snapshot.get().context.status).toBe('ended');
+      } finally {
+        h.reactor.destroy();
+      }
+    }
+  );
+
+  it(`preserves ${mode} recovery through acceptance followed by watchdog expiry`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+
+      for (const delay of [100, 200, 250]) {
+        await h.expectRetry(delay);
+        h.accept();
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(h.subscriptions.at(-1)!.cancel).toHaveBeenCalled();
+      }
+
+      const count = h.subscriptions.length;
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.subscriptions).toHaveLength(count);
+      expect(h.target()?.snapshot.get().context.status).toBe('error');
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  it(`counts fresh ${mode} tail media delivered after PUBLISH_DONE in the same batch`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      h.subscriptions.at(-1)!.handlers.onDone?.({
+        statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+        streamCount: 1,
+        reason: 'ended',
+      });
+      h.frame(101, 0, 60_100_000);
+
+      while (h.target()?.dequeue()) {
+        /* Drain the fresh tail before observers run. */
+      }
+
+      await vi.advanceTimersByTimeAsync(0);
+      await h.expectRetry(100);
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  if (mode !== 'handoff') {
+    it(`counts fresh ${mode} tail media after observing the ended status`, async () => {
+      const h = await setupRecovery();
+
+      try {
+        await h.end();
+        await h.expectRetry(100);
+        h.accept();
+        h.frame(100, 2, 60_000_000);
+        h.subscriptions.at(-1)!.handlers.onDone?.({
+          statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+          streamCount: 1,
+          reason: 'ended',
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.target()?.snapshot.get().context.status).toBe('ended');
+        h.frame(101, 0, 60_100_000);
+
+        while (h.target()?.dequeue()) {
+          /* Drain the buffered tail. */
+        }
+
+        await vi.advanceTimersByTimeAsync(0);
+        await h.expectRetry(100);
+      } finally {
+        h.reactor.destroy();
+      }
+    });
+  }
+
+  it(`preserves ${mode} retry accounting when fresh media and auth expiry are batched`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      h.frame(100, 3, 60_100_000);
+      h.subscriptions.at(-1)!.handlers.onError?.({
+        errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+        retryInterval: 0,
+        reason: 'expired',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      h.accept(0, 0);
+      await vi.advanceTimersByTimeAsync(0);
+      await h.end();
+      await h.expectRetry(200);
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  it(`preserves ${mode} retry accounting when a retired auth subscription delivers late media`, async () => {
+    const h = await setupRecovery();
+
+    try {
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      const retired = h.subscriptions.at(-1)!;
+
+      retired.handlers.onError?.({
+        errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+        retryInterval: 0,
+        reason: 'expired',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      h.accept(0, 0);
+      retired.handlers.onObject?.({
+        groupId: 100,
+        objectId: 3,
+        subgroupId: 0,
+        status: 'normal',
+        properties: [{ type: 0x10, value: 60_100_000 }],
+        payload: new Uint8Array([1]),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await h.end();
+      await h.expectRetry(200);
+    } finally {
+      h.reactor.destroy();
+    }
+  });
+
+  it.each([false, true])(`resets ${mode} recovery after fresh media with publisher reset: %s`, async (restart) => {
+    const h = await setupRecovery();
+
+    try {
+      h.accept();
+      h.frame(100, 2, 60_000_000);
+      await h.end();
+      await h.expectRetry(100);
+      h.accept();
+      await vi.advanceTimersByTimeAsync(0);
+      await h.end();
+      await h.expectRetry(200);
+      const group = restart ? 0 : 100;
+
+      h.accept(group);
+      h.frame(group, 3, restart ? 1_000_000 : 60_100_000);
+
+      // Freshness survives an immediate renderer drain.
+      while (h.target()?.dequeue()) {
+        /* Drain. */
+      }
+
+      await vi.advanceTimersByTimeAsync(0);
+      await h.end();
+      await h.expectRetry(100);
+    } finally {
+      h.reactor.destroy();
+    }
   });
 });
