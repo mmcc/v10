@@ -2,6 +2,9 @@ import { createSelector } from '@videojs/store';
 
 import { audioTrackFeature } from './features/audio-track';
 import { bufferFeature } from './features/buffer';
+import { captureDevicesFeature } from './features/capture-devices';
+import { captureSourceFeature } from './features/capture-source';
+import { captureTracksFeature } from './features/capture-tracks';
 import { controlsFeature } from './features/controls';
 import { errorFeature } from './features/error';
 import { fullscreenFeature } from './features/fullscreen';
@@ -10,6 +13,8 @@ import { metadataFeature } from './features/metadata';
 import { pipFeature } from './features/pip';
 import { playbackFeature } from './features/playback';
 import { playbackRateFeature } from './features/playback-rate';
+import { publishFeature } from './features/publish';
+import { publishStatsFeature } from './features/publish-stats';
 import { qualityFeature } from './features/quality';
 import { remotePlaybackFeature } from './features/remote-playback';
 import { sourceFeature } from './features/source';
@@ -22,6 +27,15 @@ import { volumeFeature } from './features/volume';
 export const selectAudioTrack = createSelector(audioTrackFeature);
 /** Select the buffer state (buffered and seekable ranges). */
 export const selectBuffer = createSelector(bufferFeature);
+/** Select the capture devices state (cameras, microphones, selections). */
+export const selectCaptureDevices = createSelector(captureDevicesFeature);
+/**
+ * Select the capture source state (camera/screen/mic intents, pipeline states, screen share availability, toggle
+ * actions).
+ */
+export const selectCaptureSource = createSelector(captureSourceFeature);
+/** Select the capture tracks state (cameraMuted, micMuted, set/toggle actions). */
+export const selectCaptureTracks = createSelector(captureTracksFeature);
 /** Select the controls state (controls visible, user-active). */
 export const selectControls = createSelector(controlsFeature);
 /** Select the error state (error, dismissed, dismissError). */
@@ -38,6 +52,10 @@ export const selectPiP = createSelector(pipFeature);
 export const selectPlayback = createSelector(playbackFeature);
 /** Select the playback rate state (playbackRate, playbackRates, setPlaybackRate). */
 export const selectPlaybackRate = createSelector(playbackRateFeature);
+/** Select the publish state (publishState, publishStartedAt, publish, unpublish). */
+export const selectPublish = createSelector(publishFeature);
+/** Select the publish stats state (publishStats, connectionQuality). */
+export const selectPublishStats = createSelector(publishStatsFeature);
 /** Select the quality state (videoRenditionList, activeVideoRendition, selectVideoRendition). */
 export const selectQuality = createSelector(qualityFeature);
 /** Select the remote playback state (remote playback connection state, availability). */

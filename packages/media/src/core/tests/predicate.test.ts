@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vite-plus/test';
 import { EMPTY_REMOTE, EMPTY_TEXT_TRACKS, EMPTY_TIME_RANGES } from '../constants';
 import {
   isMediaBufferCapable,
+  isMediaCaptureDevicesCapable,
+  isMediaCaptureSourceCapable,
+  isMediaCaptureToggleCapable,
   isMediaContentDataCapable,
+  isMediaPublishCapable,
+  isMediaPublishStatsCapable,
   isMediaRemotePlaybackCapable,
   isMediaTextTrackCapable,
 } from '../predicate';
@@ -49,5 +54,72 @@ describe('isMediaRemotePlaybackCapable', () => {
 
   it('accepts defined non-stub remote playback', () => {
     expect(isMediaRemotePlaybackCapable({ remote: new EventTarget() })).toBe(true);
+  });
+});
+
+describe('isMediaPublishCapable', () => {
+  it('rejects playback-only media', () => {
+    expect(isMediaPublishCapable({ paused: true, play: () => Promise.resolve() })).toBe(false);
+  });
+
+  it('requires publishState plus publish/unpublish functions', () => {
+    expect(isMediaPublishCapable({ publishState: 'idle', publish: () => Promise.resolve() })).toBe(false);
+    expect(isMediaPublishCapable({ publishState: 'idle', publish: () => Promise.resolve(), unpublish: () => {} })).toBe(
+      true
+    );
+  });
+});
+
+describe('isMediaCaptureSourceCapable', () => {
+  it('accepts released capture (both sources inactive) as still capable', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: false, cameraState: 'idle', screenShareState: 'idle' })).toBe(
+      true
+    );
+  });
+
+  it('rejects media without a screenShareState', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: true, cameraState: 'active' })).toBe(false);
+  });
+
+  it('rejects media without a cameraState', () => {
+    expect(isMediaCaptureSourceCapable({ cameraActive: true, screenShareState: 'idle' })).toBe(false);
+  });
+
+  // A host from the generation that reports the mic lifecycle but predates
+  // the audio-only intent slot stays capture-capable — which is why the
+  // contract keeps `micActive` optional: writers must check presence, not
+  // trust this narrowing.
+  it('admits hosts with a mic lifecycle but no mic intent slot', () => {
+    expect(
+      isMediaCaptureSourceCapable({
+        cameraActive: true,
+        cameraState: 'active',
+        screenShareState: 'idle',
+        micState: 'denied',
+      })
+    ).toBe(true);
+  });
+});
+
+describe('isMediaCaptureDevicesCapable', () => {
+  it('requires the device list and both selections', () => {
+    expect(isMediaCaptureDevicesCapable({ captureDevices: [] })).toBe(false);
+    expect(isMediaCaptureDevicesCapable({ captureDevices: [], videoInputDeviceId: '', audioInputDeviceId: '' })).toBe(
+      true
+    );
+  });
+});
+
+describe('isMediaCaptureToggleCapable', () => {
+  it('requires both mute flags', () => {
+    expect(isMediaCaptureToggleCapable({ cameraMuted: false })).toBe(false);
+    expect(isMediaCaptureToggleCapable({ cameraMuted: false, micMuted: false })).toBe(true);
+  });
+});
+
+describe('isMediaPublishStatsCapable', () => {
+  it('accepts a null stats value (no sample yet is still capable)', () => {
+    expect(isMediaPublishStatsCapable({ publishStats: null })).toBe(true);
+    expect(isMediaPublishStatsCapable({})).toBe(false);
   });
 });

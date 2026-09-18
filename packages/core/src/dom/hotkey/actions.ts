@@ -4,6 +4,7 @@ import type { HotkeyActionName } from '../../core/ui/hotkey/core';
 import { MEDIA_INPUT_ACTION_OVERRIDES } from '../media-actions';
 import type { AnyPlayerStore } from '../player';
 import {
+  selectCaptureTracks,
   selectFullscreen,
   selectPiP,
   selectPlayback,
@@ -55,6 +56,14 @@ const HOTKEY_ACTIONS: Record<HotkeyActionName, HotkeyActionResolver> = {
     if (!pip) return;
 
     pip.pip ? pip.exitPictureInPicture() : pip.requestPictureInPicture();
+  },
+
+  toggleMicMuted({ store }) {
+    selectCaptureTracks(store.state)?.toggleMicMuted();
+  },
+
+  toggleCameraMuted({ store }) {
+    selectCaptureTracks(store.state)?.toggleCameraMuted();
   },
 
   seekStep: MEDIA_INPUT_ACTION_OVERRIDES.seekStep,

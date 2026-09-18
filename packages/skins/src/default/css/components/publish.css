@@ -1,0 +1,168 @@
+/* ==========================================================================
+   Publish Controls (publish button, badge, timer, connection indicator)
+   ========================================================================== */
+
+/* Publisher elements signal disabled via `data-disabled` (custom elements
+   can't rely on the native `disabled` attribute); mirror `[disabled]` from
+   button.css. */
+.media-default-skin .media-button[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  filter: grayscale(1);
+}
+
+/* Publish button — the primary call to action. White pill by default
+   ("Go live"), solid red while live ("Stop"). */
+.media-default-skin .media-button--publish {
+  /* Reserve room so the label swap (Go live ↔ Stop) doesn't resize the bar. */
+  min-width: calc(var(--media-spacing) * 20);
+  font-weight: 500;
+  color: oklch(0 0 0);
+  text-shadow: none;
+  background: oklch(1 0 0);
+  transition-property: background-color, color, opacity, outline-offset, scale;
+
+  &[data-publish-state="live"] {
+    color: oklch(1 0 0);
+    background: var(--media-publish-live-color);
+  }
+
+  /* Transitional states: subdued and non-interactive cursor. */
+  &[data-publish-state="connecting"],
+  &[data-publish-state="stopping"] {
+    cursor: progress;
+    opacity: 0.7;
+
+    &:active {
+      scale: 1;
+    }
+  }
+
+  /* Error: translucent red so it reads as attention without mimicking live. */
+  &[data-publish-state="error"] {
+    color: var(--media-publish-live-color);
+    background: oklch(from var(--media-publish-live-color) l c h / 0.15);
+  }
+}
+
+/* Status row — overlay capsule for badge + timer + connection indicator.
+   Positioned top-left, mirroring the controls inset.
+
+   The row carries its own ground rather than relying on text shadows: it sits
+   over an arbitrary camera frame, and a bright one leaves bare white text
+   (the timer especially) unreadable. It borrows the surface border/shadow
+   tokens but takes a dark fill instead of the glass one — glass tracks the
+   frame behind it, which is what fails over bright video. */
+.media-default-skin--publisher .media-publish-status {
+  --media-inset-factor: 2;
+  --media-inset: calc(var(--media-spacing) * var(--media-inset-factor));
+
+  position: absolute;
+  top: var(--media-inset);
+  left: var(--media-inset);
+  z-index: 10;
+  display: flex;
+  gap: calc(var(--media-spacing) * 2);
+  align-items: center;
+  padding: calc(var(--media-spacing) * 1.5) calc(var(--media-spacing) * 3);
+  color: oklch(1 0 0);
+  pointer-events: none;
+  background-color: var(--media-publish-status-background);
+  border-radius: calc(Infinity * 1px);
+  box-shadow:
+    0 0 0 1px var(--media-surface-outer-border-color),
+    0 1px 3px 0 var(--media-surface-shadow-color),
+    inset 0 1px 0 0 var(--media-surface-inner-border-color);
+  backdrop-filter: var(--media-surface-backdrop-filter);
+
+  @container media-root (width > 42rem) {
+    --media-inset-factor: 3;
+  }
+}
+
+/* Publish badge — status text with a leading dot (mirrors the live button's
+   dot in button.css). The status capsule is already its ground, so the badge
+   drops the `.media-badge` fill and only takes a pill back when a state needs
+   to stand on its own: solid red live, tinted red error. Pairs with
+   `.media-badge`. */
+.media-default-skin .media-badge--publish {
+  display: inline-flex;
+  gap: calc(var(--media-spacing) * 1.5);
+  align-items: center;
+  padding: 0;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background-color: transparent;
+
+  &[data-publish-state="live"],
+  &[data-publish-state="error"] {
+    padding: calc(var(--media-spacing) * 1) calc(var(--media-spacing) * 2);
+  }
+
+  &::before {
+    display: inline-block;
+    flex-shrink: 0;
+    width: calc(var(--media-spacing) * 2);
+    height: calc(var(--media-spacing) * 2);
+    content: "";
+    background-color: oklch(from currentColor l c h / 0.4);
+    border-radius: 50%;
+    transition: background-color 150ms ease-out;
+  }
+
+  &[data-publish-state="live"] {
+    color: oklch(1 0 0);
+    background-color: var(--media-publish-live-color);
+
+    &::before {
+      background-color: oklch(1 0 0);
+    }
+  }
+
+  &[data-publish-state="error"] {
+    color: var(--media-publish-live-color);
+    background-color: oklch(from var(--media-publish-live-color) l c h / 0.15);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    &[data-publish-state="live"]::before,
+    &[data-publish-state="connecting"]::before {
+      animation: media-pulse 2s ease-in-out infinite;
+    }
+  }
+}
+
+/* Publish timer — elapsed publish time. Only meaningful while live/stopping. */
+.media-default-skin .media-publish-timer {
+  display: none;
+  font-size: var(--media-font-size-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.media-default-skin .media-publish-timer[data-publish-state="live"],
+.media-default-skin .media-publish-timer[data-publish-state="stopping"] {
+  display: inline-block;
+}
+
+/* Connection indicator — hosts the `signal` icon, tinted by quality. */
+.media-default-skin .media-connection-indicator {
+  display: inline-flex;
+  align-items: center;
+  transition:
+    color 150ms ease-out,
+    opacity 150ms ease-out;
+
+  &[data-quality="unknown"] {
+    opacity: 0.5;
+  }
+  &[data-quality="good"] {
+    color: var(--media-quality-good-color);
+  }
+  &[data-quality="fair"] {
+    color: var(--media-quality-fair-color);
+  }
+  &[data-quality="poor"] {
+    color: var(--media-quality-poor-color);
+  }
+}

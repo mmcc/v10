@@ -13,6 +13,8 @@ const createPackConfig = (mode: PackageBuildMode): PackUserConfig => ({
     hls: 'src/playback/engines/hls/index.ts',
     'media-tracks': 'src/media/media-tracks/index.ts',
     moq: 'src/playback/engines/moq/index.ts',
+    'moq-publish': 'src/publish/engines/moq/index.ts',
+    'moq-publish-video': 'src/publish/adapters/moq-publish-video/index.ts',
     'hls-audio': 'src/playback/adapters/hls-audio/index.ts',
     'hls-background-video': 'src/playback/adapters/hls-background-video/index.ts',
     'hls-video': 'src/playback/adapters/hls-video/index.ts',
@@ -33,6 +35,11 @@ export default defineConfig({
       },
       'test:ci': packageTestTask(),
     },
+  },
+  // Tests run source directly, so the build-time dev flag (see build/pack.ts) must be defined here; dev-gated
+  // warnings stay on.
+  define: {
+    __DEV__: 'true',
   },
   test: {
     coverage: {
@@ -127,6 +134,64 @@ export default defineConfig({
             enabled: true,
             headless: true,
             provider: playwright(),
+            screenshotFailures: false,
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'publish',
+          // All DOM-free publish tests: behaviors, actors, and the session.
+          include: ['src/publish/**/*.test.ts'],
+          exclude: ['src/publish/**/dom/**', 'src/publish/engines/**'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'publish-dom',
+          include: ['src/publish/behaviors/dom/**/*.test.ts', 'src/publish/actors/dom/**/*.test.ts'],
+          browser: {
+            enabled: true,
+            headless: true,
+            // Fake capture devices + auto-granted prompts so the real
+            // getUserMedia/getDisplayMedia paths run deterministically in CI.
+            provider: playwright({
+              launchOptions: {
+                args: [
+                  '--use-fake-ui-for-media-stream',
+                  '--use-fake-device-for-media-capture',
+                  '--auto-accept-this-tab-capture',
+                ],
+              },
+            }),
+            screenshotFailures: false,
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'publish-engines',
+          include: ['src/publish/engines/**/*.test.ts'],
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright({
+              launchOptions: {
+                args: [
+                  '--use-fake-ui-for-media-stream',
+                  '--use-fake-device-for-media-capture',
+                  '--auto-accept-this-tab-capture',
+                  // Web-audio test sources (oscillator → stream destination)
+                  // need a running AudioContext without a user gesture.
+                  '--autoplay-policy=no-user-gesture-required',
+                ],
+              },
+            }),
             screenshotFailures: false,
             instances: [{ browser: 'chromium' }],
           },

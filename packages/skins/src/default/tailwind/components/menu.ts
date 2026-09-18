@@ -39,6 +39,7 @@ const menuTokens = cn(
 
 const group = cn(
   'flex flex-col gap-0.5',
+  'data-[availability=unavailable]:hidden data-[availability=unsupported]:hidden',
   '[anchor-scope:--menu-item-highlight-anchor]',
   'supports-[top:anchor(top)]:before:absolute',
   'supports-[top:anchor(top)]:before:[position-anchor:--menu-item-highlight-anchor]',
