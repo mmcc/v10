@@ -44,6 +44,11 @@
       "development": "./dist/dev/media-tracks.js",
       "default": "./dist/default/media-tracks.js"
     },
+    "./moq": {
+      "types": "./dist/dev/moq.d.ts",
+      "development": "./dist/dev/moq.js",
+      "default": "./dist/default/moq.js"
+    },
     "./hls-background-video": {
       "types": "./dist/dev/hls-background-video.d.ts",
       "development": "./dist/dev/hls-background-video.js",

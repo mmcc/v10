@@ -12,6 +12,7 @@ const createPackConfig = (mode: PackageBuildMode): PackUserConfig => ({
     dom: 'src/dom.ts',
     hls: 'src/playback/engines/hls/index.ts',
     'media-tracks': 'src/media/media-tracks/index.ts',
+    moq: 'src/playback/engines/moq/index.ts',
     'hls-audio': 'src/playback/adapters/hls-audio/index.ts',
     'hls-background-video': 'src/playback/adapters/hls-background-video/index.ts',
     'hls-video': 'src/playback/adapters/hls-video/index.ts',

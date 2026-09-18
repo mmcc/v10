@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vite-plus/test';
 import { matchesPartialTrack } from '../../primitives/select-tracks';
 import type { AudioTrack, MaybeResolvedPresentation, VideoTrack } from '../../types';
 import {
+  activeVideoTrack,
   dedupedAudioTracks,
   dedupedVideoTracks,
   findAudioTrackById,
@@ -26,6 +27,20 @@ const presentationWith = (
     selectionSets: [
       { id: 'v', type: 'video', switchingSets: [{ id: 'vs', type: 'video', tracks: videoTracks }] },
       { id: 'a', type: 'audio', switchingSets: [{ id: 'as', type: 'audio', tracks: audioTracks }] },
+    ],
+  }) as unknown as MaybeResolvedPresentation;
+
+/** A presentation whose video selection set holds several switching sets (MoQ camera + screen share). */
+const presentationWithVideoSets = (...switchingSets: Partial<VideoTrack>[][]): MaybeResolvedPresentation =>
+  ({
+    id: 'pres-multi',
+    url: 'moqt://relay.example.com/live',
+    selectionSets: [
+      {
+        id: 'v',
+        type: 'video',
+        switchingSets: switchingSets.map((tracks, index) => ({ id: `vs-${index}`, type: 'video', tracks })),
+      },
     ],
   }) as unknown as MaybeResolvedPresentation;
 
@@ -80,6 +95,26 @@ describe('dedupedVideoTracks', () => {
     );
 
     expect(renditions).toHaveLength(2);
+  });
+
+  it('dedups within a switching set but never across, rendered set first', () => {
+    // Sibling sets are different content (camera + screen share). A screen
+    // track matching a camera rendition's shape is not the same track, so
+    // it survives; the multi-CDN copy inside each set still collapses.
+    const renditions = dedupedVideoTracks(
+      presentationWithVideoSets(
+        [
+          video({ id: 'camera-720-a', width: 1280, height: 720, bandwidth: 3_000_000, url: 'https://a/v.m3u8' }),
+          video({ id: 'camera-720-b', width: 1280, height: 720, bandwidth: 3_000_000, url: 'https://b/v.m3u8' }),
+        ],
+        [video({ id: 'screen-720', width: 1280, height: 720, bandwidth: 3_000_000 })]
+      )
+    );
+
+    expect(renditions.map((r) => r.id)).toEqual(['camera-720-a', 'screen-720']);
+    // Which is also the limit of the quality criteria: they cannot tell the
+    // two apart, so cross-set selection has to go through the track id.
+    expect(toUserVideoTrackSelection(renditions[0]!)).toEqual(toUserVideoTrackSelection(renditions[1]!));
   });
 
   it('returns [] for an unresolved presentation, no video tracks, or undefined', () => {
@@ -189,6 +224,35 @@ describe('findVideoTrackById', () => {
     expect(findVideoTrackById(pres, 'nope')).toBeUndefined();
     expect(findVideoTrackById(undefined, 'cdn-a-1080')).toBeUndefined();
     expect(findVideoTrackById(pres, undefined)).toBeUndefined();
+  });
+});
+
+describe('activeVideoTrack', () => {
+  const camera = [
+    video({ id: 'camera-720-a', width: 1280, height: 720, bandwidth: 3_000_000, url: 'https://a/v.m3u8' }),
+    video({ id: 'camera-720-b', width: 1280, height: 720, bandwidth: 3_000_000, url: 'https://b/v.m3u8' }),
+    video({ id: 'camera-1080', width: 1920, height: 1080, bandwidth: 5_000_000 }),
+  ];
+  const screen = [video({ id: 'screen-720', width: 1280, height: 720, bandwidth: 3_000_000 })];
+  const pres = presentationWithVideoSets(camera, screen);
+
+  it('maps a per-CDN copy onto the entry the dedupe kept', () => {
+    expect(activeVideoTrack(pres, 'camera-720-b')?.id).toBe('camera-720-a');
+  });
+
+  it("resolves within the selection's own switching set, so a same-shaped sibling is not active", () => {
+    // The shape is identical across the two sets; only the set the id lives
+    // in tells the screen share from the camera.
+    expect(activeVideoTrack(pres, 'screen-720')?.id).toBe('screen-720');
+    expect(
+      dedupedVideoTracks(pres).filter((track) => track.id === activeVideoTrack(pres, 'screen-720')?.id)
+    ).toHaveLength(1);
+  });
+
+  it('returns undefined for a missing id or absent presentation', () => {
+    expect(activeVideoTrack(pres, 'nope')).toBeUndefined();
+    expect(activeVideoTrack(pres, undefined)).toBeUndefined();
+    expect(activeVideoTrack(undefined, 'camera-720-a')).toBeUndefined();
   });
 });
 

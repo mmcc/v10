@@ -12,27 +12,27 @@ import { effect } from '../../../core/signals/effect';
 import { computed, untrack } from '../../../core/signals/primitives';
 import {
   type AudioTrack,
+  activeVideoTrack,
   dedupedAudioTracks,
   dedupedVideoTracks,
   findAudioTrackById,
-  findVideoTrackById,
   frameRateToNumber,
   isSameAudioTrack,
-  isSameVideoTrack,
   toUserAudioTrackSelection,
   toUserVideoTrackSelection,
   type VideoTrack,
 } from '../../../media/media-tracks';
 import type { HlsVideoEngineContext, HlsVideoEngineState } from '../../engines/hls/engine';
 
-// Translate a DOM rendition/track into the SPF dedupe-key shape
-const toVideoKey = (rendition: VideoRenditionLike) => ({
-  width: rendition.width,
-  height: rendition.height,
-  bandwidth: rendition.bitrate!,
-});
-
 const toAudioKey = (track: AudioTrackLike) => ({ language: track.language, name: track.label });
+
+// Video renditions reflect by id against the entry the engine's selection
+// belongs to (`activeVideoTrack`), not by w/h/bitrate shape: sibling
+// switching sets are different content and may hold same-shaped renditions,
+// which a shape comparison would light up together. Audio has one switching
+// set per presentation, so its shape key stays unambiguous.
+const isActiveRendition = (rendition: VideoRenditionLike, active: VideoTrack | undefined) =>
+  !!active && rendition.id === active.id;
 
 type HlsVideoEngineHost = {
   readonly engine: Composition<HlsVideoEngineState, HlsVideoEngineContext>;
@@ -99,7 +99,7 @@ export function HlsVideoMediaMediaTracksMixin<Base extends Constructor<MediaTrac
 
         videoTrack.selected = true;
 
-        const resolved = untrack(() => findVideoTrackById(state.presentation.get(), state.selectedVideoTrackId.get()));
+        const active = untrack(() => activeVideoTrack(state.presentation.get(), state.selectedVideoTrackId.get()));
 
         for (const rendition of renditions) {
           const domRendition = videoTrack.addRendition(
@@ -112,15 +112,15 @@ export function HlsVideoMediaMediaTracksMixin<Base extends Constructor<MediaTrac
           );
 
           domRendition.id = rendition.id;
-          domRendition.active = isSameVideoTrack(toVideoKey(domRendition), resolved);
+          domRendition.active = isActiveRendition(domRendition, active);
         }
       };
 
       const reflectSelectedVideo = () => {
-        const resolved = findVideoTrackById(state.presentation.get(), state.selectedVideoTrackId.get());
+        const active = activeVideoTrack(state.presentation.get(), state.selectedVideoTrackId.get());
 
         for (const rendition of this.videoRenditions) {
-          rendition.active = isSameVideoTrack(toVideoKey(rendition), resolved);
+          rendition.active = isActiveRendition(rendition, active);
         }
       };
 
@@ -187,13 +187,21 @@ export function HlsVideoMediaMediaTracksMixin<Base extends Constructor<MediaTrac
     }
 
     // Manual quality pin → the chosen rendition's width/height/bandwidth as the
-    // match criteria (the properties renditions were deduped on).
-    // `selectedIndex === -1` (Auto) clears the pin, resuming ABR.
+    // match criteria (the properties renditions were deduped on), *plus* its
+    // track id. Both, because they carry different things: the id names the
+    // content item (sibling switching sets can hold same-shaped renditions, so
+    // the criteria alone would resolve to whichever set comes first), while the
+    // criteria are what survive a re-pick and match every per-CDN copy.
+    // `selectedIndex === -1` (Auto) clears only the pin, resuming ABR within
+    // the content item currently selected — clearing the id too would drop the
+    // viewer back to the default content.
     #selectRendition = () => {
-      const { userVideoTrackSelection } = this.engine.state;
+      const { selectedVideoTrackId, userVideoTrackSelection } = this.engine.state;
       const index = this.videoRenditions.selectedIndex;
       const domRendition = index < 0 ? undefined : this.videoRenditions[index];
       const rendition = this.#renditions.find((candidate) => candidate.id === domRendition?.id);
+
+      if (rendition) selectedVideoTrackId.set(rendition.id);
 
       userVideoTrackSelection.set(toUserVideoTrackSelection(rendition));
     };

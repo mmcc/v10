@@ -14,6 +14,10 @@ HLS playback with adaptive bitrate switching, WebVTT captions, and MSE support.
 - [SPF fundamentals](./docs/fundamentals.md)
 - [HLS engine composition](./docs/hls-engine.md)
 
+## Guides
+
+- [Publish a stream for the experimental MoQ player](./docs/moq-publishing.md)
+
 ## Community
 
 If you need help with anything related to Video.js 10, or if you'd like to casually chat with other
