@@ -2,6 +2,8 @@
 
 Verbatim IETF Internet-Draft texts for the protocols the MoQ stack in `packages/spf` implements. They are vendored so reviewers and agents can cite sections without network access, and so a revision bump is a reviewable diff.
 
+For a complete catalog example and the current player's media requirements, see [Publish a stream for the MoQ player](../../../packages/spf/docs/moq-publishing.md).
+
 The version the code actually speaks is declared in code: `MOQT_PROTOCOL_ID` in `packages/spf/src/network/moqt/control-messages.ts` for the transport, and the header comments of `packages/spf/src/media/moq/loc.ts` and `parse-catalog.ts` for LOC and MSF. When the vendored text is newer than the code pin, the gap is tracked by a migration plan under `.agents/plans/`.
 
 | Draft | Revision | Published | Implemented in |
