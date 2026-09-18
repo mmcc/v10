@@ -123,7 +123,7 @@ For each video rendition:
 3. Use a shared capture timeline for camera renditions, screen share, and audio. With `timescale: 1000000`, timestamps are microseconds. Do not restart an encoder's timestamps at zero when a viewer subscribes or screen share starts.
 4. Align keyframes and group numbering across renditions sharing an `altGroup`. Equally numbered groups should start at overlapping presentation times, as specified by MSF §4.2. Publish independently decodable renditions; advertising `depends` does not cause this subscriber to fetch dependency layers.
 
-Put the LOC `TIMESTAMP` property (`0x10`) on every media object. Missing timestamps cause frames to be discarded. If your wire timestamps use another unit, declare a positive `TIMESCALE` (`0x08`) in the object or subscription's Track Properties. The subscriber resolves units in this order: object property, subscription Track Properties, catalog `timescale`, then microseconds. A relay that rescales timestamps must declare the units it actually delivers.
+Put the LOC `TIMESTAMP` property (`0x10`) on every media object. Missing timestamps cause frames to be discarded. If your wire timestamps use another unit, declare the positive number of ticks per second in the catalog's `timescale` field, or use the LOC `TIMESCALE` property (`0x08`) on the object or in the subscription's Track Properties. The subscriber resolves units in this order: object property, subscription Track Properties, catalog `timescale`, then microseconds. A relay that rescales timestamps must declare the units it actually delivers.
 
 Each audio object likewise carries one encoded audio chunk and its timestamp. Publish audio continuously on the shared timeline, with object numbering starting at zero in each audio group. The example uses 48 kHz stereo Opus. Declare the actual `samplerate` and `channelConfig`; non-Opus audio needs an explicit sample rate. Use a numeric channel-count string such as `"1"` or `"2"` for straightforward layouts.
 
@@ -154,9 +154,9 @@ When it returns, publish an `add` delta containing its complete track entry from
 
 ## Verify with the current player
 
-Run `pnpm dev:sandbox` and open `/spf-moq-player/`. Paste your full `moqt://…#msf:…` URL into the relay input. If you use the page's `?relay=` query parameter instead, percent-encode the source URL so its `#` remains part of the parameter.
+To verify a publisher serving the sample catalog above, run `pnpm dev:sandbox` and open `/spf-moq-player/`. Switch from the default loopback to your publisher by pasting its full `moqt://…#msf:…` URL into the relay input and clicking **Load relay**. If you use the page's `?relay=` query parameter instead, percent-encode the source URL so its `#` remains part of the parameter.
 
-Check that both camera renditions appear, manual quality selection changes the media subscription, and Auto resumes adaptation within the camera group. Verify audio/video synchronization, late joins, and catalog updates after screen share starts or stops.
+With that publisher connected, check that both camera renditions appear, manual quality selection changes the media subscription, and Auto resumes adaptation within the camera group. Verify audio/video synchronization, late joins, and catalog updates after screen share starts or stops.
 
 The current sandbox lists only the first video group's rendition buttons, and `<simple-moq-video>` does not expose public `videoTracks` / `videoRenditions` lists yet. A separate screen track can be present in the resolved catalog without appearing in those controls. An engine-level diagnostic can select its exact track ID:
 
