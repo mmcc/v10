@@ -46,7 +46,13 @@ const cdnPresets = [
 
 // Bare `@videojs/html/...` specifiers as entries: rolldown resolves them like any import, so the dev build follows the
 // `development` condition to html's dev output and the prod build follows `default`.
-const cdnHtmlDefinitionEntries = cdnHtmlEntries(resolve(htmlDistDir, 'define'));
+// `simple-moq-video` is deliberately kept off the CDN: the MoQ engine has no error slot yet, so the element cannot
+// report a failed transport, an unsupported codec, or a bad catalog. Publishing it would ship a player that fails
+// silently. Remove it from this list once the engine surfaces errors.
+const cdnMediaExclusions = new Set(['media/simple-moq-video']);
+const cdnHtmlDefinitionEntries = cdnHtmlEntries(resolve(htmlDistDir, 'define')).filter(
+  ({ name }) => !cdnMediaExclusions.has(name)
+);
 
 const cdnLocaleEntries = localeTags.map((tag) => ({
   src: `src/locales/${tag}.ts`,
