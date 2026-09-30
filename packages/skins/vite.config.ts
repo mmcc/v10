@@ -31,7 +31,13 @@ export default defineConfig({
             '!dist/registry/**',
             ...generatedPackageOutputs.map(({ pattern, base }) => ({ pattern: `!${pattern}`, base })),
           ],
-          output: ['dist/registry/source/**', ...generatedPackageOutputs],
+          output: [
+            'dist/registry/source/**',
+            ...generatedPackageOutputs,
+            // The publisher preset is hand-maintained legacy UI that the preset globs above also match; restoring a
+            // cached copy would overwrite it.
+            { pattern: '!packages/react/src/presets/publisher/**', base: 'workspace' as const },
+          ],
         },
       },
       'generate:watch': {

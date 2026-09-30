@@ -17,6 +17,8 @@ Icons are grouped into visual sets. Each set contains the same icon names with d
 | --- | --- | --- |
 | `airplay-enter` | `AirPlayEnterIcon` | `airPlayEnterIcon` |
 | `airplay-exit` | `AirPlayExitIcon` | `airPlayExitIcon` |
+| `camera` | `CameraIcon` | `cameraIcon` |
+| `camera-off` | `CameraOffIcon` | `cameraOffIcon` |
 | `captions-off` | `CaptionsOffIcon` | `captionsOffIcon` |
 | `captions-on` | `CaptionsOnIcon` | `captionsOnIcon` |
 | `cast-enter` | `CastEnterIcon` | `castEnterIcon` |
@@ -26,13 +28,17 @@ Icons are grouped into visual sets. Each set contains the same icon names with d
 | `fullscreen-enter` | `FullscreenEnterIcon` | `fullscreenEnterIcon` |
 | `fullscreen-exit` | `FullscreenExitIcon` | `fullscreenExitIcon` |
 | `gear` | `GearIcon` | `gearIcon` |
+| `mic` | `MicIcon` | `micIcon` |
+| `mic-off` | `MicOffIcon` | `micOffIcon` |
 | `pause` | `PauseIcon` | `pauseIcon` |
 | `pip-enter` | `PipEnterIcon` | `pipEnterIcon` |
 | `pip-exit` | `PipExitIcon` | `pipExitIcon` |
 | `play` | `PlayIcon` | `playIcon` |
 | `quality` | `QualityIcon` | `qualityIcon` |
 | `restart` | `RestartIcon` | `restartIcon` |
+| `screen-share` | `ScreenShareIcon` | `screenShareIcon` |
 | `seek` | `SeekIcon` | `seekIcon` |
+| `signal` | `SignalIcon` | `signalIcon` |
 | `speech` | `SpeechIcon` | `speechIcon` |
 | `speed` | `SpeedIcon` | `speedIcon` |
 | `spinner` | `SpinnerIcon` | `spinnerIcon` |

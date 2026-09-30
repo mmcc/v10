@@ -4,6 +4,13 @@
 @source "../app";
 @source "../templates";
 @source "./_generated/registry";
+/*
+ * The publisher's Tailwind skin predates VJSC and is not in the generated registry. Its class maps ship bundled inside
+ * the public packages, so scan those copies. Keep these paths narrow: scanning either package root follows workspace
+ * symlinks across thousands of generated files and blocks cold requests.
+ */
+@source "../node_modules/@videojs/html/dist/default/presets/publisher";
+@source "../node_modules/@videojs/react/dist/default/presets/publisher";
 
 /* The shell's scheme control pins `data-color-scheme`; without it the operating system decides. */
 :root {
@@ -33,6 +40,19 @@
 
 @theme {
   --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  /* Publisher Tailwind skin animation token; ejected from the publisher's legacy skin `shared/tailwind.css`. */
+  --animate-media-pulse: media-pulse 2s ease-in-out infinite;
+}
+
+/* Soft opacity pulse for live/connecting status dots (publisher skins). */
+@keyframes media-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 @layer base {

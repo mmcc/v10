@@ -98,8 +98,9 @@ describe('auditSkinCss', () => {
   it('passes every generated skin stylesheet once lowered like the package builds', () => {
     const files = [
       ...globSync('packages/html/src/internal/skins/*/skin.css', { cwd: workspaceDir }),
+      // The publisher's stylesheet is hand-maintained legacy CSS, not VJSC output.
       ...globSync('packages/react/src/presets/*/{skin,minimal-skin}.css', { cwd: workspaceDir }).filter(
-        (file) => !file.includes('/background/')
+        (file) => !file.includes('/background/') && !file.includes('/publisher/')
       ),
     ];
 
