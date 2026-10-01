@@ -4,6 +4,7 @@ import type { Plugin } from 'vite';
 import { findGraph, type Graph } from 'vjsc/graph';
 
 import type { SkinModuleMeta } from '../../src/meta.ts';
+import { createPublisherPackageSkins, publisherPackageSkinOwnedPaths } from '../publisher.ts';
 import type { GeneratedPackageFile } from './files.ts';
 import { syncGeneratedFiles } from './files.ts';
 import { createHtmlPackageSkins, htmlPackageSkinOwnedPaths } from './html.ts';
@@ -42,12 +43,13 @@ export function packageSkinsPlugin(options: PackageSkinsPluginOptions): Plugin {
       const profile = process.env.VIDEOJS_PROFILE_SKINS === '1';
       const generateStarted = performance.now();
 
-      const [react, html] = await Promise.all([
+      const [react, html, publisher] = await Promise.all([
         timed(() => createReactPackageSkins(currentGraph, options)),
         timed(() => createHtmlPackageSkins(currentGraph, options)),
+        timed(() => createPublisherPackageSkins(currentGraph)),
       ]);
 
-      const generated = [react.value, html.value];
+      const generated = [react.value, html.value, publisher.value];
       const generateEnded = performance.now();
 
       const files = await Promise.all(
@@ -63,6 +65,7 @@ export function packageSkinsPlugin(options: PackageSkinsPluginOptions): Plugin {
       const changed = await syncGeneratedFiles(options.workspaceDir, files, [
         ...reactPackageSkinOwnedPaths(),
         ...htmlPackageSkinOwnedPaths(),
+        ...publisherPackageSkinOwnedPaths(),
       ]);
 
       const syncEnded = performance.now();

@@ -45,13 +45,14 @@ describe('PublisherSkin', () => {
     expect(screen.getByRole('button', { name: 'Microphone' })).toBeTruthy();
   });
 
-  it('hides the device picker menus when at most one device is available', () => {
+  it('marks the device pickers unavailable when at most one device is available', () => {
     const Wrapper = createWrapper({ cameraCount: 1, microphoneCount: 0 });
 
     render(<PublisherSkin />, { wrapper: Wrapper });
 
-    expect(screen.queryByRole('button', { name: 'Camera' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Microphone' })).toBeNull();
+    // The skin's styles hide an unavailable caret, and its menu with it.
+    expect(screen.getByRole('button', { name: 'Camera' }).getAttribute('data-availability')).toBe('unavailable');
+    expect(screen.getByRole('button', { name: 'Microphone' }).getAttribute('data-availability')).toBe('unavailable');
   });
 
   it('pairs each device picker with its own capture toggle in one split control', () => {
@@ -59,11 +60,13 @@ describe('PublisherSkin', () => {
 
     render(<PublisherSkin />, { wrapper: Wrapper });
 
-    const cameraControl = screen.getByRole('button', { name: 'Turn camera off' }).closest('.media-device-control');
-    const micControl = screen.getByRole('button', { name: 'Mute microphone' }).closest('.media-device-control');
+    const cameraControl = screen
+      .getByRole('button', { name: 'Turn camera off' })
+      .closest('.media-publisher-device-root');
+    const micControl = screen.getByRole('button', { name: 'Mute microphone' }).closest('.media-publisher-device-root');
 
-    expect(screen.getByRole('button', { name: 'Camera' }).closest('.media-device-control')).toBe(cameraControl);
-    expect(screen.getByRole('button', { name: 'Microphone' }).closest('.media-device-control')).toBe(micControl);
+    expect(screen.getByRole('button', { name: 'Camera' }).closest('.media-publisher-device-root')).toBe(cameraControl);
+    expect(screen.getByRole('button', { name: 'Microphone' }).closest('.media-publisher-device-root')).toBe(micControl);
     // Each toggle owns exactly one picker — the ambiguity the split control fixes.
     expect(cameraControl).not.toBe(micControl);
   });

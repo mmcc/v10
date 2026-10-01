@@ -17,6 +17,8 @@ export interface MicrophoneOption {
 }
 
 export interface MicrophoneOptionsResult {
+  /** Translated accessible name for the options group. */
+  label: string;
   state: MicRadioGroupCore.State;
   value: string;
   options: MicrophoneOption[];
@@ -52,6 +54,7 @@ export function useMicrophoneOptions(props?: MicrophoneOptionsProps): Microphone
   const state = core.getState();
 
   return {
+    label: translateText(core.getLabel(state), t),
     state,
     value: state.value,
     options: state.devices.map((device) => ({

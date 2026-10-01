@@ -10,11 +10,11 @@ import '@app/styles.css';
 //   ?real              publish to an actual MoQ relay via <MoqPublishVideo>
 //   ?relay=<url>       relay endpoint for ?real (default https://relay.mux.dev)
 //   ?ns=<namespace>    publish namespace for ?real (default: random name)
-//   ?styling=tailwind  use the Tailwind skin twin
+//   ?styling=tailwind  compile the skin's Tailwind styling from its authored source
 import { SandboxI18nProvider } from '@app/shared/react/sandbox-i18n';
 import type { Styling } from '@app/types';
 import { createPlayer, useComposedRefs, useMediaInstance } from '@videojs/react';
-import { MoqPublishVideo, PublisherSkin, PublisherSkinTailwind, publisherFeatures } from '@videojs/react/publisher';
+import { MoqPublishVideo, PublisherSkin, publisherFeatures } from '@videojs/react/publisher';
 import { type ComponentProps, forwardRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -28,9 +28,28 @@ const real = params.has('real');
 const relay = params.get('relay') || 'https://relay.mux.dev';
 const namespace = params.get('ns') || `vjs-sandbox-${Math.random().toString(36).slice(2, 8)}`;
 
-if (styling === 'css') await import('@videojs/react/publisher/skin.css');
+/**
+ * The packages ship only the CSS skin, so Tailwind compiles the authored source on request, as the shell does for the
+ * playback skins.
+ */
+async function loadSkin(): Promise<typeof PublisherSkin> {
+  if (styling === 'css') {
+    await import('@videojs/react/publisher/skin.css');
 
-const { Provider } = createPlayer({ features: publisherFeatures });
+    return PublisherSkin;
+  }
+
+  const [authored] = await Promise.all([
+    import('../../../../packages/skins/src/presets/publisher/skin.tsx?style=tailwind&target=react&skin=default-publisher&theme=default'),
+    import('@app/styles.authored.css'),
+  ]);
+
+  return authored.PublisherSkin;
+}
+
+const Skin = await loadSkin();
+
+const { Player } = createPlayer({ features: publisherFeatures });
 
 /**
  * Fake twin of `MoqPublishVideo` — the same preview `<video>` wired to `FakePublishMedia` (real capture, simulated
@@ -51,15 +70,13 @@ const FakePublishVideo = forwardRef<HTMLVideoElement, ComponentProps<'video'>>(f
 });
 
 function App() {
-  const Skin = styling === 'tailwind' ? PublisherSkinTailwind : PublisherSkin;
-
   return (
     <SandboxI18nProvider>
-      <Provider>
+      <Player>
         <Skin className="mx-auto aspect-video w-full max-w-4xl">
           {real ? <MoqPublishVideo publishEndpoint={relay} publishNamespace={namespace} /> : <FakePublishVideo />}
         </Skin>
-      </Provider>
+      </Player>
     </SandboxI18nProvider>
   );
 }

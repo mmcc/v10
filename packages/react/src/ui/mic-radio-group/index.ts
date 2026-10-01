@@ -1,3 +1,4 @@
+export * as MicRadioGroup from './index.parts';
 export {
   type MicrophoneOption,
   type MicrophoneOptionsProps,

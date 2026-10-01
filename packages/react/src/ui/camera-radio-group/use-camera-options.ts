@@ -17,6 +17,8 @@ export interface CameraOption {
 }
 
 export interface CameraOptionsResult {
+  /** Translated accessible name for the options group. */
+  label: string;
   state: CameraRadioGroupCore.State;
   value: string;
   options: CameraOption[];
@@ -52,6 +54,7 @@ export function useCameraOptions(props?: CameraOptionsProps): CameraOptionsResul
   const state = core.getState();
 
   return {
+    label: translateText(core.getLabel(state), t),
     state,
     value: state.value,
     options: state.devices.map((device) => ({

@@ -1,4 +1,3 @@
 @import "../global.css";
 @import "../shadow.css";
-@import "../../presets/publisher/legacy-skin/host.css";
-@import "../../presets/publisher/legacy-skin/default/css/publisher.css";
+@import "../../internal/skins/default-publisher/skin.css";

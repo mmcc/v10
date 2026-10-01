@@ -5,6 +5,7 @@ import type { StyleTransformOptions } from 'vjsc/styles';
 import type { ComponentTarget } from 'vjsc/target';
 
 import { skinStyles } from '../src/meta.ts';
+import { parsePublisherVariant, publisherStyleOptions } from './publisher.ts';
 import { skinBaseStylesheet } from './skin.ts';
 import { createComponentTargets } from './target/index.ts';
 import { parseVariant, type SkinVariant } from './variants.ts';
@@ -18,14 +19,22 @@ const stylesDir = resolve(import.meta.dirname, '../src/styles');
 
 export function resolveSkinComponents(module: TransformModule): readonly ComponentTarget[] | null {
   const config = parseVariant(module.params);
+  if (config) return createComponentTargets(config);
 
-  return config ? createComponentTargets(config) : null;
+  const publisher = parsePublisherVariant(module.params);
+
+  return publisher
+    ? createComponentTargets({ target: publisher.target, style: publisher.style, theme: publisher.theme })
+    : null;
 }
 
 export function resolveSkinStyles(module: TransformModule): StyleTransformOptions | null {
   const config = parseVariant(module.params);
+  if (config) return createStyleOptions(config, module.filename.includes('/components/') ? 'theme' : 'skin');
 
-  return config ? createStyleOptions(config, module.filename.includes('/components/') ? 'theme' : 'skin') : null;
+  const publisher = parsePublisherVariant(module.params);
+
+  return publisher ? publisherStyleOptions(publisher) : null;
 }
 
 export function createStyleOptions(
