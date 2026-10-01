@@ -1,1 +1,1 @@
-export { PublishBadge, type PublishBadgeProps } from './publish-badge';
+export { PublishBadge, type PublishBadgeProps } from './component';

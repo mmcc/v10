@@ -1,1 +1,1 @@
-export { CapturePlaceholder, type CapturePlaceholderProps } from './capture-placeholder';
+export { CapturePlaceholder, type CapturePlaceholderProps } from './component';

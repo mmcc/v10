@@ -1,1 +1,1 @@
-export { CameraButton, type CameraButtonProps } from './camera-button';
+export { CameraButton, type CameraButtonProps } from './component';

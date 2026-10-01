@@ -1,1 +1,1 @@
-export { ScreenShareButton, type ScreenShareButtonProps } from './screen-share-button';
+export { ScreenShareButton, type ScreenShareButtonProps } from './component';

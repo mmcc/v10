@@ -1,5 +1,5 @@
 import { safeDefine } from '../../registration/safe-define';
-import { MicButtonElement } from '../../ui/mic-button/mic-button-element';
+import { MicButtonElement } from '../../ui/mic-button/element';
 
 safeDefine(MicButtonElement);
 

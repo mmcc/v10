@@ -214,10 +214,10 @@ with no measured bandwidth need. Revisit with data, in
   independently" — call sites are unaffected). State fields become
   `cameraActive`, `screenShareActive`, `cameraState`, `screenShareState`,
   and (added after review) the read-only `micState`.
-- **`screen-share-button-core.ts`**: `sharing` becomes
+- **`screen-share-button/core.ts`**: `sharing` becomes
   `media.screenShareActive` directly, replacing
   `media.captureSource === 'screen'`.
-- **`capture-placeholder-core.ts`**: the placeholder is shown before
+- **`capture-placeholder/core.ts`**: the placeholder is shown before
   *any* source is active — `captureState` becomes a derived aggregate,
   `active` if either `cameraState` or `screenShareState` is `active`,
   else the more "in-progress" of the two (`acquiring` > `denied` >
@@ -272,7 +272,7 @@ plus what this record defers beyond the RFC:
   intent/fact slots, adapter properties (`cameraActive`, `screenShareActive`,
   `previewSource`, plural state/stream getters).
 - `packages/core/src/dom/store/features/capture-source.ts`,
-  `packages/core/src/core/ui/{screen-share-button,capture-placeholder,enable-devices-button}/*-core.ts`.
+  `packages/core/src/core/ui/{screen-share-button,capture-placeholder,enable-devices-button}/core.ts`.
 
 ## See also
 

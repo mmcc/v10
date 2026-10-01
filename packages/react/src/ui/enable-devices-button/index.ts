@@ -1,1 +1,1 @@
-export { EnableDevicesButton, type EnableDevicesButtonProps } from './enable-devices-button';
+export { EnableDevicesButton, type EnableDevicesButtonProps } from './component';

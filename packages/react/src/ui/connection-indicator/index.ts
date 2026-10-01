@@ -1,1 +1,1 @@
-export { ConnectionIndicator, type ConnectionIndicatorProps } from './connection-indicator';
+export { ConnectionIndicator, type ConnectionIndicatorProps } from './component';

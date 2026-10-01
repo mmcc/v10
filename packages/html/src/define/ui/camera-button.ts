@@ -1,5 +1,5 @@
 import { safeDefine } from '../../registration/safe-define';
-import { CameraButtonElement } from '../../ui/camera-button/camera-button-element';
+import { CameraButtonElement } from '../../ui/camera-button/element';
 
 safeDefine(CameraButtonElement);
 

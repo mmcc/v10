@@ -1,5 +1,5 @@
 import { safeDefine } from '../../registration/safe-define';
-import { PublishTimerElement } from '../../ui/publish-timer/publish-timer-element';
+import { PublishTimerElement } from '../../ui/publish-timer/element';
 
 safeDefine(PublishTimerElement);
 

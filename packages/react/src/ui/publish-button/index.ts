@@ -1,1 +1,1 @@
-export { PublishButton, type PublishButtonProps } from './publish-button';
+export { PublishButton, type PublishButtonProps } from './component';

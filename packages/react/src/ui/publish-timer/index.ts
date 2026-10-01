@@ -1,1 +1,1 @@
-export { PublishTimer, type PublishTimerProps } from './publish-timer';
+export { PublishTimer, type PublishTimerProps } from './component';

@@ -1,1 +1,1 @@
-export { MicButton, type MicButtonProps } from './mic-button';
+export { MicButton, type MicButtonProps } from './component';
