@@ -9,6 +9,7 @@
   "references": [
     { "path": "../../../../utils" },
     { "path": "../../core" },
+    { "path": "../../network" },
     { "path": "../../media" },
     { "path": "../primitives" }
   ],
