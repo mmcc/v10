@@ -1,0 +1,167 @@
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
+import type { StateSignals } from '../../../../core/composition/create-composition';
+import { signal } from '../../../../core/signals/primitives';
+import { type EnumerateCaptureDevicesState, enumerateCaptureDevices } from '../enumerate-capture-devices';
+
+function makeState(initial: EnumerateCaptureDevicesState = {}): StateSignals<EnumerateCaptureDevicesState> {
+  return {
+    captureDevices: signal(initial.captureDevices),
+    cameraState: signal(initial.cameraState ?? 'idle'),
+    micState: signal(initial.micState ?? 'idle'),
+  };
+}
+
+function fakeDevice(deviceId: string, kind: MediaDeviceKind, label = ''): MediaDeviceInfo {
+  return { deviceId, kind, label, groupId: 'group-1' } as MediaDeviceInfo;
+}
+
+const disposals: (() => void)[] = [];
+
+function setupEnumerate() {
+  const state = makeState();
+  const cleanup = enumerateCaptureDevices.setup({ state });
+
+  if (cleanup) disposals.push(cleanup);
+
+  return { state, cleanup };
+}
+
+describe('enumerateCaptureDevices', () => {
+  afterEach(() => {
+    for (const dispose of disposals.splice(0)) dispose();
+
+    vi.restoreAllMocks();
+  });
+
+  it('enumerates capture inputs on setup, filtering out non-input devices', async () => {
+    vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([
+      fakeDevice('cam-1', 'videoinput', 'Fake camera'),
+      fakeDevice('mic-1', 'audioinput', 'Fake microphone'),
+      fakeDevice('speaker-1', 'audiooutput', 'Fake speaker'),
+    ]);
+    const { state } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(state.captureDevices.get()).toEqual([
+        { deviceId: 'cam-1', kind: 'videoinput', label: 'Fake camera' },
+        { deviceId: 'mic-1', kind: 'audioinput', label: 'Fake microphone' },
+      ]);
+    });
+  });
+
+  it('re-enumerates on devicechange', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+
+    setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('discards an older enumeration that resolves after a newer one', async () => {
+    const resolvers: ((devices: MediaDeviceInfo[]) => void)[] = [];
+
+    vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve))
+    );
+    const { state } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(1);
+    });
+
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(2);
+    });
+
+    // The newer refresh commits...
+    resolvers[1]!([fakeDevice('cam-new', 'videoinput', 'New camera')]);
+    await vi.waitFor(() => {
+      expect(state.captureDevices.get()).toEqual([{ deviceId: 'cam-new', kind: 'videoinput', label: 'New camera' }]);
+    });
+
+    // ...and the slower setup-time snapshot resolving afterwards must not
+    // roll the picker back to the pre-devicechange device list.
+    resolvers[0]!([fakeDevice('cam-old', 'videoinput', 'Old camera')]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.captureDevices.get()).toEqual([{ deviceId: 'cam-new', kind: 'videoinput', label: 'New camera' }]);
+  });
+
+  it('re-enumerates when the camera goes active (labels appear post-grant)', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    state.cameraState.set('acquiring');
+    state.cameraState.set('active');
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('re-enumerates when the mic goes active too (audio-input labels appear post-grant)', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    state.micState.set('active');
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('re-enumerates on a mic grant while the camera is already active — both statuses stay tracked', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    state.cameraState.set('active');
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    });
+
+    // The regression: a short-circuited gate stopped tracking micState
+    // once the camera was granted, so a later mic grant never revealed
+    // the audio-input labels.
+    state.micState.set('active');
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it('stops listening after cleanup', async () => {
+    const enumerate = vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([]);
+    const { state, cleanup } = setupEnumerate();
+
+    await vi.waitFor(() => {
+      expect(enumerate).toHaveBeenCalledTimes(1);
+    });
+
+    cleanup?.();
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+    state.cameraState.set('active');
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(enumerate).toHaveBeenCalledTimes(1);
+  });
+});

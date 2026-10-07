@@ -124,7 +124,7 @@ export function htmlPackageSkinOwnedPaths(): string[] {
   return [internalRoot, `${packageRoot}/presets/background/skin.ts`, `${packageRoot}/define/background/skin.css`];
 }
 
-function htmlTemplateModule(html: string): string {
+export function htmlTemplateModule(html: string): string {
   const template = html.replaceAll('\\', '\\\\').replaceAll('`', '\\`').replaceAll('${', '\\${');
 
   return `import { createTemplate } from '@videojs/utils/dom';

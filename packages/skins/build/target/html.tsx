@@ -42,8 +42,14 @@ const componentParts: ComponentPartNameMap = {
   AudioTrackRadioGroup: {
     Options: 'AudioTrackRadioGroup',
   },
+  CameraRadioGroup: {
+    Options: 'CameraRadioGroup',
+  },
   CaptionsRadioGroup: {
     Options: 'CaptionsRadioGroup',
+  },
+  MicRadioGroup: {
+    Options: 'MicRadioGroup',
   },
   Menu: {
     Root: 'Menu',
@@ -190,7 +196,15 @@ export const htmlComponentTarget: ComponentTarget<CoreSchema> = defineComponentT
           Root: unwrap(),
           Value: ({ props }) => <Span data-part="value" {...props} />,
         },
+        CameraRadioGroup: {
+          Root: unwrap(),
+          Value: ({ props }) => <Span data-part="value" {...props} />,
+        },
         CaptionsRadioGroup: {
+          Root: unwrap(),
+          Value: ({ props }) => <Span data-part="value" {...props} />,
+        },
+        MicRadioGroup: {
           Root: unwrap(),
           Value: ({ props }) => <Span data-part="value" {...props} />,
         },
@@ -311,6 +325,8 @@ export const htmlComponentTarget: ComponentTarget<CoreSchema> = defineComponentT
         'audio-track-option': optionTemplate,
         'playback-rate-option': optionTemplate,
         'captions-option': optionTemplate,
+        'camera-option': optionTemplate,
+        'mic-option': optionTemplate,
       },
     },
     renderTargets: {

@@ -22,20 +22,20 @@ export interface PropertyPair {
  * (Track, Object), 0x0F AUDIO_CONFIG (Track, Object), 0x10 TIMESTAMP (Object). Even IDs carry varint values, odd IDs
  * carry length-prefixed bytes.
  *
- * Only the IDs this decode path acts on are named. AUDIO_CONFIG (0x0F) has no named constant because nothing consumes
- * it: an audio decoder's `description` comes from the catalog's initDataList, and `LocFrame` carries no audio-config
- * field to put it in.
+ * Only the IDs SPF touches are named. AUDIO_CONFIG (0x0F) is emit-only: `loc-packaging.ts` labels audio extradata with
+ * it for loc-04 consumers, but this decode path never reads it — an audio decoder's `description` comes from the
+ * catalog's initDataList, and `LocFrame` carries no audio-config field to put it in.
  *
  * TIMESTAMP moved from 0x06 to 0x10 in loc-04. 0x06 stays accepted on decode — deployed draft-03 publishers still emit
  * it, and SPF only ever reads LOC. 0x0A, draft-03's other Timestamp candidate, is NOT accepted: loc-04 gives it to
  * Secure Objects private properties (§3.1.3), so reading it as a timestamp would misparse encrypted metadata.
  *
- * **The 0x06 branch is two lines and it is not dead weight — name what still needs it before removing it.** Two live
- * publishers do: a moq-dev relay before 0.14.6 re-emits Object Property timestamps as 0x06 (upstream moved the encoder
+ * **The 0x06 branch is two lines and it is not dead weight — name what still needs it before removing it.** One live
+ * publisher does: a moq-dev relay before 0.14.6 re-emits Object Property timestamps as 0x06 (upstream moved the encoder
  * to 0x10 in `08224275`, released in 0.14.6, and kept 0x06 accepted on decode indefinitely — so the two implementations
- * are symmetric here rather than one compensating for the other), and the `mmcc/moq-publisher` browser publisher emits
- * 0x06 as its _primary_ because it was written against loc-02. Dropping this makes SPF unable to time either. When both
- * have moved, this constant and its branch go together.
+ * are symmetric here rather than one compensating for the other). SPF's own publisher (`loc-packaging.ts`) emitted 0x06
+ * as its primary until it moved to 0x10 with this table. When pre-0.14.6 relays have aged out of the fleet, this
+ * constant and its branch go together.
  */
 export const LOC_PROPERTY = {
   TIMESTAMP: 0x10,
@@ -43,6 +43,7 @@ export const LOC_PROPERTY = {
   TIMESTAMP_DRAFT03: 0x06,
   TIMESCALE: 0x08,
   VIDEO_CONFIG: 0x0d,
+  AUDIO_CONFIG: 0x0f,
 } as const;
 
 export const MICROSECONDS_PER_SECOND = 1_000_000;

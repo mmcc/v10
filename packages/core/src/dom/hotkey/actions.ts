@@ -4,7 +4,7 @@ import { isUndefined } from '@videojs/utils/predicate';
 import type { HotkeyActionName } from '../../core/ui/hotkey/core';
 import { MEDIA_INPUT_ACTION_OVERRIDES } from '../media-actions';
 import type { AnyPlayerStore } from '../player';
-import { selectBuffer, selectTextTrack, selectTime } from '../store/selectors';
+import { selectBuffer, selectCaptureTracks, selectTextTrack, selectTime } from '../store/selectors';
 
 export type { HotkeyActionName } from '../../core/ui/hotkey/core';
 
@@ -33,6 +33,14 @@ const HOTKEY_ACTIONS: Record<HotkeyActionName, HotkeyActionResolver> = {
   },
 
   togglePictureInPicture: MEDIA_INPUT_ACTION_OVERRIDES.togglePictureInPicture,
+
+  toggleMicMuted({ store }) {
+    selectCaptureTracks(store.state)?.toggleMicMuted();
+  },
+
+  toggleCameraMuted({ store }) {
+    selectCaptureTracks(store.state)?.toggleCameraMuted();
+  },
 
   seekStep: MEDIA_INPUT_ACTION_OVERRIDES.seekStep,
 

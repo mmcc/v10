@@ -1,0 +1,43 @@
+@import "../../styles/base.css";
+
+/*
+ * Publisher preset tokens. The Publisher is not a playback preset, so the video preset tokens in `styles/video/theme.css`
+ * never match it; it declares the ones its chrome reads here.
+ */
+@layer base.preset {
+  .media-skin[data-preset="publisher"] {
+    --media-frame-border: var(--media-border-color, rgb(255 255 255 / 0.15));
+    --media-controls-gradient: linear-gradient(
+      to top,
+      color-mix(in oklab, var(--media-backdrop) 40%, transparent),
+      color-mix(in oklab, var(--media-backdrop) 20%, transparent),
+      color-mix(in oklab, var(--media-backdrop) 50%, transparent)
+    );
+    /* Literals chosen to hold up on dark video. Poor shares the live red. */
+    --media-quality-good-color: oklch(0.72 0.19 149);
+    --media-quality-fair-color: oklch(0.8 0.16 85);
+    --media-quality-poor-color: var(--media-live-color);
+    /*
+     * Ground for the status capsule. Deliberately dark rather than the glass surface fill: it overlays live camera
+     * frames, and a translucent ground inherits whatever brightness is behind it.
+     */
+    --media-publish-status-background: rgb(0 0 0 / 0.6);
+    --media-capture-placeholder-background: oklch(0.2 0 0);
+  }
+
+  @media (prefers-reduced-transparency: reduce) or (prefers-contrast: more) {
+    .media-skin[data-preset="publisher"] {
+      --media-publish-status-background: rgb(0 0 0);
+    }
+  }
+}
+
+/*
+ * The status dot's `animate-pulse`. Tailwind emits these keyframes beside the utility when it compiles the skin, but
+ * the packaged CSS carries utilities only, so it declares Tailwind's own `pulse` here.
+ */
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
