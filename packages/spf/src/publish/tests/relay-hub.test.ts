@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vite-plus/test';
 
+import { PUBLISH_DONE_STATUS } from '../../network/moqt/control-messages';
 import { createSubgroupWriter } from '../../network/moqt/subgroup-writer';
 import { createMoqtPublishSession } from '../session/publish-session';
 import { createRelayHub } from './helpers/relay-hub';
@@ -78,11 +79,14 @@ describe('createRelayHub', () => {
       expect(served).toEqual(['video']);
     });
 
-    // The publisher ends the track: a bare FIN on the hub's SUBSCRIBE
-    // stream, recorded as the churn signal.
+    // The publisher ends the track: PUBLISH_DONE + FIN on the hub's
+    // SUBSCRIBE stream, recorded as the churn signal. No stream-count
+    // source was registered, so the count is unknown.
     first.end();
     await vi.waitFor(() => {
-      expect(hub.trackEnds).toEqual([{ kind: 'subscribe-fin', trackName: 'video' }]);
+      expect(hub.trackEnds).toEqual([
+        { kind: 'track-end', trackName: 'video', statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: undefined },
+      ]);
     });
 
     // The same name comes back in the same session — the churn shape the

@@ -12,11 +12,12 @@
  * (upstream `de336492`: every PUBLISH is answered with a request error), and it solicits namespaces itself — one
  * SUBSCRIBE_NAMESPACE per authorized prefix, sent immediately after SETUP. Announcing rides the solicitation stream as
  * NAMESPACE entries (suffix-relative, parameterless — the relay treats even an empty parameter count as malformed);
- * data flows only on aliases bound by our own SUBSCRIBE_OKs, per subscription. Three hard-won peer constraints shape
- * the teardown paths: a subscription ends by FIN alone (any byte after SUBSCRIBE_OK — a PUBLISH_DONE, say — makes the
- * relay abort the track for every viewer instead of finishing it), a client-sent GOAWAY closes the whole session (code
- * 17), and a track alias bound to two live request IDs closes it too (code 12) — so aliases are the peer's own request
- * IDs, unique by construction.
+ * data flows only on aliases bound by our own SUBSCRIBE_OKs, per subscription. A track end sends each subscription
+ * PUBLISH_DONE (TRACK_ENDED, with the exact count of data streams it received) and then FINs it — moq-relay 0.17.0
+ * forwards that downstream as "track ended", where a bare FIN reaches viewers as "internal error" (older moq-relay
+ * builds abort the track on any byte after SUBSCRIBE_OK; they are not supported). Two more hard-won peer constraints
+ * shape the teardown paths: a client-sent GOAWAY closes the whole session (code 17), and a track alias bound to two
+ * live request IDs closes it too (code 12) — so aliases are the peer's own request IDs, unique by construction.
  *
  * Deliberately callback-shaped with NO signals, mirroring the subscribe driver — signal awareness enters at the
  * `publish/` behavior layer through the actor below. Lives in `publish/` rather than `network/moqt` so the parent-owned
@@ -32,6 +33,7 @@ import {
   decodeControlMessage,
   encodeNamespace,
   encodeNamespaceDone,
+  encodePublishDone,
   encodeRequestError,
   encodeRequestOk,
   encodeSetup,
@@ -41,6 +43,7 @@ import {
   type KeyValuePair,
   type Location,
   MESSAGE_TYPE,
+  PUBLISH_DONE_STATUS,
   type MessageParameters,
   MOQT_PROTOCOL_ID,
   REQUEST_ERROR_CODE,
@@ -118,13 +121,18 @@ export interface RegisterTrackOptions {
    * parameter is left off.
    */
   getLargestObject?: () => Location | undefined;
+  /**
+   * Data streams opened under the subscription with this alias — the PUBLISH_DONE Stream Count (§10.12) the track's end
+   * reports, plus the fill streams the session opens itself. Omitted, the count is reported as unknown (2^64−1).
+   */
+  getStreamCount?: (trackAlias: number) => number;
 }
 
 export interface RegisteredTrack {
   readonly trackName: string;
   /**
-   * End the track: FIN every live subscription's request stream (a FIN with no trailing bytes is the clean track end)
-   * and refuse future SUBSCRIBEs with DOES_NOT_EXIST. Idempotent.
+   * End the track: send every live subscription PUBLISH_DONE with TRACK_ENDED and its Stream Count, FIN its request
+   * stream, and refuse future SUBSCRIBEs with DOES_NOT_EXIST. Idempotent.
    *
    * `after` holds the FINs (not the refusal) until it settles, so a last object still in flight — the MSF
    * end-of-broadcast catalog — reaches subscribers before their subscription ends. An orderly `close()` waits on it
@@ -171,7 +179,10 @@ export const CLOSE_FLUSH_TIMEOUT_MS = 250;
 interface SubscriberStream {
   requestId: number;
   trackAlias: number;
+  /** Bare FIN — ends a subscription the peer superseded, which is not a track end. */
   fin(): Promise<void>;
+  /** PUBLISH_DONE, then FIN — the track ended (§10.12). */
+  done(statusCode: number, streamCount: number | undefined): Promise<void>;
   cancel(): Promise<void>;
   /** SUBSCRIBE_OK reached the wire — only accepted subscriptions may carry the binding. */
   accepted: boolean;
@@ -182,6 +193,8 @@ interface SubscriberStream {
   finished: boolean;
   /** Includes pending stream opens, so cancellation also catches late arrivals. */
   fills: Set<FillStream>;
+  /** Fill streams opened for this subscription — they count toward PUBLISH_DONE's Stream Count. */
+  fillStreams: number;
 }
 
 interface FillStream {
@@ -203,6 +216,8 @@ interface TrackRecord {
   doneFlushed?: Promise<void>;
   /** Reads the track's Largest Object for responses (see `RegisterTrackOptions.getLargestObject`). */
   getLargestObject?: () => Location | undefined;
+  /** Reads a subscription's data-stream count (see `RegisterTrackOptions.getStreamCount`). */
+  getStreamCount?: (trackAlias: number) => number;
 }
 
 /** One accepted inbound SUBSCRIBE_NAMESPACE — the announce carrier. */
@@ -358,11 +373,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   /**
-   * Orderly close: closing the transport discards queued data (WebTransport semantics), so the subscription FINs and
-   * NAMESPACE_DONE retractions must be given a bounded window to land first — a peer should observe every track ending
-   * cleanly, not an abrupt transport end. Neither GOAWAY nor PUBLISH_DONE is sent: moq-lite-rs closes the session on a
-   * client GOAWAY, and treats any post-SUBSCRIBE_OK byte on a subscribe stream as an error that aborts the track (see
-   * the module doc).
+   * Orderly close: closing the transport discards queued data (WebTransport semantics), so the track ends (PUBLISH_DONE
+   *
+   * - FIN per subscription) and NAMESPACE_DONE retractions must be given a bounded window to land first — a peer should
+   *   observe every track ending cleanly, not an abrupt transport end. No GOAWAY is sent: moq-lite-rs closes the
+   *   session on a client GOAWAY (see the module doc).
    */
   async #drainAndClose(closeCode: number, reason: string): Promise<void> {
     // One macrotask beat before the last-resort sweep below: track owners
@@ -501,6 +516,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       done: false,
       pendingFins: [],
       getLargestObject: options.getLargestObject,
+      getStreamCount: options.getStreamCount,
     };
 
     this.#tracks.set(track.key, track);
@@ -520,9 +536,9 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
   }
 
   /**
-   * FIN every live subscription's request stream — with no trailing bytes, which is the clean track end — and refuse
-   * future SUBSCRIBEs. The aggregated write completion lands on `track.doneFlushed` so `close()` can hold the transport
-   * open until the FINs reach the wire.
+   * End every live subscription with PUBLISH_DONE (TRACK_ENDED) and a FIN, and refuse future SUBSCRIBEs. The aggregated
+   * write completion lands on `track.doneFlushed` so `close()` can hold the transport open until the ends reach the
+   * wire.
    */
   #endTrack(track: TrackRecord, after?: Promise<unknown>): void {
     if (track.done) return;
@@ -547,7 +563,13 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
     for (const subscriber of track.subscribers) {
       if (!subscriber.finished) {
         subscriber.finished = true;
-        writes.push(subscriber.fin().catch(() => {}));
+        // Read at the end, not at subscribe time: the count must cover
+        // every stream the subscription received (§10.12).
+        const streamCount = track.getStreamCount
+          ? track.getStreamCount(subscriber.trackAlias) + subscriber.fillStreams
+          : undefined;
+
+        writes.push(subscriber.done(PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount).catch(() => {}));
       }
 
       // The local end is authoritative: report each live subscription
@@ -644,6 +666,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         // writes a header it cannot preserve through the reset.
         if (!hasMethods(writer, ['commit'])) return;
 
+        subscriber.fillStreams++;
         await writer.write(encodeFetchHeader(requestId));
 
         if (!subscriber.fills.has(fill) || subscriber.finished) return;
@@ -985,6 +1008,11 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
         this.#resetFills(subscriber);
         return writer.close();
       },
+      done: async (statusCode, streamCount) => {
+        this.#resetFills(subscriber);
+        await writer.write(encodePublishDone(statusCode, streamCount));
+        await writer.close();
+      },
       cancel: async () => {
         subscriber.finished = true;
         this.#resetFills(subscriber);
@@ -1003,6 +1031,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       forwarding: subscribe.parameters.forward !== 0,
       finished: false,
       fills: new Set(),
+      fillStreams: 0,
     };
 
     // Use one snapshot for both the response and its fill range, even if
@@ -1169,8 +1198,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
             } else {
               // The subscribe driver treats REQUEST_OK as the update's
               // completion (`onUpdateOk`). Strictly reactive: a peer that
-              // never sends REQUEST_UPDATE (moq-lite-rs parks on end-of-
-              // stream after SUBSCRIBE_OK) never sees a trailing byte.
+              // never sends REQUEST_UPDATE sees nothing here.
               void writer.write(encodeRequestOk(largestObject ? { largestObject } : {})).catch(() => {});
 
               if (fillRequested) this.#openAndResetFill(message.requestId, subscriber);

@@ -20,10 +20,11 @@
  *
  * Cluster-owner reactor per the per-type setup-actor convention: the encoder chunk router (the engine's default
  * `chunkSink`) and `deriveCatalog` only read the slots — they never create the actors. On session loss, endpoint
- * change, or teardown the actors are destroyed in reverse creation order, each track's live subscriptions get their
- * clean FIN (`handle.end()`), and the slots are cleared. When the session is still serving at teardown, the broadcast
- * is ending on purpose, so the catalog track's last group is the MSF end-of-broadcast catalog (§11.3) — never on a
- * session loss, which may yet reconnect and must not mark the broadcast complete.
+ * change, or teardown the actors are ended in reverse creation order: each track's data streams close first, then its
+ * live subscriptions get their clean end — PUBLISH_DONE with TRACK_ENDED, then FIN (`handle.end()`) — and the slots are
+ * cleared. When the session is still serving at teardown, the broadcast is ending on purpose, so the catalog track's
+ * last group is the MSF end-of-broadcast catalog (§11.3) — never on a session loss, which may yet reconnect and must
+ * not mark the broadcast complete.
  *
  * Sole writer of the track-publisher context slots (the four media slots plus `dataTrackProducers`). Per-stream
  * failures are deliberately not surfaced as `publishError` anymore: under pull-through ingest the peer resets in-flight
@@ -242,10 +243,31 @@ function hasEncoding(encodings: ActiveEncodingsFacts | undefined): boolean {
 const textEncoder = new TextEncoder();
 
 /**
- * End the catalog track with the MSF end-of-broadcast catalog (§11.3: `isComplete`, no tracks) as its last group. The
- * subscription FINs wait for that group to land — bounded by the session's close drain window, so a stalled stream
- * cannot hold the teardown — and only then is the publisher destroyed.
+ * How long a track's teardown waits for its last groups to flush. Half the session's close drain window: the
+ * PUBLISH_DONE that follows still has to reach the wire before the drain closes the transport.
  */
+const TRACK_FLUSH_TIMEOUT_MS = CLOSE_FLUSH_TIMEOUT_MS / 2;
+
+/**
+ * End one track in the order §10.12 requires — every data stream closed before PUBLISH_DONE: `end` FINs the open group,
+ * the queued groups get a bounded window to flush, `destroy()` FINs or resets whatever is left, and only then does the
+ * session send each subscription PUBLISH_DONE and its FIN.
+ */
+function endTrack(handle: RegisteredTrack, publisher: TrackPublisherActor): void {
+  publisher.send({ type: 'end' });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flushed = Promise.race([
+    publisher.flushed(),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, TRACK_FLUSH_TIMEOUT_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
+
+  handle.end({ after: flushed.then(() => publisher.destroy()) });
+}
+
+/** End the catalog track with the MSF end-of-broadcast catalog (§11.3: `isComplete`, no tracks) as its last group. */
 function endCatalogTrack(
   handle: RegisteredTrack,
   publisher: TrackPublisherActor,
@@ -259,18 +281,7 @@ function endCatalogTrack(
     keyframe: true,
     timestampUs: 0,
   });
-  publisher.send({ type: 'end' });
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const flushed = Promise.race([
-    publisher.flushed(),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, CLOSE_FLUSH_TIMEOUT_MS);
-    }),
-  ]).finally(() => clearTimeout(timer));
-
-  handle.end({ after: flushed });
-  void flushed.then(() => publisher.destroy());
+  endTrack(handle, publisher);
 }
 
 /**
@@ -317,6 +328,9 @@ function addTrackPublisher(
 
       return largestGroupId >= 0 ? { group: largestGroupId, object: largestObjectId } : undefined;
     },
+    // ...and the streams it opened per subscription, for the Stream Count
+    // a track end reports in PUBLISH_DONE (§10.12).
+    getStreamCount: (trackAlias) => publisher.streamCount(trackAlias),
   });
 
   cluster.created.push({ handle, publisher, boundAlias: undefined });
@@ -471,14 +485,7 @@ function setupTrackPublishersSetup({
                   continue;
                 }
 
-                // Quiesce: 'end' FINs the open group, then the track's
-                // live subscriptions get their clean stream FIN (the
-                // clean track end — no trailing message; a relay
-                // aborts the track on any post-SUBSCRIBE_OK byte), then
-                // destroy() force-ends whatever is left.
-                publisher.send({ type: 'end' });
-                handle.end();
-                publisher.destroy();
+                endTrack(handle, publisher);
               }
             };
           },

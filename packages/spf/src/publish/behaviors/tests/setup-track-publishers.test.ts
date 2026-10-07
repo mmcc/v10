@@ -333,6 +333,43 @@ describe('setupTrackPublishers', () => {
     expect(onSubgroupReset).not.toHaveBeenCalled();
   });
 
+  it("closes a track's open group before its PUBLISH_DONE (§10.12)", async () => {
+    const { actor, peer, server } = makeSessionActor();
+    const { state, context } = setupBehavior();
+    const events: string[] = [];
+
+    state.endpoint.set(ENDPOINT);
+    state.activeEncodings.set({ camera: VIDEO_CONFIG });
+    context.publishSessionActor.set(actor);
+    void solicitNamespace(server, []);
+    await vi.waitFor(() => expect(context.videoTrackPublisher.get()).toBeDefined());
+    peer.subscribe(
+      { trackNamespace: ENDPOINT.namespace, trackName: 'video' },
+      {
+        onObject: (object) => events.push(`object g${object.groupId}`),
+        onSubgroupEnd: ({ groupId }) => events.push(`fin g${groupId}`),
+        onDone: (done) => events.push(`done status=${done.statusCode} streams=${done.streamCount}`),
+      }
+    );
+    await vi.waitFor(() => expect(actor.snapshot.get().context.trackBindings.video).toBeDefined());
+    // A keyframe opens group 0 and leaves it open — only the next
+    // keyframe or the track's end FINs it.
+    context.videoTrackPublisher.get()!.send({
+      type: 'frame',
+      payload: new Uint8Array([1]),
+      properties: [],
+      keyframe: true,
+      timestampUs: 0,
+    });
+    await vi.waitFor(() => expect(events).toEqual(['object g0']));
+
+    context.publishSessionActor.set(undefined);
+    actor.destroy();
+
+    await vi.waitFor(() => expect(events).toHaveLength(3));
+    expect(events).toEqual(['object g0', 'fin g0', 'done status=2 streams=1']);
+  });
+
   it('never marks the broadcast complete when the session is lost', async () => {
     const { actor, server, client } = makeSessionActor();
     const { state, context } = setupBehavior();

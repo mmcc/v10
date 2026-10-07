@@ -66,6 +66,13 @@ describe('encodePublishDone', () => {
       reason: 'stopped',
     });
   });
+
+  it('encodes an unknown stream count as the 2^64−1 sentinel', () => {
+    const bytes = encodePublishDone(PUBLISH_DONE_STATUS.TRACK_ENDED, undefined);
+
+    expect(bytes.subarray(-10, -1)).toEqual(new Uint8Array(9).fill(0xff));
+    expect(decodeOne(bytes)).toMatchObject({ kind: 'publish-done', streamCount: undefined, reason: '' });
+  });
 });
 
 describe('encodeSubscribeOk', () => {

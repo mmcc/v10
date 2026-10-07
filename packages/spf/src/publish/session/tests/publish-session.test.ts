@@ -14,6 +14,7 @@ import {
   encodeRequestUpdate,
   encodeSetup,
   encodeSubscribe,
+  PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
   SETUP_OPTION,
   TRACK_PROPERTY,
@@ -534,7 +535,7 @@ describe('createMoqtPublishSession', () => {
     subscriber.destroy();
   });
 
-  it('ends a track by FINing its subscription streams with no trailing message', async () => {
+  it('ends a track with PUBLISH_DONE (TRACK_ENDED and the stream count), then FIN', async () => {
     const endedRequests: number[] = [];
     const bindings: (number | undefined)[] = [];
     const { pair, session, subscriber } = makePublishHarness({
@@ -543,7 +544,11 @@ describe('createMoqtPublishSession', () => {
     });
 
     await session.ready;
-    const track = session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+    const track = session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getStreamCount: (trackAlias) => (trackAlias === 21 ? 4 : 0),
+    });
 
     const subscribe = await rawSubscribe(pair.server, 'video', 21);
 
@@ -560,10 +565,10 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(subscribe.ended()).toBe(true);
     });
-    // A bare FIN is the clean track end. Any byte after
-    // SUBSCRIBE_OK — the old PUBLISH_DONE — makes moq-lite-rs abort the
-    // track for every downstream viewer instead of finishing it.
-    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    // moq-relay 0.17.0 forwards this as "track ended"; a bare FIN
+    // reaches viewers as "internal error".
+    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
+    expect(subscribe.received[1]).toMatchObject({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 4 });
 
     // The peer closing its side afterwards must not double-report.
     void subscribe.fin();
@@ -600,7 +605,13 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(subscribe.ended()).toBe(true);
     });
-    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    // No stream-count source registered: the count is the 2^64−1
+    // "unknown" sentinel, which decodes as undefined.
+    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
+    expect(subscribe.received[1]).toMatchObject({
+      statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+      streamCount: undefined,
+    });
     subscriber.destroy();
   });
 
@@ -1088,6 +1099,45 @@ describe('createMoqtPublishSession', () => {
     await finish();
   });
 
+  it('counts fill fetch streams in the PUBLISH_DONE Stream Count (§10.12)', async () => {
+    const { pair, session, fills, finish } = await makeFillHarness();
+    const track = session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => ({ group: 4, object: 2 }),
+      getStreamCount: () => 3,
+    });
+    const request = await openRawRequest(
+      pair.server,
+      encodeSubscribe({
+        requestId: 207,
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        parameters: {
+          forward: 1,
+          locationFilter: { type: 'next-object' },
+          fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+        },
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(fills).toEqual([{ requestId: 207, reset: true }]);
+    });
+
+    track.end();
+    await vi.waitFor(() => {
+      expect(request.ended()).toBe(true);
+    });
+    // Three data streams from the track publisher plus the reset fill.
+    expect(request.received.at(-1)).toMatchObject({
+      kind: 'publish-done',
+      statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+      streamCount: 4,
+    });
+    await finish();
+  });
+
   it('opens no fill fetch stream for an empty fill range (§5.1.3)', async () => {
     const { pair, session, fills, finish } = await makeFillHarness();
     let largest: { group: number; object: number } | undefined;
@@ -1432,12 +1482,12 @@ describe('createMoqtPublishSession', () => {
 
     session.close();
     await vi.waitFor(() => {
-      // The announce is retracted and the subscription FINed cleanly
-      // before the transport goes away.
+      // The announce is retracted and the track ended cleanly before the
+      // transport goes away.
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace', 'namespace-done']);
       expect(subscribe.ended()).toBe(true);
     });
-    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
     expect(controlFrames.map((m) => m.kind)).toEqual(['setup']);
   });
 

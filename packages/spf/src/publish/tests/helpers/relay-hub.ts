@@ -8,8 +8,8 @@
  * one upstream SUBSCRIBE per track (downstream demand dedupes onto it), with the publisher's SUBSCRIBE_OK assigning the
  * alias its subgroup data streams carry. A proactive PUBLISH is answered with REQUEST_ERROR 400 "PUBLISH is not
  * supported" exactly like the real relay, so a regression to the old ingest model fails loudly. The publisher ends a
- * track by FINing the hub's SUBSCRIBE stream — no PUBLISH_DONE ever arrives — and retracts a namespace with
- * NAMESPACE_DONE; both land in `trackEnds`, the churn signal the source-switch regression tests assert on.
+ * track with PUBLISH_DONE and a FIN on the hub's SUBSCRIBE stream, and retracts a namespace with NAMESPACE_DONE; both
+ * land in `trackEnds`, the churn signal the source-switch regression tests assert on.
  *
  * Subscriber side (`connectSubscriber`): answers SUBSCRIBE with SUBSCRIBE_OK (carrying LARGEST_OBJECT once the track
  * has content) and forwards objects one-per-subgroup-stream, resolving the request's Location Filter (draft-20 §5.1.2)
@@ -17,8 +17,9 @@
  * (catalog joins), `relative-group 0` forwards only groups that start after the subscribe (video joins), and
  * `next-object` is strict: nothing already published is replayed (audio joins). FETCH is answered with REQUEST_ERROR;
  * the draft-20 player never sends one. A downstream subscribe registers standing upstream demand for its track; an
- * upstream FIN ends the track's downstream subscriptions with PUBLISH_DONE, the way a real relay ends the track for
- * every viewer.
+ * upstream end ends the track's downstream subscriptions with PUBLISH_DONE, the way a real relay ends the track for
+ * every viewer — forwarding the publisher's status like moq-relay 0.17.0, which reports a bare FIN (no PUBLISH_DONE) as
+ * INTERNAL_ERROR.
  *
  * Tracks and demand persist across publisher sessions (a reconnecting publisher is re-solicited and its demanded tracks
  * re-subscribed), so the hub can also observe teardown/reconnect churn instead of crashing on it.
@@ -83,12 +84,12 @@ interface TrackRecord {
 }
 
 /**
- * One upstream end observed from the publisher. Under announce-and-serve there is no PUBLISH_DONE: a bare FIN on the
- * hub's SUBSCRIBE stream is the clean track end, and NAMESPACE_DONE retracts an announce. These replace the old
- * `publishDones` as the source-switch churn signal.
+ * One upstream end observed from the publisher: a track's SUBSCRIBE stream ending cleanly (with the PUBLISH_DONE that
+ * preceded the FIN, if any — `statusCode` is `undefined` for a bare FIN), or NAMESPACE_DONE retracting an announce. The
+ * source-switch churn signal.
  */
 export type ObservedTrackEnd =
-  | { kind: 'subscribe-fin'; trackName: string }
+  | { kind: 'track-end'; trackName: string; statusCode: number | undefined; streamCount?: number | undefined }
   | { kind: 'namespace-done'; namespace: TrackNamespace };
 
 export interface RelayHub {
@@ -308,8 +309,8 @@ export function createRelayHub(
 
     /**
      * Pull one announced track: a fresh bidi stream per SUBSCRIBE, alias recorded from the publisher's SUBSCRIBE_OK,
-     * held open until one side ends it. A bare FIN from the publisher is the clean track end — recorded as churn, and
-     * forwarded to the track's downstream subscribers as PUBLISH_DONE the way a real relay ends the track.
+     * held open until one side ends it. The publisher's FIN (after its PUBLISH_DONE) is the track end — recorded as
+     * churn, and forwarded to the track's downstream subscribers as PUBLISH_DONE the way a real relay ends the track.
      */
     const subscribeUpstream = (trackName: string): void => {
       if (destroyed || connectionClosed || upstreamTracks.has(trackName)) return;
@@ -325,6 +326,7 @@ export function createRelayHub(
         nextRequestId += 2;
         const track = trackFor(trackName);
         let accepted = false;
+        let publishDone: Extract<ControlMessage, { kind: 'publish-done' }> | undefined;
 
         try {
           await writer.write(
@@ -352,6 +354,8 @@ export function createRelayHub(
             if (message.kind === 'subscribe-ok') {
               accepted = true;
               aliasToTrack.set(message.trackAlias, track);
+            } else if (message.kind === 'publish-done') {
+              publishDone = message;
             } else if (message.kind === 'request-error') {
               // DOES_NOT_EXIST usually means the demand raced the
               // publisher's registerTrack — retry while the demand stands
@@ -365,9 +369,16 @@ export function createRelayHub(
           }
 
           if (accepted) {
-            trackEnds.push({ kind: 'subscribe-fin', trackName });
+            trackEnds.push({
+              kind: 'track-end',
+              trackName,
+              statusCode: publishDone?.statusCode,
+              streamCount: publishDone?.streamCount,
+            });
 
-            for (const subscriber of [...track.subscribers]) subscriber.end(PUBLISH_DONE_STATUS.TRACK_ENDED);
+            const status = publishDone?.statusCode ?? PUBLISH_DONE_STATUS.INTERNAL_ERROR;
+
+            for (const subscriber of [...track.subscribers]) subscriber.end(status);
 
             track.subscribers.clear();
           }

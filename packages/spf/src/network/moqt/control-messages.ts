@@ -1028,12 +1028,21 @@ export function encodeSubscribeOk(
   return frameMessage(MESSAGE_TYPE.SUBSCRIBE_OK, body);
 }
 
-/** PUBLISH_DONE (§10.12). */
-export function encodePublishDone(statusCode: number, streamCount: number, reason = ''): Uint8Array {
+/** 2^64−1, PUBLISH_DONE's "unknown" Stream Count, has one encoding: the 9-byte form with every bit set. */
+const UNKNOWN_STREAM_COUNT = new Uint8Array(9).fill(0xff);
+
+/**
+ * PUBLISH_DONE (§10.12). An `undefined` Stream Count is the publisher that cannot count its streams, encoded as the
+ * 2^64−1 sentinel the draft mandates (and `readCountVarint` reads back as `undefined`).
+ */
+export function encodePublishDone(statusCode: number, streamCount: number | undefined, reason = ''): Uint8Array {
   const body = new ByteWriter();
 
   body.writeVarint(statusCode);
-  body.writeVarint(streamCount);
+
+  if (streamCount === undefined) body.writeBytes(UNKNOWN_STREAM_COUNT);
+  else body.writeVarint(streamCount);
+
   writeReasonPhrase(body, reason);
   return frameMessage(MESSAGE_TYPE.PUBLISH_DONE, body);
 }

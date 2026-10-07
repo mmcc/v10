@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createComposition } from '../../../core/composition/create-composition';
 import { signal } from '../../../core/signals/primitives';
+import { PUBLISH_DONE_STATUS } from '../../../network/moqt/control-messages';
 import { createMoqtSession } from '../../../network/moqt/session';
 import { type RawRequest, rawSubscribe, solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
 import { createTransportPair, type TransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
@@ -217,7 +218,7 @@ describe('openPublishSession', () => {
       });
 
       // Hold live subscriptions on both tracks so the teardown's clean
-      // end (a bare stream FIN) is observable, and open one video group
+      // end (PUBLISH_DONE + FIN) is observable, and open one video group
       // so an in-flight data stream rides through the teardown too.
       subscriptions.catalog = await rawSubscribe(pair.server, ENDPOINT.namespace, 'catalog', 11);
       subscriptions.video = await rawSubscribe(pair.server, ENDPOINT.namespace, 'video', 13);
@@ -237,7 +238,17 @@ describe('openPublishSession', () => {
     return { composition, subscriptions, goLive };
   }
 
-  it('FINs every track subscription cleanly when the composition is destroyed', async () => {
+  /** The clean track end: PUBLISH_DONE with TRACK_ENDED, then FIN. Video carried exactly the one group `goLive` sent. */
+  function expectTrackEnded(subscriptions: { catalog: RawRequest; video: RawRequest }) {
+    for (const subscription of [subscriptions.catalog, subscriptions.video]) {
+      expect(subscription.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
+      expect(subscription.received[1]).toMatchObject({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED });
+    }
+
+    expect(subscriptions.video.received[1]).toMatchObject({ streamCount: 1 });
+  }
+
+  it('ends every track subscription cleanly when the composition is destroyed', async () => {
     const pair = createTransportPair();
     const { composition, subscriptions, goLive } = makeTransportStage(pair);
 
@@ -250,13 +261,10 @@ describe('openPublishSession', () => {
       expect(subscriptions.catalog.ended()).toBe(true);
       expect(subscriptions.video.ended()).toBe(true);
     });
-    // A bare FIN is the clean track end — any trailing message
-    // (the old PUBLISH_DONE) makes moq-lite-rs abort the track instead.
-    expect(subscriptions.catalog.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
-    expect(subscriptions.video.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expectTrackEnded(subscriptions);
   });
 
-  it('FINs every track subscription when unpublish collapses the gate', async () => {
+  it('ends every track subscription cleanly when unpublish collapses the gate', async () => {
     const pair = createTransportPair();
     const { composition, subscriptions, goLive } = makeTransportStage(pair);
 
@@ -268,8 +276,7 @@ describe('openPublishSession', () => {
       expect(subscriptions.catalog.ended()).toBe(true);
       expect(subscriptions.video.ended()).toBe(true);
     });
-    expect(subscriptions.catalog.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
-    expect(subscriptions.video.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expectTrackEnded(subscriptions);
     // An orderly stop, not a failure.
     await vi.waitFor(() => {
       expect(composition.state.sessionStatus.get()).toBe('closed');
