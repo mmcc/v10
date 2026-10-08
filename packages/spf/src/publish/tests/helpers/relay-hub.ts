@@ -178,6 +178,11 @@ export function createRelayHub(
   options: {
     /** Delay individual downstream object streams to exercise jitter and late arrivals. */
     deliveryDelayMs?: (trackName: string, object: Readonly<BufferedObject>) => number;
+    /**
+     * Give the publisher's stream writers WebTransport's `commit()` (RESET_STREAM_AT). Default `true`; `false` models
+     * the browsers that ship WebTransport without it (Chromium 147).
+     */
+    reliableReset?: boolean;
   } = {}
 ): RelayHub {
   let destroyed = false;
@@ -254,7 +259,8 @@ export function createRelayHub(
 
       // These zero-buffer pipes settle writes only after the peer reads
       // them, so the reliable prefix is already delivered at commit time.
-      stream.getWriter = () => Object.assign(getWriter(), { commit() {} });
+      if (options.reliableReset !== false) stream.getWriter = () => Object.assign(getWriter(), { commit() {} });
+
       return stream;
     };
 

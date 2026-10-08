@@ -80,9 +80,11 @@ function collectTrack(
 async function makeFillHarness({
   reliableReset = true,
   openFillStream,
+  callbacks,
 }: {
   reliableReset?: boolean;
   openFillStream?: () => Promise<WritableStream<Uint8Array>>;
+  callbacks?: MoqtPublishSessionCallbacks;
 } = {}) {
   const pair = createTransportPair();
   const openUniStream = pair.client.createUnidirectionalStream.bind(pair.client);
@@ -102,7 +104,7 @@ async function makeFillHarness({
     return stream;
   };
 
-  const session = createMoqtPublishSession(pair.client);
+  const session = createMoqtPublishSession(pair.client, { callbacks });
   const fills: { requestId: number; reset: boolean }[] = [];
   const streams = pair.server.incomingUnidirectionalStreams.getReader();
 
@@ -146,8 +148,11 @@ async function makeFillHarness({
   };
 }
 
-/** A buffered send stream: reset discards everything except the explicitly committed prefix. */
-function makeBufferedFillStream() {
+/**
+ * A buffered send stream: reset discards everything except the explicitly committed prefix. Without `reliableReset` the
+ * writer has no `commit()` — a browser WebTransport today — so a reset discards everything still unread.
+ */
+function makeBufferedFillStream({ reliableReset = true }: { reliableReset?: boolean } = {}) {
   const chunks: Uint8Array[] = [];
   let committed = 0;
   let readIndex = 0;
@@ -188,12 +193,14 @@ function makeBufferedFillStream() {
   });
   const getWriter = writable.getWriter.bind(writable);
 
-  writable.getWriter = () =>
-    Object.assign(getWriter(), {
-      commit() {
-        committed = chunks.length;
-      },
-    });
+  if (reliableReset) {
+    writable.getWriter = () =>
+      Object.assign(getWriter(), {
+        commit() {
+          committed = chunks.length;
+        },
+      });
+  }
 
   return { writable, readable, reset: () => reset };
 }
@@ -1320,38 +1327,163 @@ describe('createMoqtPublishSession', () => {
     await finish();
   });
 
-  it('rejects nonempty fills without reliable reset support while allowing ordinary subscriptions', async () => {
-    const { pair, session, fills, finish } = await makeFillHarness({ reliableReset: false });
+  it("serves a relay's second pull of a live track without reliable reset support", async () => {
+    const bindings: (number | undefined)[] = [];
+    const { pair, session, fills, finish } = await makeFillHarness({
+      reliableReset: false,
+      callbacks: { onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias) },
+    });
+    let largest: { group: number; object: number } | undefined;
+
+    session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog', getLargestObject: () => largest });
+
+    // Moq-relay's upstream SUBSCRIBE (0.14.17 through 0.17.0): Next Object,
+    // plus a fill of the current group's head.
+    const relayPull = (requestId: number) =>
+      openRawRequest(
+        pair.server,
+        encodeSubscribe({
+          requestId,
+          trackNamespace: NAMESPACE,
+          trackName: 'catalog',
+          parameters: {
+            forward: 1,
+            subscriberPriority: 128,
+            locationFilter: { type: 'next-object' },
+            fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+            groupOrder: 'descending',
+            includeProperties: 1,
+          },
+        })
+      );
+
+    // A cross-relay viewer's first pull is the relay's TRACK_INFO probe:
+    // nothing published yet, so there is nothing to fill.
+    const probe = await relayPull(235);
+
+    await vi.waitFor(() => expect(probe.received.map((m) => m.kind)).toEqual(['subscribe-ok']));
+
+    // The probe's bind put the catalog on the wire, then the relay
+    // cancelled it and pulled again for the viewer — now with a nonempty
+    // fill this transport cannot fail reliably. The pull is served anyway.
+    largest = { group: 0, object: 0 };
+    await probe.reset();
+    const pull = await relayPull(237);
+
+    await vi.waitFor(() => {
+      expect(pull.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+      expect(bindings.at(-1)).toBe(237);
+      expect(fills).toEqual([{ requestId: 237, reset: true }]);
+    });
+    expect(pull.ended()).toBe(false);
+
+    // A fill requested by REQUEST_UPDATE is acknowledged and failed the same way.
+    await pull.send(
+      encodeRequestUpdate(239, { fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } } })
+    );
+    await vi.waitFor(() => {
+      expect(pull.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok']);
+      expect(fills).toEqual([
+        { requestId: 237, reset: true },
+        { requestId: 239, reset: true },
+      ]);
+    });
+    expect(pull.ended()).toBe(false);
+    await finish();
+  });
+
+  it('still resets the fill when the reset may discard its header (no reliable reset)', async () => {
+    const fill = makeBufferedFillStream({ reliableReset: false });
+    const { pair, session, finish } = await makeFillHarness({
+      reliableReset: false,
+      openFillStream: async () => fill.writable,
+    });
 
     session.registerTrack({
       trackNamespace: NAMESPACE,
       trackName: 'video',
       getLargestObject: () => ({ group: 4, object: 2 }),
     });
-    const rejected = await openRawRequest(
+    const sub = await openRawRequest(
       pair.server,
       encodeSubscribe({
-        requestId: 235,
+        requestId: 241,
         trackNamespace: NAMESPACE,
         trackName: 'video',
         parameters: { fillParameters: {} },
       })
     );
 
-    await vi.waitFor(() => expect(rejected.ended()).toBe(true));
-    expect(rejected.received).toMatchObject([{ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED }]);
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+      expect(fill.reset()).toBeDefined();
+    });
 
-    const sub = await rawSubscribe(pair.server, 'video', 237);
+    // Nothing preserved the header through the reset: the peer sees only
+    // the reset, and the subscription is unaffected.
+    const reader = new StreamReader(fill.readable);
 
-    await vi.waitFor(() => expect(sub.received[0]?.kind).toBe('subscribe-ok'));
-    await sub.send(encodeRequestUpdate(239, { fillParameters: { locationFilter: { type: 'next-object' } } }));
-    await vi.waitFor(() => expect(sub.received[1]?.kind).toBe('request-ok'));
-    await sub.send(encodeRequestUpdate(241, { fillParameters: {} }));
-    await vi.waitFor(() => expect(sub.ended()).toBe(true));
-    expect(sub.received[2]).toMatchObject({ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED });
-    expect(fills).toEqual([]);
+    await expect(reader.readVarint()).rejects.toThrow('fill fetch streams are not served');
+    expect(sub.ended()).toBe(false);
     await finish();
   });
+
+  it.each([{ headerSurvives: true }, { headerSurvives: false }])(
+    'counts a fill reset without reliable reset in the PUBLISH_DONE Stream Count (header survives: $headerSurvives)',
+    async ({ headerSurvives }) => {
+      const buffered = makeBufferedFillStream({ reliableReset: false });
+      const { pair, session, fills, finish } = await makeFillHarness({
+        reliableReset: false,
+        openFillStream: headerSurvives ? undefined : async () => buffered.writable,
+      });
+      const track = session.registerTrack({
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        getLargestObject: () => ({ group: 4, object: 2 }),
+        getStreamCount: () => 3,
+      });
+      const sub = await openRawRequest(
+        pair.server,
+        encodeSubscribe({
+          requestId: 243,
+          trackNamespace: NAMESPACE,
+          trackName: 'video',
+          parameters: { fillParameters: {} },
+        })
+      );
+
+      await vi.waitFor(() => {
+        expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+
+        if (headerSurvives) expect(fills).toEqual([{ requestId: 243, reset: true }]);
+        else expect(buffered.reset()).toBeDefined();
+      });
+
+      if (!headerSurvives) {
+        // The peer saw only the reset, so it cannot tell the stream
+        // belonged to this subscription.
+        await expect(new StreamReader(buffered.readable).readVarint()).rejects.toThrow(
+          'fill fetch streams are not served'
+        );
+      }
+
+      track.end();
+      await vi.waitFor(() => {
+        expect(sub.ended()).toBe(true);
+      });
+      // §10.12 counts the streams the publisher opened, fill fetch
+      // streams included: three from the track publisher plus the fill,
+      // whether or not its header outlived the reset. A subscriber waits
+      // out a timeout for a stream reset before its header, but one that
+      // receives more streams than the count may close the session.
+      expect(sub.received.at(-1)).toMatchObject({
+        kind: 'publish-done',
+        statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+        streamCount: 4,
+      });
+      await finish();
+    }
+  );
 
   it('rejects a subscription update it cannot apply instead of acknowledging it', async () => {
     const endedRequests: number[] = [];
