@@ -68,6 +68,8 @@ export {
 export type { I18nContext as I18nLitContext } from './i18n/context';
 // i18n — `@videojs/html/i18n` registers `<media-i18n>` / `<media-text>`.
 export { i18nContext } from './i18n/context';
+// Media
+export { installCaptureAttributeReflection } from './media/moq-publish-video';
 // Player
 export * from './player/context';
 export * from './player/create-player';
@@ -79,9 +81,13 @@ export { AlertDialogElement } from './ui/alert-dialog/element';
 // UI Components
 export { AudioTrackRadioGroupElement } from './ui/audio-track-radio-group/element';
 export { BufferingIndicatorElement } from './ui/buffering-indicator/element';
+export { CameraButtonElement } from './ui/camera-button/element';
+export { CameraRadioGroupElement } from './ui/camera-radio-group/element';
 export { CaptionsButtonElement } from './ui/captions-button/element';
 export { CaptionsRadioGroupElement } from './ui/captions-radio-group/element';
+export { CapturePlaceholderElement } from './ui/capture-placeholder/element';
 export { CastButtonElement } from './ui/cast-button/element';
+export { ConnectionIndicatorElement } from './ui/connection-indicator/element';
 export { ContainerElement } from './ui/container/element';
 export { ContextPartElement, type PartContextValue } from './ui/context-part-element';
 export { ControlsBackdropElement } from './ui/controls/backdrop';
@@ -95,6 +101,7 @@ export { DialogDescriptionElement } from './ui/dialog/description';
 export { DialogElement } from './ui/dialog/element';
 export { DialogPopupElement } from './ui/dialog/popup';
 export { DialogTitleElement } from './ui/dialog/title';
+export { EnableDevicesButtonElement } from './ui/enable-devices-button/element';
 export { ErrorDialogElement } from './ui/error-dialog/element';
 export { FullscreenButtonElement } from './ui/fullscreen-button/element';
 export { GestureElement } from './ui/gesture/element';
@@ -121,6 +128,8 @@ export { MenuItemIndicatorElement } from './ui/menu/item-indicator';
 export { MenuRadioGroupElement } from './ui/menu/radio-group';
 export { MenuRadioItemElement } from './ui/menu/radio-item';
 export { MenuSeparatorElement } from './ui/menu/separator';
+export { MicButtonElement } from './ui/mic-button/element';
+export { MicRadioGroupElement } from './ui/mic-radio-group/element';
 export { MuteButtonElement } from './ui/mute-button/element';
 export { PiPButtonElement } from './ui/pip-button/element';
 export { PlayButtonElement } from './ui/play-button/element';
@@ -128,7 +137,11 @@ export { PlaybackRateButtonElement } from './ui/playback-rate-button/element';
 export { PlaybackRateRadioGroupElement } from './ui/playback-rate-radio-group/element';
 export { PopoverElement } from './ui/popover/element';
 export { PosterElement } from './ui/poster/element';
+export { PublishBadgeElement } from './ui/publish-badge/element';
+export { PublishButtonElement } from './ui/publish-button/element';
+export { PublishTimerElement } from './ui/publish-timer/element';
 export { QualityRadioGroupElement } from './ui/quality-radio-group/element';
+export { ScreenShareButtonElement } from './ui/screen-share-button/element';
 export { SeekButtonElement } from './ui/seek-button/element';
 export { SeekIndicatorElement } from './ui/seek-indicator/element';
 export { SeekIndicatorValueElement } from './ui/seek-indicator/value';

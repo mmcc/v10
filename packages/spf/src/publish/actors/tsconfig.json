@@ -1,0 +1,17 @@
+{
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "WebWorker"],
+    "exactOptionalPropertyTypes": false,
+    "declarationDir": "../../../types/publish/actors"
+  },
+  "references": [
+    { "path": "../../../../utils" },
+    { "path": "../../core" },
+    { "path": "../../network" },
+    { "path": "../../media" }
+  ],
+  "include": ["./*.ts", "./tests/**/*.ts"],
+  "exclude": ["./dom/**"]
+}

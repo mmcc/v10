@@ -15,7 +15,9 @@ type CoreSchema = typeof coreSchema;
 
 const componentSources = {
   AudioTrackRadioGroup: '@videojs/react/ui/audio-track-radio-group',
+  CameraRadioGroup: '@videojs/react/ui/camera-radio-group',
   CaptionsRadioGroup: '@videojs/react/ui/captions-radio-group',
+  MicRadioGroup: '@videojs/react/ui/mic-radio-group',
   PlaybackRateRadioGroup: '@videojs/react/ui/playback-rate-radio-group',
   QualityRadioGroup: '@videojs/react/ui/quality-radio-group',
 } as const satisfies Partial<Record<keyof CoreSchema['definitions'], string>>;
@@ -137,6 +139,8 @@ export const reactComponentTarget: ComponentTarget<CoreSchema> = defineComponent
         'audio-track-option': optionTemplate,
         'playback-rate-option': optionTemplate,
         'captions-option': optionTemplate,
+        'camera-option': optionTemplate,
+        'mic-option': optionTemplate,
       },
     },
     types: {

@@ -8,6 +8,7 @@ import type { GraphModule } from 'vjsc/graph';
  */
 export const htmlRenderAliases: ReadonlyMap<string, string> = new Map([
   ['@videojs/core/i18n/text/menu', resolve(import.meta.dirname, '../../../core/src/core/i18n/text/menu.ts')],
+  ['@videojs/core/i18n/text/publish', resolve(import.meta.dirname, '../../../core/src/core/i18n/text/publish.ts')],
   ['@videojs/utils/string', resolve(import.meta.dirname, '../../../utils/src/string/index.ts')],
 ]);
 

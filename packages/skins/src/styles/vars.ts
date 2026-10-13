@@ -313,6 +313,26 @@ export const vars = {
     kind: 'internal',
     description: 'Color of the live-edge indicator dot.',
   },
+  '--media-capture-placeholder-background': {
+    kind: 'public',
+    description: 'Publisher: fill behind the capture placeholder before the camera starts.',
+  },
+  '--media-publish-status-background': {
+    kind: 'internal',
+    description: 'Publisher: dark ground of the status capsule that overlays the camera preview.',
+  },
+  '--media-quality-good-color': {
+    kind: 'internal',
+    description: 'Publisher: connection indicator color for a healthy connection.',
+  },
+  '--media-quality-fair-color': {
+    kind: 'internal',
+    description: 'Publisher: connection indicator color for a degraded connection.',
+  },
+  '--media-quality-poor-color': {
+    kind: 'internal',
+    description: 'Publisher: connection indicator color for a poor connection.',
+  },
   '--media-shadow-separator': {
     kind: 'internal',
     description: 'Highlight drawn under default menu separators.',

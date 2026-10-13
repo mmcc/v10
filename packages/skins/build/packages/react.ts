@@ -13,7 +13,9 @@ const packageRoot = 'packages/react/src';
 const internalRoot = `${packageRoot}/internal/skins`;
 const radioGroupImports = new Set([
   '@videojs/react/ui/audio-track-radio-group',
+  '@videojs/react/ui/camera-radio-group',
   '@videojs/react/ui/captions-radio-group',
+  '@videojs/react/ui/mic-radio-group',
   '@videojs/react/ui/playback-rate-radio-group',
   '@videojs/react/ui/quality-radio-group',
 ]);
@@ -178,7 +180,7 @@ function collectSharedSourcePaths(skins: readonly SkinRoot[]): ReadonlySet<strin
   return shared;
 }
 
-function reactFrameworkImport(specifier: string): string | undefined {
+export function reactFrameworkImport(specifier: string): string | undefined {
   if (specifier === '@videojs/react' || radioGroupImports.has(specifier) || specifier === 'cn') {
     return `${packageRoot}/internal/skin-primitives.ts`;
   }

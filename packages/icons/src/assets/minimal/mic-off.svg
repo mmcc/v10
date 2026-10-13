@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 18 18">
+  <mask id="a" width="18" height="18" x="0" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha">
+    <rect width="18" height="18" fill="#fff"/>
+    <path fill="#000" d="m3.24.76 14 14-2.48 2.48-14-14z"/>
+  </mask>
+  <g mask="url(#a)">
+    <rect width="5" height="9" x="6.5" y="1.5" fill="currentColor" rx="2.5"/>
+    <path stroke="currentColor" stroke-linecap="round" stroke-width="1.5" d="M3.75 8.75a5.25 5.25 0 0 0 10.5 0M9 14v2.25"/>
+  </g>
+  <path fill="currentColor" d="M3.53 2.47a.75.75 0 0 0-1.06 1.06l12 12a.75.75 0 0 0 1.06-1.06z"/>
+</svg>

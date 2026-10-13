@@ -264,6 +264,22 @@ Key system handling for protected content — EME, license fetch, key-rotation, 
 
 ---
 
+### Publish
+
+The publish direction — capture, encode, and MOQT publish composed as an engine family of its own under `packages/spf/src/publish/` (peer of `playback/`). One cluster for the whole direction for now; capture / encode / transport sub-clusters can split out if the publish registry grows.
+
+**Signals.** Consumer-intent slots `endpoint` / `publishActivated` / `captureSource` / `cameraMuted` / `micMuted`; capture facts (`captureStatus`, `captureTracks`, `captureDevices`); encode facts (`encoderSupport`, `activeEncodings`); transport facts (`sessionStatus`, `publishStats`); the domain-partitioned `publishError` slot; behaviors named `acquireCaptureSource` / `probeEncoderSupport` / `pumpMediaFrames` / `openPublishSession` / `setupTrackPublishers` / `deriveCatalog`; actor context slots (encoder pair, publish session, per-track publishers); GoP-equals-MoQ-group mapping (`groupDurationSec`); two-stage backpressure (encoder delta-frame drops, publisher stale-group drops); `getUserMedia` / `getDisplayMedia` / `MediaStreamTrackProcessor` / WebCodecs-encoder framing.
+
+**Docs.** `moq-publish`.
+
+**Foundational primitives.** The publish session driver + actor (`publish/session/publish-session.ts`, publish-side sibling of the subscribe driver); `TrackPublisherActor` + `createSubgroupWriter` (packaged frames → MOQT groups/objects on the wire, with the stale-group drop policy); the WebCodecs encoder actor pair (`publish/actors/dom/`); LOC packaging + MSF catalog building (`media/moq/loc-packaging.ts`, `media/moq/build-catalog.ts` — encode complements of `loc.ts` / `parse-catalog.ts`, round-trip-tested against them).
+
+**Common cross-cluster touchpoints.** Engine lifecycle (the composition / machine-reactor / cleanup conventions transfer wholesale, but the gate is consumer intent — `captureSource`, `publishActivated` — rather than `preload` / `loadActivated`, and there is no presentation/resolver cascade: capture-selection identity plays `state.presentation`'s reset-driver role); capability probing (probe-before-commit transfers to the encode direction — `probeEncoderSupport`'s `isConfigSupported` ladder is `canPlayTrack`'s WebCodecs analog, landing as an async slot-writer per that cluster's sync-vs-async split); MSE / buffer management (deliberately none — the publish direction's DOM boundary is capture + WebCodecs, not `MediaSource`).
+
+**Key check.** Publish behaviors that gate on capture / session state MUST honor the state-exit cleanup contract in the publish direction: stop owned capture tracks, destroy actor clusters in reverse creation order, and end the protocol conversation (clean per-subscription FINs via the track handle's `end()` — never a trailing message) on teardown. The full-pipeline test (`publish/engines/moq/tests/publish-transport.test.ts` — real capture → encode → in-memory transport → the existing subscribe driver) pins the capture→wire lifecycle against regression.
+
+---
+
 ## Cross-cluster patterns
 
 Patterns that recur across clusters. Not clusters themselves — they're the shapes features take when they interact with each other.

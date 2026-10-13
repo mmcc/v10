@@ -59,11 +59,15 @@ import { type BidirectionalStreamLike, openRequestStream, type RequestStream } f
 /**
  * Structural subset of `WebTransport` the session driver needs. A real `WebTransport` instance satisfies this; tests
  * provide an in-memory fake (the same seam pattern as SPF's fetch injection).
+ *
+ * Publish-side fill failure signaling uses WebTransport's `commit()` writer method where it exists, which preserves the
+ * written FETCH_HEADER across the reset. Without it the subscription is still served, and the reset that fails the fill
+ * may discard its header.
  */
 export interface MoqtTransport {
   readonly incomingUnidirectionalStreams: ReadableStream<ReadableStream<Uint8Array>>;
   readonly incomingBidirectionalStreams: ReadableStream<BidirectionalStreamLike>;
-  createUnidirectionalStream(): Promise<WritableStream<Uint8Array>>;
+  createUnidirectionalStream(options?: { sendOrder?: number }): Promise<WritableStream<Uint8Array>>;
   createBidirectionalStream(): Promise<BidirectionalStreamLike>;
   close(closeInfo?: { closeCode?: number; reason?: string }): void;
   readonly closed: Promise<unknown>;

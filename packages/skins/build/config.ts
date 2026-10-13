@@ -2,6 +2,7 @@ import { relative, resolve } from 'node:path';
 
 import type { EntriesOptions, TransformModule } from 'vjsc/plugins';
 
+import { isPublisherEntry, publisherEntryParams } from './publisher.ts';
 import { resolveSkinComponents, resolveSkinStyles } from './transform.ts';
 import { variantParams, variantsFor } from './variants.ts';
 
@@ -11,10 +12,12 @@ export const skinUtils = resolve(sourceDir, 'utils.ts');
 
 export const skinEntries: EntriesOptions = {
   root: sourceDir,
-  include: ['./components/**/*.tsx', './skins/**/skin.tsx', './utils.ts'],
+  include: ['./components/**/*.tsx', './skins/**/skin.tsx', './presets/publisher/skin.tsx', './utils.ts'],
   resolve: {
     params(entry) {
       if (entry.filename === skinUtils) return [{}];
+
+      if (isPublisherEntry(entry.filename)) return publisherEntryParams();
 
       return variantsFor(entry.filename).map(variantParams);
     },
