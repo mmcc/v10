@@ -14,6 +14,7 @@ import {
   encodeRequestUpdate,
   encodeSetup,
   encodeSubscribe,
+  PUBLISH_DONE_STATUS,
   REQUEST_ERROR_CODE,
   SETUP_OPTION,
   TRACK_PROPERTY,
@@ -79,9 +80,11 @@ function collectTrack(
 async function makeFillHarness({
   reliableReset = true,
   openFillStream,
+  callbacks,
 }: {
   reliableReset?: boolean;
   openFillStream?: () => Promise<WritableStream<Uint8Array>>;
+  callbacks?: MoqtPublishSessionCallbacks;
 } = {}) {
   const pair = createTransportPair();
   const openUniStream = pair.client.createUnidirectionalStream.bind(pair.client);
@@ -101,7 +104,7 @@ async function makeFillHarness({
     return stream;
   };
 
-  const session = createMoqtPublishSession(pair.client);
+  const session = createMoqtPublishSession(pair.client, { callbacks });
   const fills: { requestId: number; reset: boolean }[] = [];
   const streams = pair.server.incomingUnidirectionalStreams.getReader();
 
@@ -145,8 +148,11 @@ async function makeFillHarness({
   };
 }
 
-/** A buffered send stream: reset discards everything except the explicitly committed prefix. */
-function makeBufferedFillStream() {
+/**
+ * A buffered send stream: reset discards everything except the explicitly committed prefix. Without `reliableReset` the
+ * writer has no `commit()` — a browser WebTransport today — so a reset discards everything still unread.
+ */
+function makeBufferedFillStream({ reliableReset = true }: { reliableReset?: boolean } = {}) {
   const chunks: Uint8Array[] = [];
   let committed = 0;
   let readIndex = 0;
@@ -187,12 +193,14 @@ function makeBufferedFillStream() {
   });
   const getWriter = writable.getWriter.bind(writable);
 
-  writable.getWriter = () =>
-    Object.assign(getWriter(), {
-      commit() {
-        committed = chunks.length;
-      },
-    });
+  if (reliableReset) {
+    writable.getWriter = () =>
+      Object.assign(getWriter(), {
+        commit() {
+          committed = chunks.length;
+        },
+      });
+  }
 
   return { writable, readable, reset: () => reset };
 }
@@ -534,7 +542,7 @@ describe('createMoqtPublishSession', () => {
     subscriber.destroy();
   });
 
-  it('ends a track by FINing its subscription streams with no trailing message', async () => {
+  it('ends a track with PUBLISH_DONE (TRACK_ENDED and the stream count), then FIN', async () => {
     const endedRequests: number[] = [];
     const bindings: (number | undefined)[] = [];
     const { pair, session, subscriber } = makePublishHarness({
@@ -543,7 +551,11 @@ describe('createMoqtPublishSession', () => {
     });
 
     await session.ready;
-    const track = session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'video' });
+    const track = session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getStreamCount: (trackAlias) => (trackAlias === 21 ? 4 : 0),
+    });
 
     const subscribe = await rawSubscribe(pair.server, 'video', 21);
 
@@ -560,10 +572,10 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(subscribe.ended()).toBe(true);
     });
-    // A bare FIN is the clean track end. Any byte after
-    // SUBSCRIBE_OK — the old PUBLISH_DONE — makes moq-lite-rs abort the
-    // track for every downstream viewer instead of finishing it.
-    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    // moq-relay 0.17.0 forwards this as "track ended"; a bare FIN
+    // reaches viewers as "internal error".
+    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
+    expect(subscribe.received[1]).toMatchObject({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 4 });
 
     // The peer closing its side afterwards must not double-report.
     void subscribe.fin();
@@ -600,7 +612,13 @@ describe('createMoqtPublishSession', () => {
     await vi.waitFor(() => {
       expect(subscribe.ended()).toBe(true);
     });
-    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    // No stream-count source registered: the count is the 2^64−1
+    // "unknown" sentinel, which decodes as undefined.
+    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
+    expect(subscribe.received[1]).toMatchObject({
+      statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+      streamCount: undefined,
+    });
     subscriber.destroy();
   });
 
@@ -1088,6 +1106,45 @@ describe('createMoqtPublishSession', () => {
     await finish();
   });
 
+  it('counts fill fetch streams in the PUBLISH_DONE Stream Count (§10.12)', async () => {
+    const { pair, session, fills, finish } = await makeFillHarness();
+    const track = session.registerTrack({
+      trackNamespace: NAMESPACE,
+      trackName: 'video',
+      getLargestObject: () => ({ group: 4, object: 2 }),
+      getStreamCount: () => 3,
+    });
+    const request = await openRawRequest(
+      pair.server,
+      encodeSubscribe({
+        requestId: 207,
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        parameters: {
+          forward: 1,
+          locationFilter: { type: 'next-object' },
+          fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+        },
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(fills).toEqual([{ requestId: 207, reset: true }]);
+    });
+
+    track.end();
+    await vi.waitFor(() => {
+      expect(request.ended()).toBe(true);
+    });
+    // Three data streams from the track publisher plus the reset fill.
+    expect(request.received.at(-1)).toMatchObject({
+      kind: 'publish-done',
+      statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+      streamCount: 4,
+    });
+    await finish();
+  });
+
   it('opens no fill fetch stream for an empty fill range (§5.1.3)', async () => {
     const { pair, session, fills, finish } = await makeFillHarness();
     let largest: { group: number; object: number } | undefined;
@@ -1270,38 +1327,229 @@ describe('createMoqtPublishSession', () => {
     await finish();
   });
 
-  it('rejects nonempty fills without reliable reset support while allowing ordinary subscriptions', async () => {
-    const { pair, session, fills, finish } = await makeFillHarness({ reliableReset: false });
+  it.each([{ reliableReset: true }, { reliableReset: false }])(
+    'leaves a fill still opening when the track ends out of the Stream Count, headerless (reliable reset: $reliableReset)',
+    async ({ reliableReset }) => {
+      let resolveOpen!: (stream: WritableStream<Uint8Array>) => void;
+      const openFillStream = vi.fn(
+        () =>
+          new Promise<WritableStream<Uint8Array>>((resolve) => {
+            resolveOpen = resolve;
+          })
+      );
+      const { pair, session, finish } = await makeFillHarness({ reliableReset, openFillStream });
+      const track = session.registerTrack({
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        getLargestObject: () => ({ group: 4, object: 2 }),
+        getStreamCount: () => 3,
+      });
+      const sub = await rawSubscribe(pair.server, 'video', 245);
+
+      await vi.waitFor(() => expect(sub.received[0]?.kind).toBe('subscribe-ok'));
+      await sub.send(encodeRequestUpdate(247, { fillParameters: {} }));
+      await vi.waitFor(() => expect(openFillStream).toHaveBeenCalledOnce());
+
+      // The track ends while the fill's stream is still opening.
+      track.end();
+      await vi.waitFor(() => expect(sub.ended()).toBe(true));
+
+      const write = vi.fn();
+      const abort = vi.fn();
+
+      resolveOpen(new WritableStream<Uint8Array>({ write, abort }));
+      await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+
+      // A fill is counted in the same step that commits it to its
+      // FETCH_HEADER, as the track publisher counts subgroup streams.
+      // This one opened after PUBLISH_DONE, so it gets no header and is
+      // reset bare: the peer cannot attribute it to the subscription, so
+      // leaving it out of the count cannot put the peer over it.
+      expect(write).not.toHaveBeenCalled();
+      expect(sub.received.at(-1)).toMatchObject({
+        kind: 'publish-done',
+        statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+        streamCount: 3,
+      });
+      await finish();
+    }
+  );
+
+  it.each([{ probeEnds: 'before' }, { probeEnds: 'after' }])(
+    "serves a relay's second pull of a live track without reliable reset support (probe ends $probeEnds the pull)",
+    async ({ probeEnds }) => {
+      const bindings: (number | undefined)[] = [];
+      const ended: number[] = [];
+      const { pair, session, fills, finish } = await makeFillHarness({
+        reliableReset: false,
+        callbacks: {
+          onTrackBinding: ({ trackAlias }) => bindings.push(trackAlias),
+          onSubscribeEnd: ({ requestId }) => ended.push(requestId),
+        },
+      });
+      let largest: { group: number; object: number } | undefined;
+
+      session.registerTrack({ trackNamespace: NAMESPACE, trackName: 'catalog', getLargestObject: () => largest });
+
+      // Moq-relay's upstream SUBSCRIBE (0.14.17 through 0.17.0): Next Object,
+      // plus a fill of the current group's head.
+      const relayPull = (requestId: number) =>
+        openRawRequest(
+          pair.server,
+          encodeSubscribe({
+            requestId,
+            trackNamespace: NAMESPACE,
+            trackName: 'catalog',
+            parameters: {
+              forward: 1,
+              subscriberPriority: 128,
+              locationFilter: { type: 'next-object' },
+              fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+              groupOrder: 'descending',
+              includeProperties: 1,
+            },
+          })
+        );
+
+      // A cross-relay viewer's first pull is the relay's TRACK_INFO probe:
+      // nothing published yet, so there is nothing to fill.
+      const probe = await relayPull(235);
+
+      await vi.waitFor(() => expect(probe.received.map((m) => m.kind)).toEqual(['subscribe-ok']));
+
+      // The probe's bind put the catalog on the wire, then the relay
+      // cancelled it and pulled again for the viewer — now with a nonempty
+      // fill this transport cannot fail reliably. The pull is served anyway.
+      largest = { group: 0, object: 0 };
+
+      if (probeEnds === 'before') await probe.reset();
+
+      const pull = await relayPull(237);
+
+      await vi.waitFor(() => {
+        expect(pull.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+        expect(bindings.at(-1)).toBe(237);
+        expect(fills).toEqual([{ requestId: 237, reset: true }]);
+      });
+
+      // The probe's end may be handled after the pull is bound: it reports
+      // the newest live binding, not an unbind, so the pull keeps it.
+      if (probeEnds === 'after') await probe.reset();
+
+      await vi.waitFor(() => expect(ended).toContain(235));
+      expect(bindings.at(-1)).toBe(237);
+      expect(pull.ended()).toBe(false);
+
+      // A fill requested by REQUEST_UPDATE is acknowledged and failed the same way.
+      await pull.send(
+        encodeRequestUpdate(239, {
+          fillParameters: { locationFilter: { type: 'relative-group', groupsBeforeNext: 1 } },
+        })
+      );
+      await vi.waitFor(() => {
+        expect(pull.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'request-ok']);
+        expect(fills).toEqual([
+          { requestId: 237, reset: true },
+          { requestId: 239, reset: true },
+        ]);
+      });
+      expect(pull.ended()).toBe(false);
+      await finish();
+    }
+  );
+
+  it('still resets the fill when the reset may discard its header (no reliable reset)', async () => {
+    const fill = makeBufferedFillStream({ reliableReset: false });
+    const { pair, session, finish } = await makeFillHarness({
+      reliableReset: false,
+      openFillStream: async () => fill.writable,
+    });
 
     session.registerTrack({
       trackNamespace: NAMESPACE,
       trackName: 'video',
       getLargestObject: () => ({ group: 4, object: 2 }),
     });
-    const rejected = await openRawRequest(
+    const sub = await openRawRequest(
       pair.server,
       encodeSubscribe({
-        requestId: 235,
+        requestId: 241,
         trackNamespace: NAMESPACE,
         trackName: 'video',
         parameters: { fillParameters: {} },
       })
     );
 
-    await vi.waitFor(() => expect(rejected.ended()).toBe(true));
-    expect(rejected.received).toMatchObject([{ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED }]);
+    await vi.waitFor(() => {
+      expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+      expect(fill.reset()).toBeDefined();
+    });
 
-    const sub = await rawSubscribe(pair.server, 'video', 237);
+    // Nothing preserved the header through the reset: the peer sees only
+    // the reset, and the subscription is unaffected.
+    const reader = new StreamReader(fill.readable);
 
-    await vi.waitFor(() => expect(sub.received[0]?.kind).toBe('subscribe-ok'));
-    await sub.send(encodeRequestUpdate(239, { fillParameters: { locationFilter: { type: 'next-object' } } }));
-    await vi.waitFor(() => expect(sub.received[1]?.kind).toBe('request-ok'));
-    await sub.send(encodeRequestUpdate(241, { fillParameters: {} }));
-    await vi.waitFor(() => expect(sub.ended()).toBe(true));
-    expect(sub.received[2]).toMatchObject({ kind: 'request-error', errorCode: REQUEST_ERROR_CODE.NOT_SUPPORTED });
-    expect(fills).toEqual([]);
+    await expect(reader.readVarint()).rejects.toThrow('fill fetch streams are not served');
+    expect(sub.ended()).toBe(false);
     await finish();
   });
+
+  it.each([{ headerSurvives: true }, { headerSurvives: false }])(
+    'counts a fill reset without reliable reset in the PUBLISH_DONE Stream Count (header survives: $headerSurvives)',
+    async ({ headerSurvives }) => {
+      const buffered = makeBufferedFillStream({ reliableReset: false });
+      const { pair, session, fills, finish } = await makeFillHarness({
+        reliableReset: false,
+        openFillStream: headerSurvives ? undefined : async () => buffered.writable,
+      });
+      const track = session.registerTrack({
+        trackNamespace: NAMESPACE,
+        trackName: 'video',
+        getLargestObject: () => ({ group: 4, object: 2 }),
+        getStreamCount: () => 3,
+      });
+      const sub = await openRawRequest(
+        pair.server,
+        encodeSubscribe({
+          requestId: 243,
+          trackNamespace: NAMESPACE,
+          trackName: 'video',
+          parameters: { fillParameters: {} },
+        })
+      );
+
+      await vi.waitFor(() => {
+        expect(sub.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+
+        if (headerSurvives) expect(fills).toEqual([{ requestId: 243, reset: true }]);
+        else expect(buffered.reset()).toBeDefined();
+      });
+
+      if (!headerSurvives) {
+        // The peer saw only the reset, so it cannot tell the stream
+        // belonged to this subscription.
+        await expect(new StreamReader(buffered.readable).readVarint()).rejects.toThrow(
+          'fill fetch streams are not served'
+        );
+      }
+
+      track.end();
+      await vi.waitFor(() => {
+        expect(sub.ended()).toBe(true);
+      });
+      // §10.12 counts the streams the publisher opened, fill fetch
+      // streams included: three from the track publisher plus the fill,
+      // whether or not its header outlived the reset. A subscriber waits
+      // out a timeout for a stream reset before its header, but one that
+      // receives more streams than the count may close the session.
+      expect(sub.received.at(-1)).toMatchObject({
+        kind: 'publish-done',
+        statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED,
+        streamCount: 4,
+      });
+      await finish();
+    }
+  );
 
   it('rejects a subscription update it cannot apply instead of acknowledging it', async () => {
     const endedRequests: number[] = [];
@@ -1432,12 +1680,12 @@ describe('createMoqtPublishSession', () => {
 
     session.close();
     await vi.waitFor(() => {
-      // The announce is retracted and the subscription FINed cleanly
-      // before the transport goes away.
+      // The announce is retracted and the track ended cleanly before the
+      // transport goes away.
       expect(solicitation.received.map((m) => m.kind)).toEqual(['request-ok', 'namespace', 'namespace-done']);
       expect(subscribe.ended()).toBe(true);
     });
-    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok']);
+    expect(subscribe.received.map((m) => m.kind)).toEqual(['subscribe-ok', 'publish-done']);
     expect(controlFrames.map((m) => m.kind)).toEqual(['setup']);
   });
 

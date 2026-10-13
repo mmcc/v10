@@ -37,11 +37,15 @@ const MESSAGE_TYPE = {
   REQUEST_ERROR: 0x5,
   REQUEST_OK: 0x7,
   NAMESPACE: 0x8,
+  PUBLISH_DONE: 0xb,
   NAMESPACE_DONE: 0xe,
   FETCH: 0x16,
   PUBLISH: 0x1d,
   SUBSCRIBE_NAMESPACE: 0x50,
 } as const;
+
+/** PUBLISH_DONE status codes (§10.12) this relay sends its players. */
+const PUBLISH_DONE_INTERNAL_ERROR = 0x0;
 
 /** REQUEST_ERROR code for "nothing published in that range" (§10.6.1). */
 const ERROR_INVALID_RANGE = 0x11;
@@ -334,6 +338,11 @@ function encodeSubscribeOk(trackAlias: number): Uint8Array {
   return frame(MESSAGE_TYPE.SUBSCRIBE_OK, new Writer().varint(trackAlias).varint(0).toBytes());
 }
 
+function encodePublishDone(statusCode: number, streamCount: number): Uint8Array {
+  // Status Code + Stream Count + an empty Reason Phrase.
+  return frame(MESSAGE_TYPE.PUBLISH_DONE, new Writer().varint(statusCode).varint(streamCount).varint(0).toBytes());
+}
+
 /**
  * SUBSCRIBE_NAMESPACE toward the publisher (§10.18): the empty prefix solicits every namespace the publisher will
  * announce — the same solicitation moq-relay 0.14.7 opens right after SETUP.
@@ -414,10 +423,11 @@ interface PlayerSubscription {
   trackAlias: number;
   deliver(object: BufferedObject): void;
   /**
-   * End this subscription from the relay side: FIN toward the player and cancel its request stream, so its teardown
-   * removes the entry. Used when the upstream track is aborted for every viewer.
+   * End this subscription from the relay side: with a `statusCode`, PUBLISH_DONE (§10.12, counting the streams this
+   * subscription was sent) and then FIN; without one, a bare FIN. Then cancel its request stream, so its teardown
+   * removes the entry.
    */
-  end(): void;
+  end(statusCode?: number): void;
 }
 
 interface TrackBuffer {
@@ -662,8 +672,8 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
 
     /**
      * One live upstream subscription per track: SUBSCRIBE, bind the SUBSCRIBE_OK's alias for the data-stream router,
-     * then hold the stream open. It ends by FIN alone (no PUBLISH_DONE exists in this flow) — the publisher's, ending
-     * the track for good, or our own via `handle.release()`, withdrawing a track no player watches.
+     * then hold the stream open. It ends with the publisher's PUBLISH_DONE and FIN, ending the track for good, or with
+     * our own FIN via `handle.release()`, withdrawing a track no player watches.
      */
     const runUpstreamSubscription = async (
       track: TrackBuffer,
@@ -692,7 +702,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
             const reason = fields.string();
 
             if (errorCode === ERROR_DOES_NOT_EXIST && track.ended) {
-              // Done, not late: the publisher FINed this track and has
+              // Done, not late: the publisher ended this track and has
               // not re-registered it, so DOES_NOT_EXIST is terminal —
               // mirror the real relay, which aborts the request rather
               // than retrying, by ending the late subscribers. Each
@@ -767,20 +777,35 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           `upstream SUBSCRIBE ${track.name} → alias ${trackAlias}${timescale === undefined ? '' : ` (timescale ${timescale})`}`
         );
 
-        // Hold for the FIN — the publisher's clean track end, or our own
-        // release. A subscription ends by FIN *alone*: any byte after
-        // SUBSCRIBE_OK is a protocol violation, and the real relay
-        // aborts the track for every viewer — mirror that by ending each
-        // downstream subscription rather than silently draining.
-        if (!(await reader.atEnd())) {
-          log(`upstream ${track.name}: data after SUBSCRIBE_OK — aborting the track for its viewers`);
+        // Hold for the end — the publisher's PUBLISH_DONE then FIN (the
+        // clean track end), or our own release. Anything else after
+        // SUBSCRIBE_OK aborts the track for every viewer.
+        let publishDoneStatus: number | undefined;
 
-          for (const subscriber of [...track.subscribers]) subscriber.end();
-        } else if (handle.released) {
+        if (!(await reader.atEnd())) {
+          // A truncated or malformed frame aborts the track too — never
+          // leave its viewers attached to an upstream that is gone.
+          const message = await readControlFrame(reader).catch(() => undefined);
+          const clean = message?.type === MESSAGE_TYPE.PUBLISH_DONE && (await reader.atEnd().catch(() => false));
+
+          if (!message || !clean) {
+            const what = message ? `unexpected 0x${message.type.toString(16)}` : 'malformed frame';
+
+            log(`upstream ${track.name}: ${what} after SUBSCRIBE_OK — aborting the track`);
+
+            for (const subscriber of [...track.subscribers]) subscriber.end(PUBLISH_DONE_INTERNAL_ERROR);
+
+            return;
+          }
+
+          publishDoneStatus = new Reader(message.body).varint();
+        }
+
+        if (handle.released && publishDoneStatus === undefined) {
           log(`upstream unsubscribe ${track.name} — no player interest`);
         } else {
-          // The publisher's FIN is the END of the track: propagate it —
-          // the same clean FIN toward every attached viewer — so no
+          // The publisher's PUBLISH_DONE + FIN is the END of the track:
+          // propagate it to every attached viewer, so no
           // player hangs on a dead track and a later publisher session
           // cannot resume stale subscriptions. The downstream teardowns'
           // releaseUpstream calls land after this routine's finally has
@@ -793,7 +818,11 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           // handed the final frames of a track that is over.
           track.groups.clear();
 
-          for (const subscriber of [...track.subscribers]) subscriber.end();
+          // Forward the publisher's status, the way moq-relay 0.17.0 does
+          // — a bare FIN reaches its viewers as INTERNAL_ERROR.
+          for (const subscriber of [...track.subscribers]) {
+            subscriber.end(publishDoneStatus ?? PUBLISH_DONE_INTERNAL_ERROR);
+          }
         }
       } catch {
         // Stream reset or session teardown — the close path owns cleanup.
@@ -1234,15 +1263,25 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         // Announce-and-serve: player interest is what makes the relay
         // SUBSCRIBE upstream (catalog first, then the catalog's tracks).
         requestUpstreamTrack?.(track);
+        // One stream per delivered object — the PUBLISH_DONE Stream Count.
+        let deliveredStreams = 0;
+
         subscription = {
           trackAlias,
-          deliver: (object) =>
+          deliver: (object) => {
+            deliveredStreams++;
             publishObject(
               encodeObjectStream(trackAlias, object.groupId, object.objectId, object.properties, object.payload)
-            ),
-          end: () => {
-            // FIN toward the player (the clean track end), then cancel
-            // our read side — the loop's teardown removes the entry.
+            );
+          },
+          end: (statusCode) => {
+            // PUBLISH_DONE (when ending with a status) and FIN toward the
+            // player, then cancel our read side — the loop's teardown
+            // removes the entry.
+            if (statusCode !== undefined) {
+              void writer.write(encodePublishDone(statusCode, deliveredStreams)).catch(() => {});
+            }
+
             writer.close().catch(() => {});
             abort();
           },

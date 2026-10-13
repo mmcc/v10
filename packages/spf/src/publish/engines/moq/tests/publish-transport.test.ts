@@ -221,8 +221,8 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
     expect(overlay.objects[0]!.objectId).toBe(0);
 
     // Unpublish: the announce is retracted with NAMESPACE_DONE on the
-    // solicitation stream (each subscribe stream ends with a bare FIN —
-    // PUBLISH_DONE never appears) and the session returns to idle.
+    // solicitation stream (each subscribe stream ends with PUBLISH_DONE
+    // and a FIN) and the session returns to idle.
     media.unpublish();
     await vi.waitFor(
       () => {

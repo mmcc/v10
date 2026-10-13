@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
+import { PUBLISH_DONE_STATUS } from '../../../../network/moqt/control-messages';
 import { createRelayHub } from '../../../tests/helpers/relay-hub';
 import { createMoqPublishEngine } from '../engine';
 import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-harness';
@@ -219,13 +220,14 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     expect(hub.publisherConnections()).toBe(connectionsBeforeScreen);
     expect(publisher.state.sessionStatus.get()).toBe('live');
 
-    // Orderly unpublish ends every track — now including screen — by
-    // FINing the hub's subscribe streams (a bare FIN is the clean track
-    // end; PUBLISH_DONE never appears under announce-and-serve).
+    // Orderly unpublish ends every track — now including screen — with
+    // PUBLISH_DONE (TRACK_ENDED) and a FIN on the hub's subscribe streams.
     publisher.state.publishActivated.set(false);
     await vi.waitFor(
       () => {
-        const endedTracks = hub.trackEnds.filter((end) => end.kind === 'subscribe-fin').map((end) => end.trackName);
+        const endedTracks = hub.trackEnds
+          .filter((end) => end.kind === 'track-end' && end.statusCode === PUBLISH_DONE_STATUS.TRACK_ENDED)
+          .map((end) => (end.kind === 'track-end' ? end.trackName : ''));
 
         expect(endedTracks).toContain('video');
         expect(endedTracks).toContain('screen');
