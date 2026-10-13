@@ -643,8 +643,15 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
    * Answer a nonempty fill request (see `#fillRequested`). This origin serves no fills, so it meets the §5.1.3.1
    * requirement the honest way: open a uni stream, write the FETCH_HEADER carrying the initiating Request ID so the
    * subscriber can correlate the failure, then reset it. A reset is the fill-failure signal — a FIN would falsely claim
-   * the fill range was delivered in full. Moq-relay 0.14.17 requests the current group this way; the reliable reset
-   * keeps that join from waiting on a fill that never arrives.
+   * the fill range was delivered in full. Moq-relay requests the current group this way (0.14.17 through 0.17.0) on
+   * every upstream SUBSCRIBE once the track has content.
+   *
+   * The header survives the reset only where the writer has WebTransport's `commit()` (RESET_STREAM_AT's reliable
+   * prefix). Without it (Chromium as of 147) the subscription is still served: the reset may discard the header, and
+   * the subscriber then sees no fill at all — which, like a failed one, leaves its join at the next group boundary.
+   * Refusing the SUBSCRIBE instead would fail every relay's second pull of a live track (the real subscribe after a
+   * cross-relay TRACK_INFO probe, or any re-subscribe after the last viewer left), so nothing would play across a relay
+   * mesh.
    */
   #openAndResetFill(requestId: number, subscriber: SubscriberStream): void {
     const fill: FillStream = {};
@@ -660,20 +667,26 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
 
         if (!subscriber.fills.has(fill) || subscriber.finished) return;
 
-        // All WebTransport writers expose the same capabilities, probed
-        // on the control writer before accepting a nonempty fill. Check
-        // this stream too so an inconsistent injected transport never
-        // writes a header it cannot preserve through the reset.
-        if (!hasMethods(writer, ['commit'])) return;
-
+        // PUBLISH_DONE's Stream Count includes fill fetch streams
+        // (§10.12). Count in the same synchronous step that commits this
+        // stream to its FETCH_HEADER — the track publisher's rule for
+        // subgroup streams — so any PUBLISH_DONE covers every fill that
+        // carries a header. A fill still opening when the track ended
+        // was stopped by the guard above: it is reset with no header, so
+        // the subscriber cannot attribute it to this subscription and
+        // leaving it uncounted cannot put the subscriber over the count.
+        // A counted fill whose reset discards its header (no commit())
+        // or whose write rejects over-counts by one; for that §10.12 has
+        // the subscriber fall back to a timeout.
         subscriber.fillStreams++;
         await writer.write(encodeFetchHeader(requestId));
 
         if (!subscriber.fills.has(fill) || subscriber.finished) return;
 
         // write() only hands bytes to the transport. commit() includes
-        // them in the reliable prefix of RESET_STREAM_AT.
-        writer.commit();
+        // them in the reliable prefix of RESET_STREAM_AT; without it the
+        // reset below is best-effort for the header.
+        if (hasMethods(writer, ['commit'])) writer.commit();
       } catch {
         // Session closing or the peer went away before the header landed.
       } finally {
@@ -1044,18 +1057,6 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
       subscribe.parameters.fillParameters
     );
 
-    if (fillRequested && !hasMethods(this.#controlWriter, ['commit'])) {
-      try {
-        await writer.write(encodeRequestError(REQUEST_ERROR_CODE.NOT_SUPPORTED, 'fill requires reliable stream reset'));
-        await writer.close();
-      } catch {
-        // Peer cancelled.
-      }
-
-      await reader.cancel();
-      return;
-    }
-
     track.subscribers.push(subscriber);
 
     // STOP_SENDING on the response direction cancels the subscription
@@ -1166,7 +1167,6 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
           // here, immediately resets) a fill fetch stream keyed by the
           // update's own Request ID (§5.1.3.1); an empty range opens none.
           const fillRequested = this.#fillRequested(largestObject, subscriber, subscribe.parameters, fillParameters);
-          const unsupportedFill = fillRequested && !hasMethods(this.#controlWriter, ['commit']);
 
           this.#callbacks.onRequestUpdate?.({
             requestId: subscribe.requestId,
@@ -1175,7 +1175,7 @@ class MoqtPublishSessionImpl implements MoqtPublishSession {
           });
 
           if (!subscriber.finished) {
-            if (Object.keys(unsupported).length > 0 || unsupportedFill) {
+            if (Object.keys(unsupported).length > 0) {
               // Acknowledging an update we did not apply would leave the
               // peer serving stale expectations (a filter or range it
               // believes is in effect). Forward State is applied above
