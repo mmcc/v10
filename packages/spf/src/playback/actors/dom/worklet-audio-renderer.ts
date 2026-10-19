@@ -59,6 +59,8 @@ export interface AudioPlayerInputOptions {
 export interface AudioPlayerInputStats {
   /** Times the worklet ran dry while playing and audio came back within the jitter ceiling. Cumulative. */
   readonly underruns: number;
+  /** Whether the worklet is playing, rather than filling to its target. */
+  readonly playing: boolean;
   /** Decoded audio the worklet holds. */
   readonly bufferedUs: number;
   /** How much the worklet holds before it plays, at the start and after running dry. */
@@ -222,7 +224,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
    * first report after resume. The core times its reports on the same source (`localNow`), so its render clock's
    * calibration does not carry a pause into the first reports after it either.
    */
-  let anchor: { mediaUs: number; contextUs: number; placed: boolean } | undefined;
+  let anchor: { mediaUs: number; contextUs: number; placed: boolean; frozen?: boolean } | undefined;
   /** Bumped per input, so a report from a removed input cannot anchor its replacement. */
   let inputGeneration = 0;
   /**
@@ -236,6 +238,11 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
    * the hold, and the clock would otherwise step back by that much.
    */
   let holdFloorUs: number | undefined;
+  /**
+   * The core has reported itself stopped since the dry point was set. Until it has, a report near the dry point is the
+   * tail of the audio before it, still in flight, and must not end the hold.
+   */
+  let stoppedSinceDry = false;
 
   const outputLatencyUs = (): number =>
     ((audioContext.baseLatency ?? 0) + (audioContext.outputLatency ?? 0)) * 1_000_000;
@@ -243,7 +250,8 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   const contextNowUs = (): number => audioContext.currentTime * 1_000_000;
 
   /** The audible position extrapolated from the anchor, ignoring every limit. */
-  const extrapolatedUs = (): number | undefined => anchor && anchor.mediaUs + (contextNowUs() - anchor.contextUs);
+  const extrapolatedUs = (): number | undefined =>
+    anchor && (anchor.frozen ? anchor.mediaUs : anchor.mediaUs + (contextNowUs() - anchor.contextUs));
 
   /** The clock one input reports into; it goes deaf once that input is replaced. */
   const createClock = (): AudioPlayerClock => {
@@ -264,6 +272,20 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     };
   };
 
+  const raiseHoldFloor = (heldUs: number): void => {
+    holdFloorUs = Math.max(holdFloorUs ?? heldUs, heldUs);
+  };
+
+  /**
+   * A placed clock runs from the anchor until the core plays, but never past the audio pushed: a fill that stays short
+   * of the jitter target cannot start the worklet, and the clock would otherwise run on through audio not there.
+   */
+  const placedPositionUs = (): number | undefined => {
+    const positionUs = extrapolatedUs();
+
+    return positionUs === undefined || pushedEndUs === undefined ? positionUs : Math.min(positionUs, pushedEndUs);
+  };
+
   /** `timestampUs` is audible at context time `atUs` (default now). */
   const reportAudio = (timestampUs: number, atUs: number | undefined): void => {
     // Only audio pushed on this timeline: a report already in flight when
@@ -280,12 +302,18 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     // The refill's first report ends the hold. Its floor is what the clock
     // reads at that moment — the audible position, which can still be short
     // of the dry point while the device plays out what it had queued.
-    if (dryLimitUs !== undefined && timestampUs >= dryLimitUs - REPORT_TOLERANCE_US) {
-      const heldUs = Math.min(extrapolatedUs() ?? dryLimitUs, dryLimitUs);
-
-      holdFloorUs = Math.max(holdFloorUs ?? heldUs, heldUs);
+    if (
+      dryLimitUs !== undefined &&
+      ((stoppedSinceDry && timestampUs >= dryLimitUs - REPORT_TOLERANCE_US) ||
+        timestampUs > dryLimitUs + REPORT_TOLERANCE_US)
+    ) {
+      raiseHoldFloor(Math.min(extrapolatedUs() ?? dryLimitUs, dryLimitUs));
       dryLimitUs = undefined;
     }
+
+    // Likewise the first report after a placed re-join, which is dated ahead
+    // of the placed clock by the output latency.
+    if (anchor?.placed) raiseHoldFloor(placedPositionUs()!);
 
     anchor = { mediaUs: timestampUs, contextUs: atUs ?? contextNowUs(), placed: false };
   };
@@ -300,6 +328,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     anchor = undefined;
     dryLimitUs = undefined;
     holdFloorUs = undefined;
+    stoppedSinceDry = false;
   };
 
   const removeInput = (): void => {
@@ -350,7 +379,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
    * rendered within the jitter target, so the worklet holds about that much and the rest waits in the subscriber.
    */
   const isDue = (timestampUs: number, stats: AudioPlayerInputStats): boolean => {
-    const positionUs = extrapolatedUs();
+    const positionUs = anchor?.placed ? placedPositionUs() : extrapolatedUs();
 
     if (positionUs === undefined || dryLimitUs !== undefined) {
       if (
@@ -413,7 +442,16 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
         positionUs + outputLatencyUs() >= pushedEndUs
       ) {
         dryLimitUs = pushedEndUs;
+        stoppedSinceDry = false;
         fillStartUs = undefined;
+      }
+
+      if (dryLimitUs !== undefined && !stats.playing) stoppedSinceDry = true;
+
+      // A placed clock that reaches the end of the audio pushed stops there
+      // until the core plays, so refill frames cannot drag it forward.
+      if (anchor?.placed && !anchor.frozen && pushedEndUs !== undefined && positionUs! >= pushedEndUs) {
+        anchor = { mediaUs: pushedEndUs, contextUs: contextNowUs(), placed: true, frozen: true };
       }
 
       for (;;) {
@@ -493,7 +531,9 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
 
     getClockTimeUs(): number | undefined {
       const positionUs = extrapolatedUs();
-      if (positionUs === undefined || anchor?.placed) return positionUs;
+      if (positionUs === undefined) return undefined;
+
+      if (anchor?.placed) return placedPositionUs();
 
       // Never past the audio pushed, and once the worklet ran dry never past
       // where it did: the clock holds through an underrun and resumes when

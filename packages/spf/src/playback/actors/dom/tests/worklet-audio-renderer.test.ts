@@ -41,7 +41,7 @@ interface FakeInput extends AudioPlayerInput {
   pushed: number[];
   cuts: number;
   removed: boolean;
-  stats: { underruns: number; bufferedUs: number; jitterTargetUs: number };
+  stats: { underruns: number; playing: boolean; bufferedUs: number; jitterTargetUs: number };
 }
 
 /** The core's surface with no audio behind it: pushes are recorded, and the test plays the worklet's reports. */
@@ -57,7 +57,7 @@ function createFakePlayer() {
         pushed: [],
         cuts: 0,
         removed: false,
-        stats: { underruns: 0, bufferedUs: 0, jitterTargetUs: JITTER_TARGET_US },
+        stats: { underruns: 0, playing: true, bufferedUs: 0, jitterTargetUs: JITTER_TARGET_US },
         push(frame) {
           input.pushed.push(frame.timestampUs);
         },
@@ -207,6 +207,7 @@ describe('createWorkletAudioRendererActor', () => {
     expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
 
     // Audio comes back: the refill moves the pushed end, not the clock.
+    fake.inputs[0]!.stats.playing = false;
     source.queue.push(...framesBetween(80_000, 400_000));
     at(300_000);
     tick();
@@ -228,6 +229,7 @@ describe('createWorkletAudioRendererActor', () => {
     at(100_000);
     tick();
 
+    fake.inputs[0]!.stats.playing = false;
     source.queue.push(...framesBetween(80_000, 400_000));
     at(300_000);
     tick();
@@ -253,6 +255,7 @@ describe('createWorkletAudioRendererActor', () => {
     tick();
     expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
 
+    fake.inputs[0]!.stats.playing = false;
     source.queue.push(...framesBetween(80_000, 400_000));
     at(40_000);
     tick();
@@ -271,6 +274,53 @@ describe('createWorkletAudioRendererActor', () => {
 
     expect(fake.inputs[0]!.pushed).toEqual([0, 20_000, 40_000, 100_000]);
     expect(renderer.snapshot.get().context.scheduledUntilUs).toBe(120_000);
+  });
+
+  it('keeps the hold through a late report of the audio before the underrun', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(100_000);
+    tick();
+
+    // The refill is pushed before the core has said it stopped; then the
+    // tail's last report, still in flight, arrives.
+    source.queue.push(...framesBetween(80_000, 400_000));
+    tick();
+    fake.report(77_333, 77_333);
+    at(200_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
+  });
+
+  it('holds a placed re-join clock at the audio pushed while the fill is short', async () => {
+    let anchorUs: number | undefined;
+    const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    anchorUs = 4_900_000;
+    source.queue.push(frameAt(5_000_000));
+    tick();
+    at(100_000);
+    tick();
+    expect(fake.inputs[0]!.pushed.at(-1)).toBe(5_000_000);
+
+    // One packet cannot start the worklet; the clock stops at its end.
+    at(2_100_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
+
+    // The refill plays, reported ahead of being audible: no step back.
+    source.queue.push(...framesBetween(5_020_000, 5_200_000));
+    tick();
+    fake.report(5_000_000, 2_150_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
   });
 
   it('gives the core a report time source that stops while the context is suspended', async () => {
