@@ -333,7 +333,8 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       // The worklet renderer's core constructs an `AudioWorkletNode`, which
       // only a real context can host; an injected fake has none to offer.
       const baseContext =
-        audioContext.baseContext ?? (audioContext instanceof BaseAudioContext ? audioContext : undefined);
+        audioContext.baseContext ??
+        (globalThis.BaseAudioContext && audioContext instanceof globalThis.BaseAudioContext ? audioContext : undefined);
 
       return {
         get currentTime() {

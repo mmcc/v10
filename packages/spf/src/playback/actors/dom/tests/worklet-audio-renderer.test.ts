@@ -91,9 +91,15 @@ function createFakePlayer() {
 // SAFETY: the renderer only hands `destination` to `output.connect`, which the fake records by identity.
 const destination = {} as AudioNode;
 
+/** Context time follows the test's clock; `suspended` freezes it, as `AudioContext.suspend()` does. */
+let contextUs = 0;
+let suspended = false;
+
 function fakeAudioContext(): AudioContextLike {
   return {
-    currentTime: 0,
+    get currentTime() {
+      return contextUs / 1_000_000;
+    },
     destination,
     createBuffer: () => {
       throw new Error('unused');
@@ -107,9 +113,18 @@ function fakeAudioContext(): AudioContextLike {
 describe('createWorkletAudioRendererActor', () => {
   let nowUs = 0;
 
+  /** Move wall time, and context time with it unless the context is suspended. */
+  const at = (us: number) => {
+    if (!suspended) contextUs += us - nowUs;
+
+    nowUs = us;
+  };
+
   beforeEach(() => {
     vi.useFakeTimers();
-    nowUs = 0;
+    at(0);
+    contextUs = 0;
+    suspended = false;
   });
 
   afterEach(() => {
@@ -158,11 +173,11 @@ describe('createWorkletAudioRendererActor', () => {
 
     // Playing: the worklet should hold about its target ahead of what renders.
     fake.report(0, 0);
-    nowUs = 30_000;
+    at(30_000);
     tick();
 
     expect(input.pushed.at(-1)).toBe(80_000);
-    expect(renderer.getClockTimeUs()).toBe(30_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
     expect(renderer.snapshot.get().context.scheduledUntilUs).toBe(100_000);
   });
 
@@ -183,20 +198,20 @@ describe('createWorkletAudioRendererActor', () => {
     tick();
     fake.report(0, 0);
 
-    nowUs = 100_000;
+    at(100_000);
     tick();
-    expect(renderer.getClockTimeUs()).toBe(80_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
 
     // Audio comes back: the refill moves the pushed end, not the clock.
     source.queue.push(...framesBetween(80_000, 400_000));
-    nowUs = 300_000;
+    at(300_000);
     tick();
     expect(fake.inputs[0]!.pushed.slice(4)).toEqual([80_000, 100_000, 120_000, 140_000]);
-    expect(renderer.getClockTimeUs()).toBe(80_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
 
     fake.report(80_000, 320_000);
-    nowUs = 330_000;
-    expect(renderer.getClockTimeUs()).toBe(90_000);
+    at(330_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(90_000, 0);
   });
 
   it('drops what the core holds at a timeline reset and ignores reports from before it', async () => {
@@ -222,7 +237,7 @@ describe('createWorkletAudioRendererActor', () => {
     expect(renderer.getClockTimeUs()).toBeUndefined();
 
     fake.report(-5_000_000, 0);
-    expect(renderer.getClockTimeUs()).toBe(-5_000_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(-5_000_000, 0);
   });
 
   it('places a re-join whose whole buffer is past the anchor at its distance from it', async () => {
@@ -242,12 +257,53 @@ describe('createWorkletAudioRendererActor', () => {
     const input = fake.inputs[0]!;
 
     expect(input.pushed).toHaveLength(4);
-    expect(renderer.getClockTimeUs()).toBe(4_900_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(4_900_000, 0);
 
-    nowUs = 50_000;
+    at(50_000);
     tick();
     expect(input.pushed.at(4)).toBe(5_000_000);
-    expect(renderer.getClockTimeUs()).toBe(4_950_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(4_950_000, 0);
+  });
+
+  it('freezes the clock and stops metering while the context is suspended', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 1_000_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(30_000);
+    tick();
+
+    const pushed = fake.inputs[0]!.pushed.length;
+
+    // Paused for two seconds: nothing plays, so nothing is due and nothing ran dry.
+    suspended = true;
+    at(2_030_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
+    expect(fake.inputs[0]!.pushed).toHaveLength(pushed);
+
+    suspended = false;
+    at(2_040_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(40_000, 0);
+  });
+
+  it('ignores reports from an input that a track change removed', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+
+    const stale = fake.inputs[0]!.options.clock!;
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+    stale.reportAudio(40_000, 0);
+    expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    fake.report(0, 0);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(0, 0);
   });
 
   it('counts underruns across track changes', async () => {
@@ -298,5 +354,21 @@ describe('createWorkletAudioRendererActor', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(failing.snapshot.get().context.status).toBe('error');
     failing.destroy();
+
+    const unconnectable = createFakePlayer();
+
+    unconnectable.player.output.connect = () => {
+      throw new Error('cross-context connect');
+    };
+
+    const disconnected = createWorkletAudioRendererActor({
+      audioContext: fakeAudioContext(),
+      createAudioPlayer: () => Promise.resolve(unconnectable.player),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(disconnected.snapshot.get().context.status).toBe('error');
+    expect(unconnectable.closed).toBe(true);
+    disconnected.destroy();
   });
 });

@@ -111,7 +111,10 @@ export interface CreateWorkletAudioRendererOptions {
   getTargetLatencyUs?: () => number | undefined;
   /** Metering cadence in ms. Default 10. */
   tickIntervalMs?: number;
-  /** Microsecond time source for the clock. Default `performance.now()`. */
+  /**
+   * The microsecond time source the core times its reports on (`localNow`). Default `performance.now()`. The renderer's
+   * own clock runs on `audioContext.currentTime`.
+   */
   now?: () => number;
 }
 
@@ -188,15 +191,22 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   let frameDurationUs = DEFAULT_FRAME_DURATION_US;
   /** Where the newest pushed frame ends: the furthest the clock can read. */
   let pushedEndUs: number | undefined;
-  /** First timestamp pushed in the current fill, and when the latest push was. */
+  /** First timestamp pushed in the current fill, and the context time of the latest push. */
   let fillStartUs: number | undefined;
   let lastPushAtUs = 0;
 
   /**
-   * The clock: timeline position `mediaUs` was audible at local time `atUs`, advancing in real time from there. Set by
-   * every core report, or **placed** at a re-join anchor before the core plays anything (see `dropToJoinAnchor`).
+   * The clock: timeline position `mediaUs` is audible at context time `contextUs`, advancing with the context clock
+   * from there. Set by every core report, or **placed** at a re-join anchor before the core plays anything (see
+   * `dropToJoinAnchor`).
+   *
+   * Context time, not `performance.now()`, because it is what stops when the adapter suspends the context on pause: a
+   * wall-paced clock would run on through the pause, read the frozen worklet as dry and refill it, and step back on the
+   * first report after resume.
    */
-  let anchor: { mediaUs: number; atUs: number; placed: boolean } | undefined;
+  let anchor: { mediaUs: number; contextUs: number; placed: boolean } | undefined;
+  /** Bumped per input, so a report from a removed input cannot anchor its replacement. */
+  let inputGeneration = 0;
   /**
    * Where the worklet ran dry. The clock holds there until a report of audio past it arrives: frames pushed to refill
    * the worklet move `pushedEndUs` before they play, and must not drag the clock forward with them.
@@ -206,32 +216,46 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   const outputLatencyUs = (): number =>
     ((audioContext.baseLatency ?? 0) + (audioContext.outputLatency ?? 0)) * 1_000_000;
 
+  const contextNowUs = (): number => audioContext.currentTime * 1_000_000;
+
   /** The audible position extrapolated from the anchor, ignoring every limit. */
-  const extrapolatedUs = (): number | undefined => anchor && anchor.mediaUs + (now() - anchor.atUs);
+  const extrapolatedUs = (): number | undefined => anchor && anchor.mediaUs + (contextNowUs() - anchor.contextUs);
 
-  const clock: AudioPlayerClock = {
-    get targetLatencyUs() {
-      return options.getTargetLatencyUs?.() ?? DEFAULT_TARGET_LATENCY_US;
-    },
-    localNow: now,
-    reportAudio(timestampUs, atUs) {
-      // Only audio pushed on this timeline: a report already in flight when
-      // the timeline restarted describes audio the cut dropped.
-      if (
-        firstPushedUs === undefined ||
-        pushedEndUs === undefined ||
-        timestampUs < firstPushedUs - REPORT_TOLERANCE_US ||
-        timestampUs > pushedEndUs + REPORT_TOLERANCE_US
-      ) {
-        return;
-      }
+  /** The clock one input reports into; it goes deaf once that input is replaced. */
+  const createClock = (): AudioPlayerClock => {
+    const generation = ++inputGeneration;
 
-      anchor = { mediaUs: timestampUs, atUs: atUs ?? now(), placed: false };
+    return {
+      get targetLatencyUs() {
+        return options.getTargetLatencyUs?.() ?? DEFAULT_TARGET_LATENCY_US;
+      },
+      localNow: now,
+      reportAudio(timestampUs, atUs) {
+        if (generation !== inputGeneration) return;
 
-      if (dryLimitUs !== undefined && timestampUs >= dryLimitUs - REPORT_TOLERANCE_US) dryLimitUs = undefined;
-    },
-    // The renderer resets the clock itself wherever a track or timeline ends.
-    stopAudio() {},
+        reportAudio(timestampUs, atUs);
+      },
+      // The renderer resets the clock itself wherever a track or timeline ends.
+      stopAudio() {},
+    };
+  };
+
+  /** `timestampUs` is audible at local time `atUs` (default now), which the anchor keeps as context time. */
+  const reportAudio = (timestampUs: number, atUs: number | undefined): void => {
+    // Only audio pushed on this timeline: a report already in flight when
+    // the timeline restarted describes audio the cut dropped.
+    if (
+      firstPushedUs === undefined ||
+      pushedEndUs === undefined ||
+      timestampUs < firstPushedUs - REPORT_TOLERANCE_US ||
+      timestampUs > pushedEndUs + REPORT_TOLERANCE_US
+    ) {
+      return;
+    }
+
+    anchor = { mediaUs: timestampUs, contextUs: contextNowUs() + ((atUs ?? now()) - now()), placed: false };
+
+    if (dryLimitUs !== undefined && timestampUs >= dryLimitUs - REPORT_TOLERANCE_US) dryLimitUs = undefined;
   };
 
   /** Forget everything pushed on the current timeline, and the clock placed on it. */
@@ -249,6 +273,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     if (!input) return;
 
     underrunsBefore += input.stats.underruns;
+    inputGeneration++;
     input.remove();
     input = undefined;
   };
@@ -281,7 +306,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     // oldest first, so the buffer's live edge may still be moving.
     if (!rejoinAnchorArmed || !source.peek()) return;
 
-    anchor = { mediaUs: anchorUs, atUs: now(), placed: true };
+    anchor = { mediaUs: anchorUs, contextUs: contextNowUs(), placed: true };
     rejoinAnchorArmed = false;
     needsJoinAnchor = false;
   };
@@ -297,7 +322,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     if (positionUs === undefined || dryLimitUs !== undefined) {
       if (fillStartUs === undefined || timestampUs < fillStartUs + stats.jitterTargetUs + frameDurationUs) return true;
 
-      return now() - lastPushAtUs > FILL_STALL_US && stats.bufferedUs < stats.jitterTargetUs;
+      return contextNowUs() - lastPushAtUs > FILL_STALL_US && stats.bufferedUs < stats.jitterTargetUs;
     }
 
     return timestampUs < positionUs + outputLatencyUs() + stats.jitterTargetUs;
@@ -315,7 +340,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     firstPushedUs ??= timestampUs;
     fillStartUs ??= timestampUs;
     lastPushedUs = timestampUs;
-    lastPushAtUs = now();
+    lastPushAtUs = contextNowUs();
     pushedEndUs = timestampUs + frameDurationUs;
     inner.send({ type: 'scheduled', untilUs: pushedEndUs });
   };
@@ -325,7 +350,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
 
     try {
       const active = (input ??= player.addInput({
-        clock,
+        clock: createClock(),
         decoderConfig,
         onError: (error) => inner.send({ type: 'decoder-error', error }),
       }));
@@ -384,8 +409,13 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
         return;
       }
 
-      created.output.connect(audioContext.destination);
-      player = created;
+      try {
+        created.output.connect(audioContext.destination);
+        player = created;
+      } catch (error) {
+        created.close();
+        inner.send({ type: 'status', status: 'error', error });
+      }
     },
     (error) => {
       if (!destroyed) inner.send({ type: 'status', status: 'error', error });
