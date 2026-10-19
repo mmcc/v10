@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vite-plus/test';
 
 import type {
+  LiveVideoTrack,
   MaybeResolvedPresentation,
   PartiallyResolvedAudioTrack,
   PartiallyResolvedTextTrack,
   PartiallyResolvedVideoTrack,
   Presentation,
+  VideoSwitchingSet,
   VideoTrack,
 } from '../index';
-import { hasPresentationDuration, isResolvedPresentation, isResolvedTrack } from '../index';
+import { hasPresentationDuration, isLiveTrack, isResolvedPresentation, isResolvedTrack } from '../index';
 
 describe('Type Guards', () => {
   describe('isResolvedTrack', () => {
@@ -101,6 +103,81 @@ describe('Type Guards', () => {
       };
 
       expect(isResolvedTrack(unresolved)).toBe(false);
+    });
+  });
+
+  describe('isLiveTrack', () => {
+    const liveVideo: LiveVideoTrack = {
+      type: 'video',
+      id: 'video-0',
+      url: 'moqt://relay.example.com/live/video-hd',
+      bandwidth: 1400000,
+      width: 1280,
+      height: 720,
+      mimeType: 'video/mp4',
+      codecs: ['avc1.64001f'],
+      deliveryMode: 'push',
+    };
+
+    it('returns true for a push-delivered live track', () => {
+      expect(isLiveTrack(liveVideo)).toBe(true);
+    });
+
+    it('returns false for a partially resolved pull track (no deliveryMode)', () => {
+      const unresolved: PartiallyResolvedVideoTrack = {
+        type: 'video',
+        codecs: [],
+        id: 'video-0',
+        url: 'https://example.com/video.m3u8',
+        bandwidth: 1400000,
+        mimeType: 'video/mp4',
+      };
+
+      expect(isLiveTrack(unresolved)).toBe(false);
+    });
+
+    it('returns false for a resolved pull track', () => {
+      const resolved: VideoTrack = {
+        type: 'video',
+        codecs: [],
+        id: 'video-0',
+        url: 'https://example.com/video.m3u8',
+        bandwidth: 1400000,
+        mimeType: 'video/mp4',
+        startTime: 0,
+        duration: 10,
+        initialization: { url: 'https://example.com/init.mp4' },
+        segments: [],
+      };
+
+      expect(isLiveTrack(resolved)).toBe(false);
+    });
+
+    it('narrows PartiallyResolvedVideoTrack to LiveVideoTrack', () => {
+      const track: PartiallyResolvedVideoTrack = liveVideo;
+
+      if (isLiveTrack(track)) {
+        // TypeScript should know track is LiveVideoTrack here
+        const mode: 'push' = track.deliveryMode;
+
+        expect(mode).toBe('push');
+      } else {
+        expect.unreachable('live track was not narrowed');
+      }
+    });
+
+    it('is never resolved (a live track has no segments)', () => {
+      expect(isResolvedTrack(liveVideo)).toBe(false);
+    });
+
+    it('is storable in a switching set without widening the model', () => {
+      const switchingSet: VideoSwitchingSet = {
+        id: 'video',
+        type: 'video',
+        tracks: [liveVideo],
+      };
+
+      expect(switchingSet.tracks).toHaveLength(1);
     });
   });
 

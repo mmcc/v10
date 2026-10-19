@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vite-plus/test';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 describe('SSR-safe define imports', () => {
   it('imports the package API without browser-only globals', async () => {
@@ -24,6 +24,13 @@ describe('SSR-safe define imports', () => {
 
   it('imports hls-video without browser-only globals', async () => {
     await expect(import('../media/hls-video')).resolves.toBeDefined();
+  });
+
+  it('imports simple-moq-video without customElements or HTMLElement', async () => {
+    vi.stubGlobal('customElements', undefined);
+    vi.stubGlobal('HTMLElement', undefined);
+
+    await expect(import('../media/simple-moq-video')).resolves.toBeDefined();
   });
 
   it('imports background videos without browser-only globals', async () => {
