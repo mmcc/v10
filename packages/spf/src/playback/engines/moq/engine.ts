@@ -11,6 +11,7 @@ import type { BandwidthConfig, BandwidthState } from '../../../network/bandwidth
 import type { RetryBackoffConfig } from '../../../network/retry-backoff';
 import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
+import type { CreateAudioPlayer } from '../../actors/dom/worklet-audio-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
 import { type AdaptiveLatencyConfig, adaptLatencyTarget } from '../../behaviors/adapt-latency-target';
@@ -153,6 +154,11 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
   moqBandwidth?: Partial<BandwidthConfig>;
   /** Latency tuning: the controller (`syncLatency`) plus the renderers' join-at-edge anchor. */
   latency?: Partial<LatencyControlConfig>;
+  /**
+   * Render audio through the shared AudioWorklet player core (`@mux/moq-media`'s `createAudioPlayer`) instead of
+   * scheduled `AudioBufferSourceNode`s. Opt-in: the core cannot apply `playoutRate` nudges yet (mmcc/v10#66).
+   */
+  createAudioPlayer?: CreateAudioPlayer;
   /**
    * Adaptive-latency tuning (`adaptLatencyTarget`), including its `enabled` switch — **off by default**, so an
    * untouched engine holds the fixed setpoint `latency` describes and this behavior registers no timer. Deliberately
