@@ -138,7 +138,6 @@ describe('createWorkletAudioRendererActor', () => {
       audioContext: fakeAudioContext(),
       createAudioPlayer: () => Promise.resolve(fake.player),
       tickIntervalMs: TICK_MS,
-      now: () => nowUs,
       ...options,
     });
 
@@ -212,6 +211,50 @@ describe('createWorkletAudioRendererActor', () => {
     fake.report(80_000, 320_000);
     at(330_000);
     expect(renderer.getClockTimeUs()).toBeCloseTo(90_000, 0);
+  });
+
+  it('does not step back when the refill is reported ahead of being audible', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(100_000);
+    tick();
+
+    source.queue.push(...framesBetween(80_000, 400_000));
+    at(300_000);
+    tick();
+
+    // Rendered now, audible 100 ms from now: the anchor alone reads 80 ms behind the hold.
+    fake.report(80_000, 400_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
+
+    at(410_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(90_000, 0);
+  });
+
+  it('gives the core a report time source that stops while the context is suspended', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+
+    const clock = fake.inputs[0]!.options.clock!;
+
+    at(40_000);
+    expect(clock.localNow()).toBeCloseTo(40_000, 0);
+
+    suspended = true;
+    at(540_000);
+    expect(clock.localNow()).toBeCloseTo(40_000, 0);
+
+    // The first report after resume, timed on that source, lands where audio is.
+    suspended = false;
+    at(560_000);
+    fake.report(60_000, clock.localNow());
+    expect(renderer.getClockTimeUs()).toBeCloseTo(60_000, 0);
   });
 
   it('drops what the core holds at a timeline reset and ignores reports from before it', async () => {
