@@ -459,6 +459,18 @@ describe('createWorkletAudioRendererActor', () => {
     expect(renderer.snapshot.get().context.underruns).toBe(2);
   });
 
+  it('counts a dry edge that a track change lands on before the next tick', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    at(100_000);
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    expect(renderer.snapshot.get().context.underruns).toBe(1);
+  });
+
   it('rescues a frozen re-join placement whose next packets are past the fill horizon', async () => {
     let anchorUs: number | undefined;
     const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });

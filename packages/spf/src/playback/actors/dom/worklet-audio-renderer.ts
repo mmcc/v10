@@ -412,6 +412,31 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     inner.send({ type: 'scheduled', untilUs: pushedEndUs });
   };
 
+  /**
+   * The worklet runs dry once rendering passes everything pushed: metering pushes every frame as soon as it is due, so
+   * nothing was left to push. Each such edge is an underrun, as `audio-renderer` counts them. The core's own counter
+   * skips dry spells longer than its jitter ceiling, which `adaptLatencyTarget` still needs as failure evidence.
+   */
+  const detectDry = (): void => {
+    const positionUs = extrapolatedUs();
+
+    if (
+      !anchor ||
+      anchor.placed ||
+      dryLimitUs !== undefined ||
+      pushedEndUs === undefined ||
+      positionUs === undefined ||
+      positionUs + outputLatencyUs() < pushedEndUs
+    ) {
+      return;
+    }
+
+    dryLimitUs = pushedEndUs;
+    stoppedSinceDry = false;
+    fillStartUs = undefined;
+    inner.send({ type: 'underrun' });
+  };
+
   const tick = (): void => {
     if (destroyed || !player || !source || !decoderConfig) return;
 
@@ -423,26 +448,9 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
       }));
       const { stats } = active;
 
-      // The worklet runs dry once rendering passes everything pushed: metering
-      // pushes every frame as soon as it is due, so nothing was left to push.
-      // Each such edge is an underrun, as `audio-renderer` counts them. The
-      // core's own counter skips dry spells longer than its jitter ceiling,
-      // which `adaptLatencyTarget` still needs as failure evidence.
-      const positionUs = extrapolatedUs();
+      detectDry();
 
-      if (
-        anchor &&
-        !anchor.placed &&
-        dryLimitUs === undefined &&
-        pushedEndUs !== undefined &&
-        positionUs !== undefined &&
-        positionUs + outputLatencyUs() >= pushedEndUs
-      ) {
-        dryLimitUs = pushedEndUs;
-        stoppedSinceDry = false;
-        fillStartUs = undefined;
-        inner.send({ type: 'underrun' });
-      }
+      const positionUs = extrapolatedUs();
 
       if (dryLimitUs !== undefined && !stats.playing) stoppedSinceDry = true;
 
@@ -512,6 +520,8 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
       decoderConfig = nextConfig;
       needsJoinAnchor = true;
       rejoinAnchorArmed = false;
+      // An edge since the last tick still counts: the reset below forgets it.
+      detectDry();
       removeInput();
       resetTimeline();
 
