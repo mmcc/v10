@@ -57,8 +57,6 @@ export interface AudioPlayerInputOptions {
 
 /** The part of `@mux/moq-media`'s `AudioInputStats` the renderer reads. Durations are microseconds. */
 export interface AudioPlayerInputStats {
-  /** Times the worklet ran dry while playing and audio came back within the jitter ceiling. Cumulative. */
-  readonly underruns: number;
   /** Whether the worklet is playing, rather than filling to its target. */
   readonly playing: boolean;
   /** Decoded audio the worklet holds. */
@@ -119,7 +117,7 @@ type RendererMessage =
   | { type: 'status'; status: AudioRendererStatus; error?: unknown }
   | { type: 'decoder-error'; error: unknown }
   | { type: 'scheduled'; untilUs: number }
-  | { type: 'underruns'; count: number };
+  | { type: 'underrun' };
 
 // =============================================================================
 // Implementation
@@ -184,8 +182,8 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
             framesScheduled: context.framesScheduled + 1,
             scheduledUntilUs: message.untilUs,
           };
-        case 'underruns':
-          return { ...context, underruns: message.count };
+        case 'underrun':
+          return { ...context, underruns: context.underruns + 1 };
       }
     }
   );
@@ -195,8 +193,6 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   let input: AudioPlayerInput | undefined;
   let source: AudioFrameSource | null = null;
   let decoderConfig: AudioDecoderConfig | null = null;
-  /** Underruns counted by inputs already removed: the context's counter spans the actor's life, not one track's. */
-  let underrunsBefore = 0;
 
   /** The schedule has no anchor yet; see `audio-renderer`'s flag of the same name. */
   let needsJoinAnchor = true;
@@ -334,7 +330,6 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   const removeInput = (): void => {
     if (!input) return;
 
-    underrunsBefore += input.stats.underruns;
     inputGeneration++;
     input.remove();
     input = undefined;
@@ -381,7 +376,9 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   const isDue = (timestampUs: number, stats: AudioPlayerInputStats): boolean => {
     const positionUs = anchor?.placed ? placedPositionUs() : extrapolatedUs();
 
-    if (positionUs === undefined || dryLimitUs !== undefined) {
+    // A frozen placement is a fill too: its clock waits for the worklet to
+    // start, so only the fill rules (including the stall rescue) can move it.
+    if (positionUs === undefined || dryLimitUs !== undefined || anchor?.frozen) {
       if (
         fillStartUs === undefined ||
         timestampUs < fillStartUs + stats.jitterTargetUs + (frameDurationUs ?? DEFAULT_FRAME_DURATION_US)
@@ -425,12 +422,12 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
         onError: (error) => inner.send({ type: 'decoder-error', error }),
       }));
       const { stats } = active;
-      const underruns = underrunsBefore + stats.underruns;
-
-      if (underruns !== inner.snapshot.get().context.underruns) inner.send({ type: 'underruns', count: underruns });
 
       // The worklet runs dry once rendering passes everything pushed: metering
       // pushes every frame as soon as it is due, so nothing was left to push.
+      // Each such edge is an underrun, as `audio-renderer` counts them. The
+      // core's own counter skips dry spells longer than its jitter ceiling,
+      // which `adaptLatencyTarget` still needs as failure evidence.
       const positionUs = extrapolatedUs();
 
       if (
@@ -444,6 +441,7 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
         dryLimitUs = pushedEndUs;
         stoppedSinceDry = false;
         fillStartUs = undefined;
+        inner.send({ type: 'underrun' });
       }
 
       if (dryLimitUs !== undefined && !stats.playing) stoppedSinceDry = true;

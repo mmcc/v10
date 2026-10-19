@@ -41,7 +41,7 @@ interface FakeInput extends AudioPlayerInput {
   pushed: number[];
   cuts: number;
   removed: boolean;
-  stats: { underruns: number; playing: boolean; bufferedUs: number; jitterTargetUs: number };
+  stats: { playing: boolean; bufferedUs: number; jitterTargetUs: number };
 }
 
 /** The core's surface with no audio behind it: pushes are recorded, and the test plays the worklet's reports. */
@@ -57,7 +57,7 @@ function createFakePlayer() {
         pushed: [],
         cuts: 0,
         removed: false,
-        stats: { underruns: 0, playing: true, bufferedUs: 0, jitterTargetUs: JITTER_TARGET_US },
+        stats: { playing: true, bufferedUs: 0, jitterTargetUs: JITTER_TARGET_US },
         push(frame) {
           input.pushed.push(frame.timestampUs);
         },
@@ -437,22 +437,51 @@ describe('createWorkletAudioRendererActor', () => {
     expect(renderer.getClockTimeUs()).toBeCloseTo(0, 0);
   });
 
-  it('counts underruns across track changes', async () => {
+  it('counts every time the worklet runs dry, across track changes', async () => {
     const { fake, renderer } = await setup();
 
     renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
     tick();
-    fake.inputs[0]!.stats.underruns = 2;
+    fake.report(0, 0);
+
+    // A stall far longer than any jitter ceiling still counts, once.
+    at(100_000);
     tick();
-    expect(renderer.snapshot.get().context.underruns).toBe(2);
+    at(3_000_000);
+    tick();
+    expect(renderer.snapshot.get().context.underruns).toBe(1);
 
     renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
-    expect(fake.inputs[0]!.removed).toBe(true);
+    tick();
+    fake.report(0, 3_000_000);
+    at(3_100_000);
+    tick();
+    expect(renderer.snapshot.get().context.underruns).toBe(2);
+  });
 
+  it('rescues a frozen re-join placement whose next packets are past the fill horizon', async () => {
+    let anchorUs: number | undefined;
+    const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
     tick();
-    fake.inputs[1]!.stats.underruns = 1;
+    fake.report(0, 0);
+
+    anchorUs = 4_900_000;
+    source.queue.push(frameAt(5_000_000));
     tick();
-    expect(renderer.snapshot.get().context.underruns).toBe(3);
+    at(200_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
+
+    // Packets resume 80 ms after the lone one ends: beyond the fill horizon.
+    fake.inputs[0]!.stats.playing = false;
+    source.queue.push(...framesBetween(5_100_000, 5_400_000));
+    at(400_000);
+    tick();
+    expect(fake.inputs[0]!.pushed).toContain(5_100_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
   });
 
   it('caps the core jitter target at the target latency', async () => {
