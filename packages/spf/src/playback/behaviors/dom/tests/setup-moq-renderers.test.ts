@@ -5,6 +5,7 @@ import type { AudioContextLike, AudioRendererActor } from '../../../actors/dom/a
 import { createAudioRendererActor } from '../../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../../actors/dom/video-renderer';
 import { createVideoRendererActor } from '../../../actors/dom/video-renderer';
+import { createWorkletAudioRendererActor } from '../../../actors/dom/worklet-audio-renderer';
 import type { TrackSubscriberActor } from '../../../actors/track-subscriber';
 import type { PlayoutClockOwner } from '../../sync-latency';
 import {
@@ -22,6 +23,9 @@ vi.mock('../../../actors/dom/audio-renderer', () => ({
 }));
 vi.mock('../../../actors/dom/video-renderer', () => ({
   createVideoRendererActor: vi.fn(),
+}));
+vi.mock('../../../actors/dom/worklet-audio-renderer', () => ({
+  createWorkletAudioRendererActor: vi.fn(),
 }));
 
 function makeFakeAudioRenderer(): AudioRendererActor {
@@ -87,6 +91,29 @@ describe('setupAudioRenderer', () => {
     // schedule an infinite clock segment (duration ÷ 0) and dead sources.
     state.playoutRate.set(1.05);
     expect(getPlaybackRate!()).toBe(1.05);
+
+    reactor.destroy();
+  });
+
+  it('renders through the worklet core when a createAudioPlayer is configured', async () => {
+    vi.mocked(createWorkletAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const createAudioPlayer = vi.fn();
+    const { state, context, reactor } = setupSetupAudioRenderer({ createAudioPlayer });
+
+    await vi.waitFor(() => expect(createWorkletAudioRendererActor).toHaveBeenCalledTimes(1));
+    expect(createAudioRendererActor).not.toHaveBeenCalled();
+
+    const options = vi.mocked(createWorkletAudioRendererActor).mock.calls[0]![0];
+
+    expect(options.createAudioPlayer).toBe(createAudioPlayer);
+    expect(options.audioContext).toBe(context.audioContext.get());
+
+    // The core's jitter ceiling follows the same target the controller holds.
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000));
+    expect(options.getTargetLatencyUs!()).toBe(500_000);
+    state.targetLatency.set(2);
+    expect(options.getTargetLatencyUs!()).toBe(2_000_000);
+    expect(options.getJoinAnchorUs!()).toBe(8_000_000);
 
     reactor.destroy();
   });

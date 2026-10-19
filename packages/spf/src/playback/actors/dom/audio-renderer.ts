@@ -36,6 +36,15 @@ export interface AudioFrameSource {
 export interface AudioContextLike {
   readonly currentTime: number;
   readonly destination: AudioNode;
+  /** Seconds between the graph and the audio subsystem; the worklet renderer places its clock behind it. */
+  readonly baseLatency?: number;
+  /** Seconds from the audio subsystem to the speaker; read fresh, as it changes with the device. */
+  readonly outputLatency?: number;
+  /**
+   * The real context behind a wrapping view such as the adapter's, for APIs that only accept one — an
+   * `AudioWorkletNode` cannot be constructed on a plain object.
+   */
+  readonly baseContext?: BaseAudioContext;
   createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
   createBufferSource(): AudioBufferSourceNode;
 }

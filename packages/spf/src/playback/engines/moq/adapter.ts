@@ -330,6 +330,12 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
 
       gain.connect(audioContext.destination);
       gain.gain.value = this.#muted ? 0 : this.#volume;
+      // The worklet renderer's core constructs an `AudioWorkletNode`, which
+      // only a real context can host; an injected fake has none to offer.
+      const baseContext =
+        audioContext.baseContext ??
+        (globalThis.BaseAudioContext && audioContext instanceof globalThis.BaseAudioContext ? audioContext : undefined);
+
       return {
         get currentTime() {
           return audioContext.currentTime;
@@ -337,6 +343,13 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
         get destination() {
           return gain;
         },
+        get baseLatency() {
+          return audioContext.baseLatency;
+        },
+        get outputLatency() {
+          return audioContext.outputLatency;
+        },
+        baseContext,
         createBuffer: (numberOfChannels, length, sampleRate) =>
           audioContext.createBuffer(numberOfChannels, length, sampleRate),
         createBufferSource: () => audioContext.createBufferSource(),
