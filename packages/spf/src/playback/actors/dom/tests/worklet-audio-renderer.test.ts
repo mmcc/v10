@@ -14,8 +14,11 @@ const JITTER_TARGET_US = 60_000;
 const TICK_MS = 10;
 const CONFIG: AudioDecoderConfig = { codec: 'opus', sampleRate: 48_000, numberOfChannels: 1 };
 
+/** An Opus TOC byte for one 20 ms CELT frame (config 19, code 0). */
+const OPUS_20MS_TOC = 19 << 3;
+
 function frameAt(timestampUs: number): JitterFrame {
-  return { groupId: timestampUs, objectId: 0, timestampUs, isKey: true, payload: new Uint8Array([timestampUs & 0xff]) };
+  return { groupId: timestampUs, objectId: 0, timestampUs, isKey: true, payload: new Uint8Array([OPUS_20MS_TOC]) };
 }
 
 /** Frames every 20 ms over `[fromUs, untilUs)`. */
@@ -95,12 +98,13 @@ const destination = {} as AudioNode;
 let contextUs = 0;
 let suspended = false;
 
-function fakeAudioContext(): AudioContextLike {
+function fakeAudioContext(outputLatency?: number): AudioContextLike {
   return {
     get currentTime() {
       return contextUs / 1_000_000;
     },
     destination,
+    outputLatency,
     createBuffer: () => {
       throw new Error('unused');
     },
@@ -132,13 +136,14 @@ describe('createWorkletAudioRendererActor', () => {
   });
 
   /** A renderer whose player is ready and whose first input exists. */
-  async function setup(options: { getJoinAnchorUs?: () => number | undefined } = {}) {
+  async function setup(options: { getJoinAnchorUs?: () => number | undefined; outputLatency?: number } = {}) {
+    const { outputLatency, ...rendererOptions } = options;
     const fake = createFakePlayer();
     const renderer = createWorkletAudioRendererActor({
-      audioContext: fakeAudioContext(),
+      audioContext: fakeAudioContext(outputLatency),
       createAudioPlayer: () => Promise.resolve(fake.player),
       tickIntervalMs: TICK_MS,
-      ...options,
+      ...rendererOptions,
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -233,6 +238,39 @@ describe('createWorkletAudioRendererActor', () => {
 
     at(410_000);
     expect(renderer.getClockTimeUs()).toBeCloseTo(90_000, 0);
+  });
+
+  it('resumes from the audible position when audio returns before the device drained', async () => {
+    const { fake, renderer } = await setup({ outputLatency: 0.05 });
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    // Rendering passed the last pushed sample; 50 ms of it is still in the device.
+    at(30_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
+
+    source.queue.push(...framesBetween(80_000, 400_000));
+    at(40_000);
+    tick();
+    fake.report(80_000, 90_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(40_000, 0);
+  });
+
+  it('ends pushed audio where the last packet ends, not across a gap of lost packets', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource([0, 20_000, 40_000, 100_000].map(frameAt)), CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(60_000);
+    tick();
+
+    expect(fake.inputs[0]!.pushed).toEqual([0, 20_000, 40_000, 100_000]);
+    expect(renderer.snapshot.get().context.scheduledUntilUs).toBe(120_000);
   });
 
   it('gives the core a report time source that stops while the context is suspended', async () => {

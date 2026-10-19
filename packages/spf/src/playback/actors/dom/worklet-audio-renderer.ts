@@ -125,10 +125,8 @@ type RendererMessage =
 
 const DEFAULT_TICK_INTERVAL_MS = 10;
 const DEFAULT_TARGET_LATENCY_US = 2_000_000;
-/** The frame duration assumed before two contiguous frames have shown one: Opus's usual 20 ms. */
+/** The frame duration assumed before a frame has shown one: Opus's usual 20 ms. */
 const DEFAULT_FRAME_DURATION_US = 20_000;
-/** Longest gap between two pushed frames that still measures a frame duration rather than a loss. */
-const MAX_FRAME_DURATION_US = 120_000;
 /** Reports and pushed spans may disagree by sample rounding and resampling offsets. */
 const REPORT_TOLERANCE_US = 5_000;
 /**
@@ -139,6 +137,32 @@ const REPORT_TOLERANCE_US = 5_000;
 const FILL_STALL_US = 100_000;
 /** See `audio-renderer`'s threshold of the same name: a jump this large, either way, is a new timeline. */
 const DISCONTINUITY_THRESHOLD_US = TIMELINE_DISCONTINUITY_US;
+
+/**
+ * How long an Opus packet plays, from its TOC byte (RFC 6716 §3.1); `undefined` when it cannot be read. The same rule
+ * as `@mux/moq-media`'s `opusPacketDurationUs`.
+ */
+function opusPacketDurationUs(packet: Uint8Array): number | undefined {
+  const toc = packet[0];
+  if (toc === undefined) return undefined;
+
+  const config = toc >> 3;
+  // SILK: 10, 20, 40, 60 ms; hybrid: 10, 20 ms; CELT: 2.5, 5, 10, 20 ms.
+  const frameUs =
+    config < 12
+      ? [10_000, 20_000, 40_000, 60_000][config % 4]!
+      : config < 16
+        ? [10_000, 20_000][config % 2]!
+        : [2_500, 5_000, 10_000, 20_000][config % 4]!;
+  const code = toc & 3;
+  if (code === 0) return frameUs;
+
+  if (code !== 3) return 2 * frameUs;
+
+  const count = packet[1];
+
+  return count === undefined ? undefined : (count & 0x3f) * frameUs;
+}
 
 export function createWorkletAudioRendererActor(options: CreateWorkletAudioRendererOptions): AudioRendererActor {
   const { audioContext } = options;
@@ -180,7 +204,8 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   // What this timeline has pushed into the core. Reset with the timeline.
   let firstPushedUs: number | undefined;
   let lastPushedUs: number | undefined;
-  let frameDurationUs = DEFAULT_FRAME_DURATION_US;
+  /** Known once a packet's duration or two frames' spacing has shown it. */
+  let frameDurationUs: number | undefined;
   /** Where the newest pushed frame ends: the furthest the clock can read. */
   let pushedEndUs: number | undefined;
   /** First timestamp pushed in the current fill, and the context time of the latest push. */
@@ -252,19 +277,24 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
       return;
     }
 
-    anchor = { mediaUs: timestampUs, contextUs: atUs ?? contextNowUs(), placed: false };
-
+    // The refill's first report ends the hold. Its floor is what the clock
+    // reads at that moment — the audible position, which can still be short
+    // of the dry point while the device plays out what it had queued.
     if (dryLimitUs !== undefined && timestampUs >= dryLimitUs - REPORT_TOLERANCE_US) {
-      holdFloorUs = dryLimitUs;
+      const heldUs = Math.min(extrapolatedUs() ?? dryLimitUs, dryLimitUs);
+
+      holdFloorUs = Math.max(holdFloorUs ?? heldUs, heldUs);
       dryLimitUs = undefined;
     }
+
+    anchor = { mediaUs: timestampUs, contextUs: atUs ?? contextNowUs(), placed: false };
   };
 
   /** Forget everything pushed on the current timeline, and the clock placed on it. */
   const resetTimeline = (): void => {
     firstPushedUs = undefined;
     lastPushedUs = undefined;
-    frameDurationUs = DEFAULT_FRAME_DURATION_US;
+    frameDurationUs = undefined;
     pushedEndUs = undefined;
     fillStartUs = undefined;
     anchor = undefined;
@@ -323,7 +353,12 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
     const positionUs = extrapolatedUs();
 
     if (positionUs === undefined || dryLimitUs !== undefined) {
-      if (fillStartUs === undefined || timestampUs < fillStartUs + stats.jitterTargetUs + frameDurationUs) return true;
+      if (
+        fillStartUs === undefined ||
+        timestampUs < fillStartUs + stats.jitterTargetUs + (frameDurationUs ?? DEFAULT_FRAME_DURATION_US)
+      ) {
+        return true;
+      }
 
       return contextNowUs() - lastPushAtUs > FILL_STALL_US && stats.bufferedUs < stats.jitterTargetUs;
     }
@@ -334,17 +369,20 @@ export function createWorkletAudioRendererActor(options: CreateWorkletAudioRende
   const push = (active: AudioPlayerInput, timestampUs: number, payload: Uint8Array): void => {
     active.push({ timestampUs, payload });
 
-    if (lastPushedUs !== undefined) {
-      const deltaUs = timestampUs - lastPushedUs;
+    // Opus says how long each packet is. Otherwise the shortest step between
+    // pushed frames is the frame length: a step over lost packets is longer,
+    // and must not extend the audio past where it really ends.
+    const opusUs = decoderConfig?.codec === 'opus' ? opusPacketDurationUs(payload) : undefined;
+    const stepUs = lastPushedUs === undefined ? undefined : timestampUs - lastPushedUs;
 
-      if (deltaUs > 0 && deltaUs <= MAX_FRAME_DURATION_US) frameDurationUs = deltaUs;
-    }
+    if (opusUs !== undefined) frameDurationUs = opusUs;
+    else if (stepUs !== undefined && stepUs > 0) frameDurationUs = Math.min(frameDurationUs ?? stepUs, stepUs);
 
     firstPushedUs ??= timestampUs;
     fillStartUs ??= timestampUs;
     lastPushedUs = timestampUs;
     lastPushAtUs = contextNowUs();
-    pushedEndUs = timestampUs + frameDurationUs;
+    pushedEndUs = timestampUs + (frameDurationUs ?? DEFAULT_FRAME_DURATION_US);
     inner.send({ type: 'scheduled', untilUs: pushedEndUs });
   };
 
