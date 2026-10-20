@@ -103,7 +103,10 @@ export interface CreateTrackSubscriberOptions {
   track: MoqTrack;
   /** Where to join the track. Default: `{ type: 'next-object' }` (live edge). */
   locationFilter?: LocationFilter;
-  /** Extra request parameters (auth tokens, priority). */
+  /**
+   * Extra request parameters (auth tokens, priority). A `subscriberPriority` here replaces the track kind's
+   * {@link MEDIA_SUBSCRIBER_PRIORITY}.
+   */
   parameters?: MessageParameters;
   /** Auth-expiry seam: return refreshed parameters to retry the subscribe with. */
   refreshAuth?(): Promise<MessageParameters>;
@@ -153,6 +156,18 @@ const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'next-object' };
 
 /** See `CreateTrackSubscriberOptions.stallTimeoutMs`. */
 export const DEFAULT_STALL_TIMEOUT_MS = 10_000;
+
+/**
+ * SUBSCRIBER_PRIORITY by catalog track kind, lower being more urgent: audio ahead of video on a congested downlink.
+ * moq-relay 0.17 orders what it sends a viewer by subscriber priority alone and ignores the publisher's, and the value
+ * cannot change later — any REQUEST_UPDATE ends the subscription there — so it rides every SUBSCRIBE. Same values as
+ * the relay SDKs' `mediaSubscribeParameters` (muxinc/relay-sdks#337). Other kinds send none, leaving the peer's
+ * default.
+ */
+export const MEDIA_SUBSCRIBER_PRIORITY: Readonly<Partial<Record<MoqTrack['type'], number>>> = {
+  audio: 16,
+  video: 96,
+};
 
 /**
  * Time constant of the arrival-offset envelope's decay, in milliseconds. The bounds relax toward the current sample by
@@ -596,7 +611,12 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
                   if (destroyed) return;
 
                   resetArrivalBaseline();
-                  subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
+                  subscribe({
+                    ...parameters,
+                    ...refreshed,
+                    subscriberPriority: parameters.subscriberPriority,
+                    locationFilter: parameters.locationFilter,
+                  });
                 })
                 .catch((refreshError) => {
                   if (destroyed) return;
@@ -628,6 +648,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
 
   subscribe({
     ...options.parameters,
+    subscriberPriority: options.parameters?.subscriberPriority ?? MEDIA_SUBSCRIBER_PRIORITY[track.type],
     locationFilter: options.locationFilter ?? DEFAULT_LOCATION_FILTER,
   });
 

@@ -3,12 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { signal } from '../../../core/signals/primitives';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
-import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
+import {
+  type MessageParameters,
+  PUBLISH_DONE_STATUS,
+  REQUEST_ERROR_CODE,
+} from '../../../network/moqt/control-messages';
 import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import {
   createTrackSubscriberActor,
   type CreateTrackSubscriberOptions,
+  MEDIA_SUBSCRIBER_PRIORITY,
   type TrackSubscriberActor,
   type TrackSubscriberContext,
 } from '../../actors/track-subscriber';
@@ -1232,5 +1237,78 @@ describe.each([
     } finally {
       h.reactor.destroy();
     }
+  });
+});
+
+// Real subscribers over a recording session: what reaches the wire on every
+// path that builds a subscription, not just what the factory was handed.
+describe('subscriber priority on the wire', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function recordingSession() {
+    const subscribes: { trackName: string; parameters?: MessageParameters; handlers: SubscriptionHandlers }[] = [];
+    const session: MoqtSession = {
+      ready: Promise.resolve(),
+      subscribe(options, handlers = {}) {
+        subscribes.push({ trackName: options.trackName, parameters: options.parameters, handlers });
+        return { requestId: subscribes.length, update: vi.fn(), cancel: vi.fn() };
+      },
+      fetch: () => ({ requestId: 0, cancel: vi.fn() }),
+      trackStatus: vi.fn(),
+      close: vi.fn(),
+      destroy: vi.fn(),
+    };
+
+    return { session, subscribes };
+  }
+
+  it('sends video priority on the initial join, an ABR switch, and a rejoin', async () => {
+    const { session, subscribes } = recordingSession();
+    const deps = makeDeps();
+
+    deps.context.moqSessionActor.set(makeSessionActor(session));
+    const reactor = subscribeSelectedVideoTrack.setup({ ...deps, config: { subscribeRetry: { initialDelayMs: 100 } } });
+
+    deps.state.selectedVideoTrackId.set(HD.id);
+    await vi.advanceTimersByTimeAsync(0);
+    deps.state.selectedVideoTrackId.set(SD.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(subscribes.map((s) => s.trackName)).toEqual(['hd', 'sd']);
+
+    // The handoff target dies; recovery re-subscribes the same layer.
+    subscribes[1]!.handlers.onError?.({ errorCode: REQUEST_ERROR_CODE.INTERNAL_ERROR, retryInterval: 0, reason: 'x' });
+    await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+    expect(subscribes.map((s) => s.trackName)).toEqual(['hd', 'sd', 'sd']);
+
+    for (const { parameters } of subscribes) {
+      expect(parameters?.subscriberPriority).toBe(MEDIA_SUBSCRIBER_PRIORITY.video);
+    }
+
+    reactor.destroy();
+  });
+
+  it('sends audio priority on the initial join and a rejoin', async () => {
+    const { session, subscribes } = recordingSession();
+    const deps = makeAudioDeps();
+
+    deps.context.moqSessionActor.set(makeSessionActor(session));
+    const reactor = subscribeSelectedAudioTrack.setup({ ...deps, config: { subscribeRetry: { initialDelayMs: 100 } } });
+
+    deps.state.selectedAudioTrackId.set(MAIN_AUDIO.id);
+    await vi.advanceTimersByTimeAsync(0);
+    subscribes[0]!.handlers.onDone?.({ statusCode: PUBLISH_DONE_STATUS.TRACK_ENDED, streamCount: 0, reason: 'ended' });
+    await vi.advanceTimersByTimeAsync(PAST_REJOIN_BACKOFF_MS);
+    expect(subscribes.map((s) => s.trackName)).toEqual(['main', 'main']);
+
+    for (const { parameters } of subscribes) {
+      expect(parameters?.subscriberPriority).toBe(MEDIA_SUBSCRIBER_PRIORITY.audio);
+    }
+
+    reactor.destroy();
   });
 });
