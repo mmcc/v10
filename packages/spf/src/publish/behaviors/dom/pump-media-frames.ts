@@ -14,7 +14,7 @@
  * messages — it never creates actors. Co-writer of `state.publishError` (missing `MediaStreamTrackProcessor` platform
  * support only).
  */
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import { effect } from '../../../core/signals/effect';
 import { peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';
 import type { AudioEncoderActor } from '../../actors/dom/audio-encoder';

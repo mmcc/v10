@@ -1,6 +1,6 @@
 {
   "name": "@videojs/spotify-audio",
-  "version": "10.0.0-rc.4",
+  "version": "10.2.0",
   "description": "Spotify embed playback adapter for Video.js",
   "keywords": [
     "audio",
@@ -13,7 +13,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/videojs/v10",
+    "url": "https://github.com/videojs/video.js",
     "directory": "packages/adapters/spotify-audio"
   },
   "files": [
@@ -35,8 +35,7 @@
     "access": "public"
   },
   "scripts": {
-    "build:watch": "vp pack --watch ./src --no-clean",
-    "dev": "pnpm run build:watch",
+    "dev": "vp pack --watch ./src --no-clean",
     "test": "vp test run",
     "test:watch": "vp test",
     "clean": "rimraf --glob dist types '*.tsbuildinfo'"

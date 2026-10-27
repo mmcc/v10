@@ -1,7 +1,8 @@
-import { CapturePlaceholderCore, CapturePlaceholderDataAttrs } from '@videojs/core';
+import { CapturePlaceholderCore, CapturePlaceholderDataAttrs, type CapturePlaceholderState } from '@videojs/core';
 import { selectCaptureSource } from '@videojs/core/dom';
 import { type Text, translateText } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
+import type { MediaCaptureSourceState } from '@videojs/media';
 
 import { i18nContext } from '../../i18n/context';
 import { I18nController } from '../../i18n/controller';
@@ -14,7 +15,7 @@ import { MediaUIElement } from '../media-ui-element';
  * are kept as-is; without them the element renders the core's translated guidance text. Visibility is a styling
  * concern: skins show/hide it via the reflected `data-capture-state` attribute.
  */
-export class CapturePlaceholderElement extends MediaUIElement<CapturePlaceholderCore> {
+export class CapturePlaceholderElement extends MediaUIElement<CapturePlaceholderState, MediaCaptureSourceState> {
   static readonly tagName = 'media-capture-placeholder';
 
   static override properties: PropertyDeclarationMap = {

@@ -22,15 +22,17 @@ export interface LiveButtonProps {
 const LIVE_EDGE_OFFSET = 10;
 
 /**
- * Grace window (in seconds) before `liveEdgeStart` that still counts as "at the live edge". Absorbs the small gap
- * between the player's initial playback position (e.g. hls.js `liveSyncDuration`) and the manifest's `HOLD-BACK`, so
- * autoplay reliably reports live.
+ * Grace window (in seconds) before `liveEdgeStart` that still counts as "at the live edge". Absorbs small gaps between
+ * the engine's playback position and `liveEdgeStart`: playback that falls a little behind after start-up or a stall,
+ * and engines that start at a position other than the playlist hold-back, so autoplay reliably reports live.
  */
 const LIVE_EDGE_TOLERANCE = 5;
 
 /**
  * Media state slice consumed by `LiveButtonCore` — composed by the HTML and React `LiveButton` adapters from the
  * `live`, `time`, and `buffer` store slices.
+ *
+ * @internal
  */
 export type LiveButtonMediaState = Pick<MediaTimeState, 'currentTime' | 'seek'> &
   Pick<MediaBufferState, 'seekable'> &
@@ -49,6 +51,7 @@ export interface LiveButtonState extends ButtonState {
  * Core state machine for a "Live" button. Indicates whether the player is playing at the live edge and seeks to the
  * Seekable Live Edge when activated.
  *
+ * @internal
  * @see https://github.com/video-dev/media-ui-extensions/blob/main/proposals/0007-live-edge.md
  */
 export class LiveButtonCore {
@@ -140,6 +143,7 @@ export class LiveButtonCore {
   }
 }
 
+/** @internal */
 export namespace LiveButtonCore {
   export type Props = LiveButtonProps;
   export type State = LiveButtonState;

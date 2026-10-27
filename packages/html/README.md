@@ -2,8 +2,6 @@
 
 [![package-badge]][package]
 
-> **⚠️ Release candidate** Close to stable. Adoption in real projects encouraged.
-
 `@videojs/html` is a comprehensive library for building media players with vanilla JavaScript and
 Web Components. It provides a complete set of Custom Elements, state management, controllers,
 and utilities for creating feature-rich, accessible video and audio players.
@@ -46,9 +44,9 @@ members:
 
 ## License
 
-[Apache-2.0](./LICENSE)
+[Apache-2.0](../../LICENSE)
 
 [package]: https://www.npmjs.com/package/@videojs/html
 [package-badge]: https://img.shields.io/npm/v/@videojs/html?label=@videojs/html
 [discord]: https://discord.gg/JBqHh485uF
-[gh-discussions]: https://github.com/videojs/v10/discussions
+[gh-discussions]: https://github.com/videojs/video.js/discussions

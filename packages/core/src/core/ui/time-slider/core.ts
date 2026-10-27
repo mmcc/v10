@@ -16,6 +16,10 @@ import { positionText, unknownText } from '../../i18n/text/time';
 import { SliderCore, type SliderProps, type SliderState } from '../slider/core';
 
 export interface TimeSliderProps extends SliderProps {
+  /** Step increment in seconds for value changes (arrow keys). */
+  step?: number | undefined;
+  /** Large step increment in seconds (Page Up/Down keys). */
+  largeStep?: number | undefined;
   /** @internal Derived from `currentTime` — not user-settable. */
   value?: number | undefined;
   /** @internal Always 0 — not user-settable. */
@@ -33,7 +37,11 @@ export interface TimeSliderState extends SliderState, Pick<MediaTimeState, 'curr
   bufferPercent: number;
 }
 
-/** Time-domain slider: maps media time/buffer state to slider state. */
+/**
+ * Time-domain slider: maps media time/buffer state to slider state.
+ *
+ * @internal
+ */
 export class TimeSliderCore extends SliderCore {
   static override readonly defaultProps: NonNullableObject<TimeSliderProps> = {
     ...SliderCore.defaultProps,
@@ -46,6 +54,7 @@ export class TimeSliderCore extends SliderCore {
   #media: (MediaTimeState & MediaBufferState) | null = null;
   #formatLocale: string | string[] | undefined;
   #wasPlayingBeforeDrag = false;
+  #text: { current: number; duration: number; params: { current: string; duration?: string } } | undefined;
 
   constructor(props?: TimeSliderProps) {
     super();
@@ -64,6 +73,8 @@ export class TimeSliderCore extends SliderCore {
 
   /** @internal Platform adapters set the active i18n locale for `aria-valuetext` time formatting. */
   setFormatLocale(locale: string | string[] | undefined): void {
+    if (this.#formatLocale !== locale) this.#text = undefined;
+
     this.#formatLocale = locale;
   }
 
@@ -110,17 +121,18 @@ export class TimeSliderCore extends SliderCore {
     return Number.isFinite(state.duration) ? positionText : this.getValueTextParams(state).current;
   }
 
-  getValueTextParams(state: TimeSliderState): { current: string; duration: string } | { current: string } {
-    const current = this.#formatTimeAsPhrase(this.#announceValue(state));
+  getValueTextParams(state: TimeSliderState): { current: string; duration?: string } {
+    // Spoken time has whole-second precision even though slider values advance on every frame.
+    const current = Math.floor(this.#announceValue(state));
+    const duration = Math.floor(state.duration);
+    if (this.#text && this.#text.current === current && this.#text.duration === duration) return this.#text.params;
 
-    if (!Number.isFinite(state.duration)) {
-      return { current };
-    }
+    const params = Number.isFinite(duration)
+      ? { current: this.#formatTimeAsPhrase(current), duration: this.#formatTimeAsPhrase(duration) }
+      : { current: this.#formatTimeAsPhrase(current) };
 
-    return {
-      current,
-      duration: this.#formatTimeAsPhrase(state.duration),
-    };
+    this.#text = { current, duration, params };
+    return params;
   }
 
   /**
@@ -162,6 +174,7 @@ export class TimeSliderCore extends SliderCore {
   }
 }
 
+/** @internal */
 export namespace TimeSliderCore {
   export type Props = TimeSliderProps;
   export type State = TimeSliderState;

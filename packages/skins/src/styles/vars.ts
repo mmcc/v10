@@ -8,6 +8,10 @@ export interface CssVar {
 
 /** Classification for every `--media-*` custom property used by a Skin. */
 export const vars = {
+  '--media-button-highlight': {
+    kind: 'internal',
+    description: 'Compat and Scaffold button and menu item highlight background.',
+  },
   '--media-accent-color': {
     kind: 'public',
     description: 'Accent color used by highlighted controls, menu items, slider fills, and primary actions.',
@@ -231,7 +235,15 @@ export const vars = {
   },
   '--media-controls-gradient': {
     kind: 'internal',
-    description: 'Theme gradient painted behind the video controls.',
+    description: 'Theme gradient painted behind the bottom of the video controls.',
+  },
+  '--media-controls-gradient-height': {
+    kind: 'internal',
+    description: 'Height of the top and bottom video controls gradients.',
+  },
+  '--media-controls-top-gradient': {
+    kind: 'internal',
+    description: 'Theme gradient painted behind content at the top of the video, such as the title or top controls.',
   },
   '--media-thumbnail-gradient': {
     kind: 'internal',
@@ -239,7 +251,7 @@ export const vars = {
   },
   '--media-indicator-gradient': {
     kind: 'internal',
-    description: 'Theme gradient painted behind Minimal status and volume indicators.',
+    description: 'Theme gradient painted behind Neutral status and volume indicators.',
   },
   '--media-backdrop-filter-surface': {
     kind: 'internal',
@@ -348,6 +360,10 @@ export const vars = {
   '--media-shadow-tooltip': {
     kind: 'internal',
     description: 'Theme tooltip shadow.',
+  },
+  '--media-filter-feedback': {
+    kind: 'internal',
+    description: 'Theme drop-shadow filter layered beneath centered playback and seek feedback.',
   },
   '--media-duration-dialog': {
     kind: 'internal',

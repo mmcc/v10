@@ -14,13 +14,7 @@ import type { Constructor, MixinReturn } from '@videojs/utils/types';
 
 import type { Composition } from '../../../core/composition/create-composition';
 import type { AudioContextLike } from '../../actors/dom/audio-renderer';
-import {
-  createMoqEngine,
-  type MoqEngineConfig,
-  type MoqEngineContext,
-  type MoqEngineSignals,
-  type MoqEngineState,
-} from './engine';
+import { createMoqEngine, type MoqEngineConfig, type MoqEngineContext, type MoqEngineState } from './engine';
 
 /**
  * The `AudioContextLike` render seam plus the lifecycle surface the adapter drives (`resume`/`suspend` on play/pause,
@@ -44,10 +38,9 @@ export interface MoqMediaOptions {
   createAudioContext?: () => MoqAudioContext;
   /**
    * Engine config forwarded to `createMoqEngine` — reaches the transport factory (`createMoqTransport`) and the
-   * ABR/latency tuning seams from outside the element, which a relay-less harness needs. The adapter owns
-   * `onSignalsReady`, so it is not overridable.
+   * ABR/latency tuning seams from outside the element, which a relay-less harness needs.
    */
-  engineConfig?: Omit<MoqEngineConfig, 'onSignalsReady'>;
+  engineConfig?: MoqEngineConfig;
 }
 
 export interface MoqMediaProps {
@@ -124,7 +117,6 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
 ): MixinReturn<Base, MoqMediaAPI, [options?: MoqMediaOptions]> {
   class MoqMediaImpl extends BaseClass implements MoqMediaAPI {
     readonly #engine: Composition<MoqEngineState, MoqEngineContext>;
-    #signals!: MoqEngineSignals;
     #src = moqMediaDefaultProps.src;
     #preload: MoqMediaProps['preload'] = moqMediaDefaultProps.preload;
     #autoplay = moqMediaDefaultProps.autoplay;
@@ -152,14 +144,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       const { createAudioContext, engineConfig } = (args?.[0] ?? {}) as MoqMediaOptions;
 
       this.#createAudioContext = createAudioContext ?? (() => new AudioContext());
-      const config: MoqEngineConfig = {
-        ...engineConfig,
-        onSignalsReady: (refs) => {
-          this.#signals = refs;
-        },
-      };
-
-      this.#engine = createMoqEngine(config);
+      this.#engine = createMoqEngine(engineConfig);
     }
 
     get engine(): Composition<MoqEngineState, MoqEngineContext> {
@@ -174,12 +159,12 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       if (value === this.#src) return;
 
       this.#src = value;
-      this.#signals.state.paused.set(true);
+      this.#engine.state.paused.set(true);
       // Close the load gate with it. Nothing else writes this slot false
       // (the MoQ engine deliberately omits `trackLoadTriggers`), so without
       // this a single earlier play() would make every later src change
       // bypass `preload` and open a session + subscriptions immediately.
-      this.#signals.state.loadActivated.set(false);
+      this.#engine.state.loadActivated.set(false);
 
       // The other half of `pause()`: the audio renderer has no rate-0 gate —
       // suspending the context *is* the pause — so without this the old
@@ -190,8 +175,8 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       // A new load cycle re-arms autoplay (the spec's load algorithm resets
       // the can-autoplay flag) and clears the old source's audio deferral.
       this.#autoplayAttempted = false;
-      this.#signals.state.audioSuspended.set(undefined);
-      this.#signals.state.presentation.set(value ? { url: value } : undefined);
+      this.#engine.state.audioSuspended.set(undefined);
+      this.#engine.state.presentation.set(value ? { url: value } : undefined);
 
       if (this.#autoplay) this.#attemptAutoplay();
     }
@@ -202,15 +187,15 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
 
     set preload(value: MoqMediaProps['preload']) {
       this.#preload = value;
-      this.#signals.state.preload.set(value === '' ? undefined : value);
+      this.#engine.state.preload.set(value === '' ? undefined : value);
     }
 
     get targetLatency(): number | undefined {
-      return this.#signals.state.targetLatency.get();
+      return this.#engine.state.targetLatency.get();
     }
 
     set targetLatency(value: number | undefined) {
-      this.#signals.state.targetLatency.set(value);
+      this.#engine.state.targetLatency.set(value);
     }
 
     get adaptiveLatency(): boolean | undefined {
@@ -218,11 +203,11 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       // this getter report adaptation off while it was running from
       // `engineConfig.adaptiveLatency.enabled`, and left no way to hand the
       // decision back to config once the property had been written.
-      return this.#signals.state.adaptiveLatencyEnabled.get();
+      return this.#engine.state.adaptiveLatencyEnabled.get();
     }
 
     set adaptiveLatency(value: boolean | undefined) {
-      this.#signals.state.adaptiveLatencyEnabled.set(value);
+      this.#engine.state.adaptiveLatencyEnabled.set(value);
     }
 
     get autoplay(): boolean {
@@ -248,25 +233,25 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
 
       if (!this.paused) return;
 
-      this.#signals.state.paused.set(false);
-      this.#signals.state.loadActivated.set(true);
+      this.#engine.state.paused.set(false);
+      this.#engine.state.loadActivated.set(true);
       const audioContext = this.#audioContext;
 
       if (!audioContext) {
         // No context until attach(); its alignment resume owns the unlock.
-        this.#signals.state.audioSuspended.set(true);
+        this.#engine.state.audioSuspended.set(true);
         return;
       }
 
       if (!this.#audioContextSuspended(audioContext)) return;
 
-      this.#signals.state.audioSuspended.set(true);
+      this.#engine.state.audioSuspended.set(true);
       // Chromium queues a pre-gesture resume() and settles it on the first
       // user activation, so this is both an immediate start attempt and an
       // unlock signal. Engines that reject instead (Safari) stay deferred
       // until a host gesture path calls play().
       this.#resumeAudio(audioContext)
-        .then(() => this.#signals.state.audioSuspended.set(undefined))
+        .then(() => this.#engine.state.audioSuspended.set(undefined))
         .catch(() => {});
     }
 
@@ -296,7 +281,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
     }
 
     attach(surface: HTMLCanvasElement): void {
-      this.#signals.context.renderSurface.set(surface);
+      this.#engine.context.renderSurface.set(surface);
       const audioContext = (this.#audioContext ??= this.#createAudioContext());
 
       // Align the context with the paused flag: a context created here —
@@ -306,18 +291,18 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       if (this.#audioContextSuspended(audioContext)) {
         if (!this.paused) {
           this.#resumeAudio(audioContext)
-            .then(() => this.#signals.state.audioSuspended.set(undefined))
+            .then(() => this.#engine.state.audioSuspended.set(undefined))
             .catch(() => {});
         }
       } else if (audioContext.state === 'running') {
         // A running context can always render audio — an autoplay deferral
         // recorded before the context existed is already settled.
-        this.#signals.state.audioSuspended.set(undefined);
+        this.#engine.state.audioSuspended.set(undefined);
 
         if (this.paused) this.#suspendAudio(audioContext);
       }
 
-      this.#signals.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
+      this.#engine.context.audioContext.set((this.#renderContext ??= this.#createRenderContext(audioContext)));
     }
 
     /**
@@ -330,6 +315,12 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
 
       gain.connect(audioContext.destination);
       gain.gain.value = this.#muted ? 0 : this.#volume;
+      // The worklet renderer's core constructs an `AudioWorkletNode`, which
+      // only a real context can host; an injected fake has none to offer.
+      const baseContext =
+        audioContext.baseContext ??
+        (globalThis.BaseAudioContext && audioContext instanceof globalThis.BaseAudioContext ? audioContext : undefined);
+
       return {
         get currentTime() {
           return audioContext.currentTime;
@@ -337,6 +328,13 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
         get destination() {
           return gain;
         },
+        get baseLatency() {
+          return audioContext.baseLatency;
+        },
+        get outputLatency() {
+          return audioContext.outputLatency;
+        },
+        baseContext,
         createBuffer: (numberOfChannels, length, sampleRate) =>
           audioContext.createBuffer(numberOfChannels, length, sampleRate),
         createBufferSource: () => audioContext.createBufferSource(),
@@ -344,8 +342,8 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
     }
 
     detach(): void {
-      this.#signals.context.renderSurface.set(undefined);
-      this.#signals.context.audioContext.set(undefined);
+      this.#engine.context.renderSurface.set(undefined);
+      this.#engine.context.audioContext.set(undefined);
     }
 
     async play(): Promise<void> {
@@ -354,11 +352,11 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       this.#autoplayAttempted = true;
       // The engine-side pause gate: renderers hold their playout rate at 0
       // while set, which is what actually freezes video-only playback.
-      this.#signals.state.paused.set(false);
+      this.#engine.state.paused.set(false);
       // Set before the resume below: play() is the load intent regardless of
       // whether the audio device comes up, and a rejection must not leave
       // the engine unable to load at all.
-      this.#signals.state.loadActivated.set(true);
+      this.#engine.state.loadActivated.set(true);
 
       // The autoplay-policy gate: resuming inside the user gesture that
       // triggered play() is what unlocks the audio clock. A rejection —
@@ -369,7 +367,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
         try {
           await this.#resumeAudio(this.#audioContext);
         } catch (error) {
-          this.#signals.state.paused.set(true);
+          this.#engine.state.paused.set(true);
           throw error;
         }
       }
@@ -378,14 +376,14 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       // any standing autoplay deferral of the audio subscription is over.
       // Pre-attach (no context yet) the deferral must survive — attach()'s
       // alignment resume owns the unlock there.
-      if (this.#audioContext) this.#signals.state.audioSuspended.set(undefined);
+      if (this.#audioContext) this.#engine.state.audioSuspended.set(undefined);
     }
 
     pause(): void {
       // Pausing settles autoplay too (spec: pause() clears can-autoplay) —
       // toggling `autoplay` on later must not restart a paused player.
       this.#autoplayAttempted = true;
-      this.#signals.state.paused.set(true);
+      this.#engine.state.paused.set(true);
 
       if (this.#audioContext) this.#suspendAudio(this.#audioContext);
     }
@@ -393,7 +391,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
     get paused(): boolean {
       // The engine slot is the single source of truth; it starts (and is
       // reset on destroy to) `undefined`, which reads as paused here.
-      return this.#signals.state.paused.get() ?? true;
+      return this.#engine.state.paused.get() ?? true;
     }
 
     get volume(): number {
@@ -424,7 +422,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
     }
 
     get currentTime(): number {
-      return this.#signals.state.currentTime.get() ?? 0;
+      return this.#engine.state.currentTime.get() ?? 0;
     }
 
     get duration(): number {
@@ -433,15 +431,15 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
     }
 
     get measuredLatency(): number | undefined {
-      return this.#signals.state.measuredLatency.get();
+      return this.#engine.state.measuredLatency.get();
     }
 
     get effectiveTargetLatency(): number | undefined {
-      return this.#signals.state.effectiveTargetLatency.get();
+      return this.#engine.state.effectiveTargetLatency.get();
     }
 
     get adaptiveTargetLatency(): number | undefined {
-      return this.#signals.state.adaptiveTargetLatency.get();
+      return this.#engine.state.adaptiveTargetLatency.get();
     }
 
     destroy(): void {

@@ -1,4 +1,4 @@
-import { MicButtonCore, MicButtonDataAttrs } from '@videojs/core';
+import { MicButtonCore, MicButtonDataAttrs, type MicButtonState } from '@videojs/core';
 import { selectCaptureTracks } from '@videojs/core/dom';
 import type { MediaCaptureTracksState } from '@videojs/media';
 
@@ -6,7 +6,7 @@ import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
 import { MediaButtonElement } from '../media-button-element';
 
-export class MicButtonElement extends MediaButtonElement<MicButtonCore> {
+export class MicButtonElement extends MediaButtonElement<MicButtonState, MediaCaptureTracksState> {
   static readonly tagName = 'media-mic-button';
 
   protected readonly core = new MicButtonCore();

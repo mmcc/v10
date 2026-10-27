@@ -1,16 +1,12 @@
-import {
-  type Composition,
-  type ContextSignals,
-  createComposition,
-  type StateSignals,
-} from '../../../core/composition/create-composition';
-import { makeShareSignals, type ShareSignalsConfig } from '../../../core/composition/share-signals';
+import { type Composition, createComposition } from '../../../core/composition/create-composition';
+import { defineExternalSignals } from '../../../core/composition/define-external-signals';
 import type { QualityConfig } from '../../../media/abr/quality-selection';
 import type { AudioTrack, MaybeResolvedPresentation, TextTrack, VideoTrack } from '../../../media/types';
 import type { BandwidthConfig, BandwidthState } from '../../../network/bandwidth-estimator';
 import type { RetryBackoffConfig } from '../../../network/retry-backoff';
 import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
+import type { CreateAudioPlayer } from '../../actors/dom/worklet-audio-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
 import { type AdaptiveLatencyConfig, adaptLatencyTarget } from '../../behaviors/adapt-latency-target';
@@ -32,7 +28,12 @@ import {
   syncLatency,
 } from '../../behaviors/sync-latency';
 import { DEFAULT_MOQ_BANDWIDTH_CONFIG, trackMoqBandwidth } from '../../behaviors/track-moq-bandwidth';
-import { switchAudioTrack, switchTextTrack, switchVideoTrack } from '../../behaviors/track-switching';
+import {
+  switchAudioTrack,
+  switchTextTrack,
+  switchVideoTrack,
+  type UserTrackSelectionState,
+} from '../../behaviors/track-switching';
 
 // ============================================================================
 // MoQ Engine State & Context
@@ -129,16 +130,11 @@ export interface MoqEngineContext {
   audioContext?: AudioContextLike;
 }
 
-export type MoqEngineSignals = {
-  state: StateSignals<MoqEngineState>;
-  context: ContextSignals<MoqEngineContext>;
-};
-
 /**
  * Configuration for the MoQ playback engine. Each option is consumed by the appropriate behavior — the engine itself
  * has no config beyond what its behaviors read.
  */
-export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqEngineContext> {
+export interface MoqEngineConfig {
   /** Transport factory override (tests / relays needing special setup). */
   createMoqTransport?: CreateMoqTransport;
   /** MSF §11.4 token workflow: initial supply + expiry refresh. */
@@ -153,6 +149,11 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
   moqBandwidth?: Partial<BandwidthConfig>;
   /** Latency tuning: the controller (`syncLatency`) plus the renderers' join-at-edge anchor. */
   latency?: Partial<LatencyControlConfig>;
+  /**
+   * Render audio through the shared AudioWorklet player core (`@mux/moq-media`'s `createAudioPlayer`) instead of
+   * scheduled `AudioBufferSourceNode`s. Opt-in: the core cannot apply `playoutRate` nudges yet (mmcc/v10#66).
+   */
+  createAudioPlayer?: CreateAudioPlayer;
   /**
    * Adaptive-latency tuning (`adaptLatencyTarget`), including its `enabled` switch — **off by default**, so an
    * untouched engine holds the fixed setpoint `latency` describes and this behavior registers no timer. Deliberately
@@ -197,14 +198,12 @@ export interface MoqEngineConfig extends ShareSignalsConfig<MoqEngineState, MoqE
 // ============================================================================
 
 /**
- * Materialize the consumer-input slots no composed behavior produces (`user*TrackSelection` — track-switching only
- * reads them) and hand the composition signal refs to `onSignalsReady`.
+ * External signals of the MoQ playback engine: the consumer's track selections, which no composed behavior declares
+ * (track-switching only reads them).
  */
-const shareSignals = makeShareSignals<MoqEngineState, MoqEngineContext>([
-  'userVideoTrackSelection',
-  'userAudioTrackSelection',
-  'userTextTrackSelection',
-]);
+const moqEngineExternalSignals = defineExternalSignals<UserTrackSelectionState>()({
+  state: ['userVideoTrackSelection', 'userAudioTrackSelection', 'userTextTrackSelection'],
+});
 
 /**
  * Create a MoQ playback engine.
@@ -219,17 +218,12 @@ const shareSignals = makeShareSignals<MoqEngineState, MoqEngineContext>([
  *
  * @example
  *   ```ts
- *   let signals: MoqEngineSignals;
- *   const engine = createMoqEngine({
- *     onSignalsReady: (refs) => {
- *       signals = refs;
- *     },
- *   });
+ *   const engine = createMoqEngine();
  *
- *   signals.context.renderSurface.set(canvas);
- *   signals.context.audioContext.set(new AudioContext());
- *   signals.state.presentation.set({ url: 'moqt://relay.example.com/live#msf:live--catalog' });
- *   signals.state.loadActivated.set(true);
+ *   engine.context.renderSurface.set(canvas);
+ *   engine.context.audioContext.set(new AudioContext());
+ *   engine.state.presentation.set({ url: 'moqt://relay.example.com/live#msf:live--catalog' });
+ *   engine.state.loadActivated.set(true);
  *
  *   await engine.destroy();
  *   ```;
@@ -295,9 +289,7 @@ export function createMoqEngine(config: MoqEngineConfig = {}): Composition<MoqEn
       // Target-latency hold: rate nudges / group-skip catch-up.
       syncLatency,
 
-      // External read/write surface — last so initial signal setup has
-      // happened before the consumer callback fires.
-      shareSignals,
+      moqEngineExternalSignals,
     ],
     {
       config: compositionConfig,

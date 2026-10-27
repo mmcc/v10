@@ -52,7 +52,7 @@
  *
  * Writes no state; state/context reader only.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import type { ReadonlySignal } from '../../core/signals/primitives';

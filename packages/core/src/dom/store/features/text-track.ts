@@ -11,11 +11,12 @@ import {
   isMediaSourceCapable,
   isMediaTextTrackCapable,
   isQuerySelectorAllCapable,
+  toMediaCrossOrigin,
 } from '@videojs/media';
 import { findTrackElement, getCaptionOrSubtitleTracks, isCaptionOrSubtitleTrack, listen } from '@videojs/utils/dom';
-import { isNil, isNull } from '@videojs/utils/predicate';
+import { isNull } from '@videojs/utils/predicate';
 
-import { DEFAULT_LOCALE, findLocaleKeys, getCanonicalLocaleKey } from '../../../core/i18n';
+import { DEFAULT_LOCALE, findLocaleKeys, getLocaleKey } from '../../../core/i18n';
 import { definePlayerFeature } from '../../feature';
 import { clampCuesToDuration } from '../text-cues';
 
@@ -45,28 +46,18 @@ function showOnly(tracks: IdentifiedTrack[], active: TextTrackLike | null): void
   }
 }
 
-/**
- * Map a media element's `crossOrigin` to a CORS mode. Per the CORS-settings attribute, any value other than
- * `use-credentials` is Anonymous — including the empty string and unknown keywords.
- */
-function toCorsMode(value: string | null | undefined): MediaThumbnailsTrack['crossOrigin'] {
-  if (isNil(value)) return null;
-
-  return value.toLowerCase() === 'use-credentials' ? 'use-credentials' : 'anonymous';
-}
-
 function findLocaleTrack(tracks: IdentifiedTrack[], locale: string): IdentifiedTrack | undefined {
-  const localeKey = getCanonicalLocaleKey(locale);
+  const localeKey = getLocaleKey(locale);
   const keys = findLocaleKeys(locale);
 
   // Translation lookup falls back to English; caption selection should not.
   if (localeKey !== DEFAULT_LOCALE && !localeKey.startsWith(`${DEFAULT_LOCALE}-`)) keys.pop();
 
   for (const key of keys) {
-    const exact = tracks.find(({ track }) => getCanonicalLocaleKey(track.language) === key);
+    const exact = tracks.find(({ track }) => getLocaleKey(track.language) === key);
     if (exact) return exact;
 
-    const regional = tracks.find(({ track }) => getCanonicalLocaleKey(track.language).startsWith(`${key}-`));
+    const regional = tracks.find(({ track }) => getLocaleKey(track.language).startsWith(`${key}-`));
     if (regional) return regional;
   }
 
@@ -189,9 +180,9 @@ export const textTrackFeature = definePlayerFeature({
           // the CueList is typed as TextTrackCue which doesn't expose `text`.
           cues: thumbnailsTextTrack.cues ? (Array.from(thumbnailsTextTrack.cues) as unknown as MediaTextCue[]) : [],
           src: findTrackElement(media, thumbnailsTextTrack)?.src ?? null,
-          // Read the host rather than any inner native element: for a custom media
-          // element the attribute lives on the host and is forwarded inward.
-          crossOrigin: isMediaSourceCapable(media) ? toCorsMode(media.crossOrigin) : null,
+          // Read the host rather than any inner native element: for a media
+          // component the attribute lives on the host and is forwarded inward.
+          crossOrigin: isMediaSourceCapable(media) ? toMediaCrossOrigin(media.crossOrigin) : null,
         };
       }
 

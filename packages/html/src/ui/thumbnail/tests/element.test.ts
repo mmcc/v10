@@ -89,6 +89,28 @@ describe('ThumbnailElement', () => {
     expect(thumbnail.querySelector('img')).toBeNull();
   });
 
+  it('sets data-hidden when no thumbnails are available', async () => {
+    const thumbnail = document.createElement(ThumbnailElement.tagName) as ThumbnailElement;
+
+    document.body.append(thumbnail);
+    await thumbnail.updateComplete;
+
+    expect(thumbnail.hasAttribute('data-hidden')).toBe(true);
+  });
+
+  it('does not have data-hidden when thumbnails match', async () => {
+    const thumbnail = document.createElement(ThumbnailElement.tagName) as ThumbnailElement;
+    const img = document.createElement('img');
+
+    Object.defineProperty(img, 'complete', { value: false, configurable: true });
+    thumbnail.thumbnails = [{ url: 'thumb.jpg', startTime: 0 }];
+    thumbnail.append(img);
+    document.body.append(thumbnail);
+    await thumbnail.updateComplete;
+
+    expect(thumbnail.hasAttribute('data-hidden')).toBe(false);
+  });
+
   it('uses a supplied light-DOM image in place of the fallback', async () => {
     const thumbnail = document.createElement(ThumbnailElement.tagName) as ThumbnailElement;
     const img = document.createElement('img');
@@ -298,12 +320,12 @@ describe('ThumbnailElement', () => {
   });
 
   describe('crossorigin', () => {
-    it('inherits the media element CORS mode when unset', async () => {
+    it('inherits the media component CORS mode when unset', async () => {
       await expect(renderCrossOrigin('anonymous')).resolves.toBe('anonymous');
       await expect(renderCrossOrigin('use-credentials')).resolves.toBe('use-credentials');
     });
 
-    it('sets nothing when the media element is not in CORS mode', async () => {
+    it('sets nothing when the media component is not in CORS mode', async () => {
       await expect(renderCrossOrigin(null)).resolves.toBeNull();
     });
 
@@ -356,7 +378,7 @@ describe('ThumbnailElement', () => {
 
     it('does not inherit for thumbnails supplied directly', async () => {
       // Images set through the property may live anywhere, so they carry no
-      // relationship to the media element's CORS mode.
+      // relationship to the media component's CORS mode.
       const attribute = await renderCrossOrigin('anonymous', (el) => {
         el.thumbnails = [{ url: 'https://images.example.com/sprite.jpg', startTime: 0 }];
       });

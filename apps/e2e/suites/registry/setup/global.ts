@@ -463,7 +463,7 @@ async function registryPackageRoots(): Promise<Set<string>> {
 function registryPath(project: RegistryConsumerProject): string {
   const target = project.framework === 'html' ? 'html' : project.styling === 'css' ? 'react/css' : 'react';
 
-  return project.theme === 'minimal' ? `${target}/minimal` : target;
+  return project.theme === 'default' ? target : `${target}/${project.theme}`;
 }
 
 /** Package directories under `packages/`, descending one level into bucket directories such as `adapters/`. */
@@ -500,7 +500,8 @@ async function readWorkspacePackages(): Promise<Map<string, WorkspacePackage>> {
     // SAFETY: each source is a workspace package.json; `name` is checked before the manifest enters the package map.
     const manifest = JSON.parse(source) as PackageManifest;
 
-    if (manifest.name?.startsWith('@videojs/')) packages.set(manifest.name, { directory: packageDir, manifest });
+    // Map unscoped packages such as `video.js` too, so a `@videojs/*` dependency on one packs from the workspace.
+    if (isString(manifest.name)) packages.set(manifest.name, { directory: packageDir, manifest });
   }
 
   return packages;

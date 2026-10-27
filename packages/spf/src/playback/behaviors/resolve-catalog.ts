@@ -34,7 +34,7 @@
  * Multi-writer on `state.presentation` with the engine adapter (initial `{ url }` input) — same legitimate split as
  * `resolvePresentation`.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, type ReadonlySignal, type Signal } from '../../core/signals/primitives';

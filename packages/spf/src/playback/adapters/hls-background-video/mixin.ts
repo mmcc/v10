@@ -1,3 +1,4 @@
+import { onEvent } from '@videojs/utils/dom';
 import type { Constructor, MixinReturn } from '@videojs/utils/types';
 
 import type { Composition } from '../../../core/composition/create-composition';
@@ -9,13 +10,13 @@ import {
   SVTA_UNSUPPORTED_VIDEO_FORMAT,
   type SvtaError,
 } from '../../../media/errors';
+import { resolveSourceUrl } from '../../../network/resolve-source-url';
 import {
-  type BackgroundVideoEngineConfig,
-  type BackgroundVideoEngineContext,
-  type BackgroundVideoEngineSignals,
-  type BackgroundVideoEngineState,
-  createBackgroundVideoEngine,
-} from '../../engines/hls/engine-background-video';
+  type EngineConfig,
+  type EngineContext,
+  type EngineState,
+  createEngine,
+} from '../../engines/hls-background-video';
 import { UNPLAYABLE_SOURCE_MESSAGE } from '../../primitives/error-messages';
 import { firstFatal, type HlsVideoMediaError, hasUnsupportedFeatureCause } from '../hls-video/error-surface';
 
@@ -26,8 +27,8 @@ export type { HlsVideoMediaError } from '../hls-video/error-surface';
 
 /** What `new HlsBackgroundVideoAdapter(options)` accepts; see `HlsVideoAdapterOptions` for why it is typed here. */
 export interface HlsBackgroundVideoAdapterOptions {
-  /** Engine config forwarded to `createBackgroundVideoEngine`. */
-  config?: BackgroundVideoEngineConfig;
+  /** Engine config forwarded to `createEngine`. */
+  config?: EngineConfig;
 }
 
 export interface HlsBackgroundVideoAdapterProps {
@@ -35,7 +36,7 @@ export interface HlsBackgroundVideoAdapterProps {
 }
 
 export interface HlsBackgroundVideoAdapterAPI extends HlsBackgroundVideoAdapterProps {
-  readonly engine: Composition<BackgroundVideoEngineState, BackgroundVideoEngineContext>;
+  readonly engine: Composition<EngineState, EngineContext>;
   readonly error: HlsVideoMediaError | null;
   attach(mediaElement: HTMLMediaElement): void;
   detach(): void;
@@ -113,9 +114,14 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
       src: '',
     };
 
-    #engine: Composition<BackgroundVideoEngineState, BackgroundVideoEngineContext>;
-    #config: BackgroundVideoEngineConfig;
-    #signals!: BackgroundVideoEngineSignals;
+    /**
+     * Engine this media plays through, reported to analytics such as Mux Data. Names the SPF engine entry point it
+     * composes (`@videojs/spf/engines/hls-background-video`), since each SPF engine is its own composition.
+     */
+    static readonly engineName: string = 'spf-hls-background-video';
+
+    #engine: Composition<EngineState, EngineContext>;
+    #config: EngineConfig;
     #error: HlsVideoMediaError | null = null;
     /**
      * The _reported_ condition currently surfaced, which is what the re-fire latch keys on. Not `#error.code`: that's
@@ -124,8 +130,8 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
     #reportedCode: number | null = null;
     #stopErrorSync: () => void;
 
-    /** Pending loadstart listener from a deferred play() retry, if any. */
-    #loadstartListener: (() => void) | null = null;
+    /** Aborting a generation cancels all retries, including ones not yet registered. */
+    #playGeneration = new AbortController();
 
     constructor(...args: any[]) {
       super(...args);
@@ -140,13 +146,13 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
       // the slot per source, so a new source starts with no error without this
       // needing its own source-change hook.
       this.#stopErrorSync = effect(() => {
-        const errors = this.#signals.state.errors.get();
+        const errors = this.#engine.state.errors.get();
 
         this.#setError(firstFatal(errors, FATAL_SVTA_CODES), errors);
       });
     }
 
-    get engine(): Composition<BackgroundVideoEngineState, BackgroundVideoEngineContext> {
+    get engine(): Composition<EngineState, EngineContext> {
       return this.#engine;
     }
 
@@ -205,6 +211,10 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
     // -------------------------------------------------------------------------
 
     attach(mediaElement: HTMLMediaElement): void {
+      if (mediaElement !== this.#engine.context.mediaElement.get()) {
+        this.#cancelPendingPlay();
+      }
+
       super.attach?.(mediaElement);
       // The one place the fixed behavior is stated. Muted and autoplay are what
       // let it start without a gesture, loop is the defining behavior, and
@@ -215,12 +225,12 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
       mediaElement.autoplay = true;
       mediaElement.preload = 'auto';
 
-      this.#signals.context.mediaElement.set(mediaElement);
+      this.#engine.context.mediaElement.set(mediaElement);
     }
 
     detach(): void {
       this.#cancelPendingPlay();
-      this.#signals.context.mediaElement.set(undefined);
+      this.#engine.context.mediaElement.set(undefined);
       super.detach?.();
     }
 
@@ -235,17 +245,19 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
     // -------------------------------------------------------------------------
 
     get src(): string {
-      return this.#signals.state.presentation.get()?.url ?? '';
+      return this.#engine.state.presentation.get()?.url ?? '';
     }
 
     set src(value: string) {
+      // Resolved before comparing or storing — see the video adapter's note.
+      const url = resolveSourceUrl(value);
       // Same line the HLS Medias draw: the presentation is set from a fresh
       // object every time, so re-resolving a URL already playing would restart
       // it for no reason.
-      if (value === this.src) return;
+      if (url === this.src) return;
 
       this.#cancelPendingPlay();
-      this.#signals.state.presentation.set(value ? { url: value } : undefined);
+      this.#engine.state.presentation.set(url ? { url } : undefined);
     }
 
     // -------------------------------------------------------------------------
@@ -254,24 +266,24 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
     // -------------------------------------------------------------------------
 
     async play(): Promise<void> {
-      const mediaElement = this.#signals.context.mediaElement.get();
+      const mediaElement = this.#engine.context.mediaElement.get();
       if (!mediaElement) return Promise.reject(new Error('HlsBackgroundVideoAdapterCore: no media element attached'));
+
+      const { signal } = this.#playGeneration;
 
       try {
         return await mediaElement.play();
       } catch (err) {
+        signal.throwIfAborted();
+
         // If we have a pending HLS source, the rejection may be because MSE
         // hasn't attached a blob URL yet. Wait for loadstart (src assigned by
         // MSE setup) and retry once.
         if (this.src) {
-          return new Promise<void>((resolve, reject) => {
-            const listener = () => {
-              this.#loadstartListener = null;
-              mediaElement.play().then(resolve, reject);
-            };
+          return onEvent(mediaElement, 'loadstart', { signal }).then(() => {
+            signal.throwIfAborted();
 
-            this.#loadstartListener = listener;
-            mediaElement.addEventListener('loadstart', listener, { once: true });
+            return mediaElement.play();
           });
         }
 
@@ -283,25 +295,16 @@ export function HlsBackgroundVideoMixin<Base extends Constructor<any>>(BaseClass
     // Private
     // -------------------------------------------------------------------------
 
-    #createEngine(): Composition<BackgroundVideoEngineState, BackgroundVideoEngineContext> {
+    #createEngine(): Composition<EngineState, EngineContext> {
       // No selection config of its own: the engine's default rule chain already
       // narrows to the largest rendition that fits the screen, which is exactly
       // what this adapter used to hand over as a bespoke picker.
-      return createBackgroundVideoEngine({
-        ...this.#config,
-        onSignalsReady: (signals) => {
-          this.#signals = signals;
-        },
-      });
+      return createEngine(this.#config);
     }
 
     #cancelPendingPlay(): void {
-      if (!this.#loadstartListener) return;
-
-      const mediaElement = this.#signals.context.mediaElement.get();
-
-      mediaElement?.removeEventListener('loadstart', this.#loadstartListener);
-      this.#loadstartListener = null;
+      this.#playGeneration.abort();
+      this.#playGeneration = new AbortController();
     }
   }
 

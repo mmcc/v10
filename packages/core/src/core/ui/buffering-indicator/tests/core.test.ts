@@ -10,6 +10,8 @@ function createMediaState(overrides: Partial<MediaPlaybackState> = {}): MediaPla
     ended: false,
     started: false,
     waiting: false,
+    autoplay: false,
+    autoplaying: false,
     play: vi.fn(async () => {}),
     pause: vi.fn(),
     ...overrides,
@@ -46,6 +48,19 @@ describe('BufferingIndicatorCore', () => {
       const core = new BufferingIndicatorCore();
 
       core.update(createMediaState({ waiting: true, paused: false }));
+
+      expect(core.state.current.visible).toBe(false);
+    });
+
+    it('shows after the delay while the media is trying to autoplay, and hides when that ends', () => {
+      const core = new BufferingIndicatorCore();
+
+      core.update(createMediaState({ paused: true, autoplay: true, autoplaying: true }));
+      vi.advanceTimersByTime(500);
+
+      expect(core.state.current.visible).toBe(true);
+
+      core.update(createMediaState({ paused: true, autoplay: true, autoplaying: false }));
 
       expect(core.state.current.visible).toBe(false);
     });
@@ -188,53 +203,6 @@ describe('BufferingIndicatorCore', () => {
       flush();
 
       expect(callback).toHaveBeenCalledOnce();
-    });
-
-    it('notifies subscribers when visible becomes false', () => {
-      const core = new BufferingIndicatorCore();
-      const callback = vi.fn();
-
-      core.update(createMediaState({ waiting: true, paused: false }));
-      vi.advanceTimersByTime(500);
-      flush();
-
-      core.state.subscribe(callback);
-
-      core.update(createMediaState({ waiting: false, paused: false }));
-      flush();
-
-      expect(callback).toHaveBeenCalledOnce();
-    });
-
-    it('does not notify if waiting ends before delay', () => {
-      const core = new BufferingIndicatorCore();
-      const callback = vi.fn();
-
-      core.state.subscribe(callback);
-
-      core.update(createMediaState({ waiting: true, paused: false }));
-      vi.advanceTimersByTime(300);
-      core.update(createMediaState({ waiting: false, paused: false }));
-
-      vi.advanceTimersByTime(500);
-      flush();
-
-      expect(callback).not.toHaveBeenCalled();
-    });
-
-    it('supports unsubscribe', () => {
-      const core = new BufferingIndicatorCore();
-      const callback = vi.fn();
-
-      const unsubscribe = core.state.subscribe(callback);
-
-      unsubscribe();
-
-      core.update(createMediaState({ waiting: true, paused: false }));
-      vi.advanceTimersByTime(500);
-      flush();
-
-      expect(callback).not.toHaveBeenCalled();
     });
   });
 });

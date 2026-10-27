@@ -129,6 +129,7 @@ jobs:
           './packages/html'
           './packages/media'
           './packages/adapters/cloudflare-video'
+          './packages/adapters/playerjs-video'
           './packages/adapters/spotify-audio'
           './packages/adapters/tiktok-video'
           './packages/adapters/twitch-video'
@@ -147,4 +148,5 @@ jobs:
           './packages/spf'
           './packages/store'
           './packages/utils'
+          './packages/video.js'
           --template './apps/sandbox'

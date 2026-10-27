@@ -14,7 +14,7 @@ import {
 import type { BidirectionalStreamLike } from '../../../../network/moqt/request-stream';
 import type { MoqtTransport } from '../../../../network/moqt/session';
 import type { CreateMoqTransport } from '../../../actors/moq-session';
-import { createMoqEngine, type MoqEngineConfig, type MoqEngineSignals } from '../engine';
+import { createMoqEngine, type MoqEngineConfig } from '../engine';
 
 // ============================================================================
 // In-memory relay: speaks real draft-20 bytes over a fake WebTransport.
@@ -183,32 +183,28 @@ async function encodeKeyframe(): Promise<Uint8Array> {
 describe('createMoqEngine', () => {
   it('resolves the catalog, selects, subscribes, and renders end to end', async () => {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
     const canvas = document.createElement('canvas');
 
-    signals.context.renderSurface.set(canvas);
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.context.renderSurface.set(canvas);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
 
     // Catalog resolves off the live catalog object.
-    await vi.waitFor(() => expect(isResolvedPresentation(signals.state.presentation.get())).toBe(true), {
+    await vi.waitFor(() => expect(isResolvedPresentation(engine.state.presentation.get())).toBe(true), {
       timeout: 5000,
     });
 
     // The reused selection machinery picks the only video track, and the
     // subscribe behavior turns it into a MoQ subscription.
-    await vi.waitFor(() => expect(signals.state.selectedVideoTrackId.get()).toBe('live/video'));
+    await vi.waitFor(() => expect(engine.state.selectedVideoTrackId.get()).toBe('live/video'));
     await vi.waitFor(() => {
       expect(relay.subscriptions.map((s) => s.message.trackName)).toContain('video');
     });
-    expect(signals.context.videoSubscriberActor.get()).toBeDefined();
+    expect(engine.context.videoSubscriberActor.get()).toBeDefined();
 
     // Serve a keyframe: it flows subgroup stream → jitter buffer →
     // VideoDecoder → canvas.
@@ -217,7 +213,7 @@ describe('createMoqEngine', () => {
     relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 1, 0, 1_000, await encodeKeyframe()));
 
     await vi.waitFor(
-      () => expect(signals.context.videoRendererActor.get()?.snapshot.get().context.framesDecoded).toBeGreaterThan(0),
+      () => expect(engine.context.videoRendererActor.get()?.snapshot.get().context.framesDecoded).toBeGreaterThan(0),
       { timeout: 5000 }
     );
 
@@ -258,30 +254,26 @@ describe('createMoqEngine', () => {
       ],
     });
     const relay = createFakeRelay(catalog);
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
     // 50 KB sampled at ~300 kbps: past the MoQ-tuned 32 KB minTotalBytes
     // but short of the segment-tuned 128 KB — the ranker trusts this
     // estimate only if `moqBandwidth` reached it as `bandwidth`.
-    signals.state.bandwidthState.set({
+    engine.state.bandwidthState.set({
       fastEstimate: 300_000,
       fastTotalWeight: 100,
       slowEstimate: 300_000,
       slowTotalWeight: 100,
       bytesSampled: 50_000,
     });
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
 
     // 300 kbps × 0.85 safety margin fits only the 200 kbps rendition; the
     // untrusted-estimate fallback (5 Mbps initialBandwidth) would pick hi.
-    await vi.waitFor(() => expect(signals.state.selectedVideoTrackId.get()).toBe('live/video-lo'), {
+    await vi.waitFor(() => expect(engine.state.selectedVideoTrackId.get()).toBe('live/video-lo'), {
       timeout: 5000,
     });
 
@@ -290,20 +282,16 @@ describe('createMoqEngine', () => {
 
   it('freezes video-only presentation while paused and resumes from the hold point', async () => {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
-    signals.context.renderSurface.set(document.createElement('canvas'));
+    engine.context.renderSurface.set(document.createElement('canvas'));
     // Pause before frames arrive: the renderer's self-clock anchors at the
     // first decoded frame with rate 0, so the clock holds there.
-    signals.state.paused.set(true);
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.state.paused.set(true);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
 
     await vi.waitFor(
       () => {
@@ -318,7 +306,7 @@ describe('createMoqEngine', () => {
     relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 1, 0, 0, await encodeKeyframe()));
     relay.openUni(encodeLocObjectStream(videoSubscription.trackAlias, 2, 0, 200_000, await encodeKeyframe()));
 
-    const presentedUs = () => signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+    const presentedUs = () => engine.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
 
     await vi.waitFor(() => expect(presentedUs()).toBe(0), { timeout: 5000 });
 
@@ -329,7 +317,7 @@ describe('createMoqEngine', () => {
 
     // Resume: the self-clock re-anchors at the hold point and the second
     // frame presents once 200 ms of media time elapse.
-    signals.state.paused.set(false);
+    engine.state.paused.set(false);
     await vi.waitFor(() => expect(presentedUs()).toBe(200_000), { timeout: 5000 });
 
     await engine.destroy();
@@ -337,17 +325,13 @@ describe('createMoqEngine', () => {
 
   it('releases media subscriptions after a sustained pause and rejoins at the live edge on resume', async () => {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
       pauseHoldSeconds: 0.05,
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
 
     await vi.waitFor(
       () => {
@@ -358,9 +342,9 @@ describe('createMoqEngine', () => {
 
     // A pause that outlives the hold window releases the media
     // subscription…
-    signals.state.paused.set(true);
-    await vi.waitFor(() => expect(signals.state.mediaSuspended.get()).toBe(true), { timeout: 5000 });
-    await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeUndefined());
+    engine.state.paused.set(true);
+    await vi.waitFor(() => expect(engine.state.mediaSuspended.get()).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(engine.context.videoSubscriberActor.get()).toBeUndefined());
 
     // …while the catalog subscription stays live: an update served during
     // the suspension still reaches the presentation.
@@ -384,14 +368,14 @@ describe('createMoqEngine', () => {
 
     relay.openUni(encodeLocObjectStream(catalogSubscription.trackAlias, 1, 0, 0, utf8Encode(updatedCatalog)));
     const trackIds = () =>
-      (signals.state.presentation.get()?.selectionSets ?? []).flatMap((selectionSet) =>
+      (engine.state.presentation.get()?.selectionSets ?? []).flatMap((selectionSet) =>
         selectionSet.switchingSets.flatMap((switchingSet) => switchingSet.tracks.map((track) => track.id))
       );
 
     await vi.waitFor(() => expect(trackIds()).toContain('live/video2'), { timeout: 5000 });
 
     // Resume: a fresh next-group join (relative-group 0), no catalog churn.
-    signals.state.paused.set(false);
+    engine.state.paused.set(false);
     await vi.waitFor(
       () => {
         expect(relay.subscriptions.filter((s) => s.message.trackName === 'video')).toHaveLength(2);
@@ -402,7 +386,7 @@ describe('createMoqEngine', () => {
     expect(relay.subscriptions.at(-1)!.message.parameters).toMatchObject({
       locationFilter: { type: 'relative-group', groupsBeforeNext: 0 },
     });
-    await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined());
+    await vi.waitFor(() => expect(engine.context.videoSubscriberActor.get()).toBeDefined());
 
     await engine.destroy();
   });
@@ -417,17 +401,13 @@ describe('createMoqEngine', () => {
   // parked (`intervalMs`) so its own catch-up cannot do the work instead.
   async function playReplayedGroups(latency: MoqEngineConfig['latency']) {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
       latency: { intervalMs: 60_000, ...latency },
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
     await vi.waitFor(
       () => {
         expect(relay.subscriptions.map((s) => s.message.trackName)).toContain('video');
@@ -448,14 +428,14 @@ describe('createMoqEngine', () => {
     }
 
     const newestUs = (GROUP_COUNT - 1) * GROUP_DURATION_US;
-    const subscriber = () => signals.context.videoSubscriberActor.get()!;
+    const subscriber = () => engine.context.videoSubscriberActor.get()!;
 
     await vi.waitFor(() => expect(subscriber().snapshot.get().context.newestTimestampUs).toBe(newestUs), {
       timeout: 5000,
     });
 
-    signals.context.renderSurface.set(document.createElement('canvas'));
-    const renderer = () => signals.context.videoRendererActor.get();
+    engine.context.renderSurface.set(document.createElement('canvas'));
+    const renderer = () => engine.context.videoRendererActor.get();
     const presentedUs = () => renderer()?.snapshot.get().context.lastPresentedTimestampUs;
 
     await vi.waitFor(() => expect(presentedUs()).toBeDefined(), { timeout: 5000 });
@@ -521,44 +501,36 @@ describe('createMoqEngine', () => {
   // above already exercises.
   it('publishes the resolved target latency while adaptation is off', async () => {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
       latency: { intervalMs: 20 },
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
-    await vi.waitFor(() => expect(signals.context.videoSubscriberActor.get()).toBeDefined(), { timeout: 5000 });
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
+    await vi.waitFor(() => expect(engine.context.videoSubscriberActor.get()).toBeDefined(), { timeout: 5000 });
 
     // Nothing exposed the *resolved* target before this slot: every other
     // one is an input to the resolution.
-    await vi.waitFor(() => expect(signals.state.effectiveTargetLatency.get()).toBe(0.5), { timeout: 5000 });
-    expect(signals.state.adaptiveTargetLatency.get()).toBeUndefined();
+    await vi.waitFor(() => expect(engine.state.effectiveTargetLatency.get()).toBe(0.5), { timeout: 5000 });
+    expect(engine.state.adaptiveTargetLatency.get()).toBeUndefined();
 
-    signals.state.targetLatency.set(1.25);
-    await vi.waitFor(() => expect(signals.state.effectiveTargetLatency.get()).toBe(1.25), { timeout: 5000 });
+    engine.state.targetLatency.set(1.25);
+    await vi.waitFor(() => expect(engine.state.effectiveTargetLatency.get()).toBe(1.25), { timeout: 5000 });
 
     await engine.destroy();
   });
 
   it('composes the adaptive controller when it is switched on', async () => {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
       latency: { intervalMs: 20 },
       adaptiveLatency: { enabled: true, intervalMs: 80, warmupSeconds: 0, minArrivalSamples: 1 },
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
     await vi.waitFor(() => expect(relay.subscriptions.map((sub) => sub.message.trackName)).toContain('video'), {
       timeout: 5000,
     });
@@ -574,12 +546,12 @@ describe('createMoqEngine', () => {
 
     // The proposal is whatever the floor plus the observed spread comes
     // to, and it wins over the default because no consumer target was set.
-    await vi.waitFor(() => expect(signals.state.adaptiveTargetLatency.get()).toBeDefined(), { timeout: 5000 });
-    expect(signals.state.effectiveTargetLatency.get()).toBe(signals.state.adaptiveTargetLatency.get());
+    await vi.waitFor(() => expect(engine.state.adaptiveTargetLatency.get()).toBeDefined(), { timeout: 5000 });
+    expect(engine.state.effectiveTargetLatency.get()).toBe(engine.state.adaptiveTargetLatency.get());
 
     // …and an explicit consumer target still wins over it.
-    signals.state.targetLatency.set(2);
-    await vi.waitFor(() => expect(signals.state.effectiveTargetLatency.get()).toBe(2), { timeout: 5000 });
+    engine.state.targetLatency.set(2);
+    await vi.waitFor(() => expect(engine.state.effectiveTargetLatency.get()).toBe(2), { timeout: 5000 });
 
     await engine.destroy();
   });
@@ -594,16 +566,12 @@ describe('createMoqEngine', () => {
 
   it('subscribes to the catalog from the start of the current group', async () => {
     const relay = createFakeRelay();
-    let signals!: MoqEngineSignals;
     const engine = createMoqEngine({
       createMoqTransport: relay.createMoqTransport,
-      onSignalsReady: (refs) => {
-        signals = refs;
-      },
     });
 
-    signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-    signals.state.loadActivated.set(true);
+    engine.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+    engine.state.loadActivated.set(true);
 
     // The catalog subscription comes first (the video-track subscription
     // may follow immediately once the catalog resolves).

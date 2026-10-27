@@ -17,7 +17,7 @@
     { "path": "../../behaviors/dom" },
     { "path": "../../session" },
     { "path": "../../tests" },
-    { "path": "../../../playback/engines/moq" }
+    { "path": "../../../playback/engines" }
   ],
   "include": ["./**/*.ts"]
 }

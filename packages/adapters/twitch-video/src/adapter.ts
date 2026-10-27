@@ -90,7 +90,8 @@ export class TwitchAdapter extends MediaPlayedRangesMixin(EventTarget) implement
   #error: MediaError | null = null;
   #isFullscreen = false;
 
-  static PLAYER_SOFTWARE_NAME = 'twitch-video';
+  /** Engine this media plays through, reported to analytics such as Mux Data. */
+  static readonly engineName: string = 'twitch';
 
   /** The embed's own window, which every command is posted to. Null until an embed is bound and in a document. */
   get engine(): Window | null {
@@ -501,10 +502,16 @@ export class TwitchAdapter extends MediaPlayedRangesMixin(EventTarget) implement
     embedWindow.postMessage(message, TWITCH_PLAYER_ORIGIN);
   }
 
+  // What the next embed must be built muted with: it reads mute once, from its URL, and either property says to start
+  // muted. A rebuild drops the player's volume state with the frame.
+  get #nextMuted() {
+    return this.#defaultMuted || this.#muted;
+  }
+
   #snapshotProps() {
     return {
       autoplay: this.#autoplay,
-      defaultMuted: this.#defaultMuted,
+      defaultMuted: this.#nextMuted,
       loop: this.#loop,
       controls: this.#controls,
       playsInline: this.#playsInline,
@@ -518,7 +525,8 @@ export class TwitchAdapter extends MediaPlayedRangesMixin(EventTarget) implement
     this.#playback = null;
     this.#currentTime = 0;
     this.#duration = Number.NaN;
-    this.#muted = false;
+    // Kept across a reset, so a load replayed after `ready` still builds the embed muted.
+    this.#muted = this.#nextMuted;
     this.#paused = !this.#autoplay;
     this.#playbackRate = 1;
     this.#progress = 0;

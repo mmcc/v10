@@ -1,4 +1,4 @@
-import { EnableDevicesButtonCore, EnableDevicesButtonDataAttrs } from '@videojs/core';
+import { EnableDevicesButtonCore, EnableDevicesButtonDataAttrs, type EnableDevicesButtonState } from '@videojs/core';
 import { selectCaptureSource } from '@videojs/core/dom';
 import type { MediaCaptureSourceState } from '@videojs/media';
 
@@ -6,7 +6,7 @@ import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
 import { MediaButtonElement } from '../media-button-element';
 
-export class EnableDevicesButtonElement extends MediaButtonElement<EnableDevicesButtonCore> {
+export class EnableDevicesButtonElement extends MediaButtonElement<EnableDevicesButtonState, MediaCaptureSourceState> {
   static readonly tagName = 'media-enable-devices-button';
 
   protected readonly core = new EnableDevicesButtonCore();

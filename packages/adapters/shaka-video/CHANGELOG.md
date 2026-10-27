@@ -1,5 +1,80 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/shaka-video@10.1.0...@videojs/shaka-video@10.2.0) (2026-10-22)
+
+
+### Bug Fixes
+
+* **hlsjs-video:** read live edge start from hls.js live sync position ([#9409](https://github.com/videojs/video.js/issues/9409)) ([4676472](https://github.com/videojs/video.js/commit/4676472d9136580a5d45e0e8d2929a7e124ad122))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.2.0
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/shaka-video@10.0.1...@videojs/shaka-video@10.1.0) (2026-10-12)
+
+
+### Miscellaneous Chores
+
+* **@videojs/shaka-video:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.1.0
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/shaka-video@10.0.0...@videojs/shaka-video@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/shaka-video:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.1
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/shaka-video@10.0.0-rc.5...@videojs/shaka-video@10.0.0) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/shaka-video:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/shaka-video@10.0.0-rc.4...@videojs/shaka-video@10.0.0-rc.5) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/shaka-video:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0-rc.5
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/shaka-video@10.0.0-rc.3...@videojs/shaka-video@10.0.0-rc.4) (2026-09-26)
 
 

@@ -1,7 +1,8 @@
-import { ConnectionIndicatorCore, ConnectionIndicatorDataAttrs } from '@videojs/core';
+import { ConnectionIndicatorCore, ConnectionIndicatorDataAttrs, type ConnectionIndicatorState } from '@videojs/core';
 import { selectPublishStats } from '@videojs/core/dom';
 import type { Text } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
+import type { MediaPublishStatsState } from '@videojs/media';
 
 import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
@@ -11,7 +12,7 @@ import { MediaUIElement } from '../media-ui-element';
  * `<media-connection-indicator>` — coarse connection health for the active publish session. Content (typically an icon)
  * is authored by the skin; the element reflects `data-quality` for styling.
  */
-export class ConnectionIndicatorElement extends MediaUIElement<ConnectionIndicatorCore> {
+export class ConnectionIndicatorElement extends MediaUIElement<ConnectionIndicatorState, MediaPublishStatsState> {
   static readonly tagName = 'media-connection-indicator';
 
   static override properties: PropertyDeclarationMap = {

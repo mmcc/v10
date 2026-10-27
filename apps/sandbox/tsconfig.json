@@ -26,11 +26,17 @@
     "paths": {
       "@app/*": ["./app/*"],
       "@registry-react-tailwind-default/*": ["./app/_generated/registry/react-tailwind-default/*"],
-      "@registry-react-tailwind-minimal/*": ["./app/_generated/registry/react-tailwind-minimal/*"],
+      "@registry-react-tailwind-neutral/*": ["./app/_generated/registry/react-tailwind-neutral/*"],
+      "@registry-react-tailwind-compat/*": ["./app/_generated/registry/react-tailwind-compat/*"],
+      "@registry-react-tailwind-scaffold/*": ["./app/_generated/registry/react-tailwind-scaffold/*"],
       "@registry-react-css-default/*": ["./app/_generated/registry/react-css-default/*"],
-      "@registry-react-css-minimal/*": ["./app/_generated/registry/react-css-minimal/*"],
+      "@registry-react-css-neutral/*": ["./app/_generated/registry/react-css-neutral/*"],
+      "@registry-react-css-compat/*": ["./app/_generated/registry/react-css-compat/*"],
+      "@registry-react-css-scaffold/*": ["./app/_generated/registry/react-css-scaffold/*"],
       "@registry-html-default/*": ["./app/_generated/registry/html-default/*"],
-      "@registry-html-minimal/*": ["./app/_generated/registry/html-minimal/*"]
+      "@registry-html-neutral/*": ["./app/_generated/registry/html-neutral/*"],
+      "@registry-html-compat/*": ["./app/_generated/registry/html-compat/*"],
+      "@registry-html-scaffold/*": ["./app/_generated/registry/html-scaffold/*"]
     }
   },
   "include": ["app", "src", "templates", "scripts", "types"],

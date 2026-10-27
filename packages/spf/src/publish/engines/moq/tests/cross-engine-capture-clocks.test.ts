@@ -140,16 +140,14 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
       { timeout: 15_000, interval: 100 }
     );
 
-    const { canvas: renderCanvas, signals } = createSubscriber(hub, disposals);
+    const { canvas: renderCanvas, player } = createSubscriber(hub, disposals);
 
     // The audio leg comes up first (`next-object` join) and owns the
     // master clock from then on — the exact regime that starved video in
     // the field.
     await vi.waitFor(
       () => {
-        expect(signals.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(
-          0
-        );
+        expect(player.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(0);
       },
       { timeout: 15_000, interval: 100 }
     );
@@ -159,7 +157,7 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
     // this times out with audio playing — the field failure signature.
     await vi.waitFor(
       () => {
-        const renderer = signals.context.videoRendererActor.get();
+        const renderer = player.context.videoRendererActor.get();
 
         expect(renderer?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
       },
@@ -170,18 +168,18 @@ describe('publish engine ↔ playback engine (cross-domain capture clocks)', () 
     // Presentation keeps advancing (not a single self-clocked frame that
     // snuck in before audio scheduled), and the presented video timestamps
     // track the audio master clock — the cross-track alignment contract.
-    const firstPresentedUs = signals.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!;
+    const firstPresentedUs = player.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!;
 
     await vi.waitFor(
       () => {
-        const presentedUs = signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
+        const presentedUs = player.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs;
 
         expect(presentedUs ?? 0).toBeGreaterThan(firstPresentedUs);
       },
       { timeout: 15_000, interval: 100 }
     );
-    const clockUs = signals.context.audioRendererActor.get()!.getClockTimeUs()!;
-    const presentedUs = signals.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!;
+    const clockUs = player.context.audioRendererActor.get()!.getClockTimeUs()!;
+    const presentedUs = player.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!;
 
     expect(Math.abs(presentedUs - clockUs)).toBeLessThan(2_000_000);
   }, 120_000);

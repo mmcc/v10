@@ -9,7 +9,7 @@
  */
 // The real playback engine, from the `@videojs/spf/moq` entry module —
 // parent-owned reference implementation; used, never modified.
-import { createMoqEngine, type MoqEngineSignals } from '../../../../../playback/engines/moq/index';
+import { createMoqEngine } from '../../../../../playback/engines/moq/index';
 import type { RelayHub } from '../../../../tests/helpers/relay-hub';
 
 export interface SyntheticStreamSize {
@@ -57,12 +57,8 @@ export function makeSyntheticStream(
 
 /** A playback engine subscribed to the catalog, with a canvas + audio context wired up. */
 export function createSubscriber(hub: RelayHub, disposals: (() => void)[]) {
-  let signals!: MoqEngineSignals;
   const player = createMoqEngine({
     createMoqTransport: () => hub.connectSubscriber(),
-    onSignalsReady: (refs) => {
-      signals = refs;
-    },
   });
 
   disposals.push(() => void player.destroy());
@@ -72,10 +68,10 @@ export function createSubscriber(hub: RelayHub, disposals: (() => void)[]) {
 
   disposals.push(() => void audioContext.close().catch(() => undefined));
   void audioContext.resume().catch(() => undefined);
-  signals.context.renderSurface.set(canvas);
-  signals.context.audioContext.set(audioContext);
-  signals.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
-  signals.state.loadActivated.set(true);
+  player.context.renderSurface.set(canvas);
+  player.context.audioContext.set(audioContext);
+  player.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
+  player.state.loadActivated.set(true);
 
-  return { player, signals, canvas };
+  return { player, canvas };
 }

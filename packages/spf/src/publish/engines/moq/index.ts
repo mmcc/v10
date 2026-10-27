@@ -22,7 +22,6 @@ export type {
   EncoderSupportFacts,
   MoqPublishEngineConfig,
   MoqPublishEngineContext,
-  MoqPublishEngineSignals,
   MoqPublishEngineState,
   PreviewSource,
   PublishDataTrackConfig,

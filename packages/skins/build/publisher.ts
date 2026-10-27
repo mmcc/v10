@@ -13,7 +13,6 @@ import {
 import type { StyleTransformOptions } from 'vjsc/styles';
 
 import type { SkinModuleMeta } from '../src/meta.ts';
-import { skinClassNameMergeImport } from './imports.ts';
 import type { GeneratedPackageFile } from './packages/files.ts';
 import { createHtmlSkinRegistration, htmlTemplateModule } from './packages/html.ts';
 import { reactFrameworkImport } from './packages/react.ts';
@@ -126,8 +125,6 @@ async function addReactSkin(graph: Graph<SkinModuleMeta>, generated: Map<string,
   for (const module of modules) {
     const destination = destinations.get(module.id)!;
     const source = rewriteImports(graph, module, ({ dependency, reference }) => {
-      if (reference.specifier === skinClassNameMergeImport) return '@videojs/utils/style';
-
       const frameworkImport = reactFrameworkImport(reference.specifier);
       if (frameworkImport) return relativeImport(destination, frameworkImport);
 

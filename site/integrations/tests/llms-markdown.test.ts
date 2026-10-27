@@ -14,9 +14,9 @@ import {
   generateInstallationIndex,
   generatePageFooter,
   generateRootIndex,
-  llmsIndexPaths,
   type SectionFile,
 } from '../llms-markdown';
+import { llmsIndexPaths } from '../llms-sections';
 
 const SITE_URL = 'https://videojs.org';
 const turndown = createTurndown();
@@ -70,6 +70,21 @@ const guidesSection: SectionFile = {
 };
 
 describe('convertPage', () => {
+  it('converts footnotes to GFM footnote syntax', () => {
+    const markdown = convert(
+      '<p>Claim<sup><a href="#user-content-fn-a" id="user-content-fnref-a" data-footnote-ref>1</a></sup>.</p>' +
+        '<section data-footnotes><hr><h2 id="footnote-label">Footnotes</h2><div><ol>' +
+        '<li id="user-content-fn-a"><p>First.</p><p>Second <a href="/docs">link</a>.' +
+        '<a href="#user-content-fnref-a" data-footnote-backref data-llms-ignore>↩</a></p></li>' +
+        '</ol></div></section>'
+    );
+
+    expect(markdown).toContain('Claim[^1].');
+    expect(markdown).toContain('[^1]: First.\n\n    Second [link](https://videojs.org/docs).');
+    expect(markdown).not.toContain('Footnotes');
+    expect(markdown).not.toContain('↩');
+  });
+
   it('emits an authored table as a GFM pipe table with escaped pipes and padded colspans', () => {
     const markdown = convert(`
       <table>
@@ -417,7 +432,7 @@ describe('generateRootIndex', () => {
       '> AI coding agents can install the [Video.js skill](https://github.com/videojs/skills) to find version-matched documentation and follow current Video.js 10 patterns.\n'
     );
     expect(index).toContain(
-      '> The `video.js` package on npm is still Video.js 8. Video.js 10 ships as `@videojs/react` and `@videojs/html`.\n'
+      '> The `video.js` package on npm contains no player; install `video.js@8` to stay on Video.js 8. Video.js 10 ships as `@videojs/react` and `@videojs/html`.\n'
     );
     expect(index).toContain(
       '- [HTML documentation](https://videojs.org/docs/framework/html/llms.txt): Every HTML guide and reference page, each with a one-line description.\n' +
@@ -458,12 +473,24 @@ describe('generateDocsIndex', () => {
       '> Install the [Video.js skill](https://github.com/videojs/skills) to help AI coding agents find version-matched pages from this index.'
     );
     expect(index).toContain(
-      '> The `video.js` package on npm is still Video.js 8. Video.js 10 ships as `@videojs/html`; to move existing Video.js 8 code, read https://videojs.org/docs/framework/html/guides/migrate-from-video-js-8.md\n'
+      '> The `video.js` package on npm contains no player; install `video.js@8` to stay on Video.js 8. Video.js 10 ships as `@videojs/html`; to move existing Video.js 8 code, read https://videojs.org/docs/framework/html/guides/migrate-from-video-js-8.md\n'
     );
+    expect(index).toContain(
+      '> Vidstack Player is in security-only maintenance. To move existing `vidstack` code, read https://videojs.org/docs/framework/html/guides/migrate-from-vidstack.md\n'
+    );
+    expect(index).not.toContain('Video-React');
     expect(index).toContain(
       '## Guides\n\n' +
         'Installation, migration, concepts, playback guides, customization, and tooling for Video.js.\n\n' +
         'Section index: [guides/llms.txt](https://videojs.org/docs/framework/html/guides/llms.txt). This section in one file (about 90k tokens): https://videojs.org/docs/framework/html/guides/llms-full.txt\n\n'
+    );
+  });
+
+  it('points React readers at the Video-React migration guide', () => {
+    const index = generateDocsIndex('react', [], SITE_URL);
+
+    expect(index).toContain(
+      '> Video-React is in security-only maintenance. To move existing `video-react` code, read https://videojs.org/docs/framework/react/guides/migrate-from-video-react.md\n'
     );
   });
 });

@@ -47,21 +47,21 @@ describe('createMoqPublishEngine', () => {
     publisher.state.micActive.set(true);
     publisher.state.publishActivated.set(true);
 
-    const { signals } = createSubscriber(hub, disposals);
+    const { player } = createSubscriber(hub, disposals);
 
-    signals.state.paused.set(false);
+    player.state.paused.set(false);
     await vi.waitFor(
       () => {
-        expect(signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
-        expect(signals.context.audioRendererActor.get()?.getClockTimeUs()).toBeDefined();
+        expect(player.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
+        expect(player.context.audioRendererActor.get()?.getClockTimeUs()).toBeDefined();
       },
       { timeout: 10_000 }
     );
 
     for (const phase of ['baseline', 'impaired', 'recovery'] as const) {
       impaired = phase === 'impaired';
-      const audio = signals.context.audioRendererActor.get()!;
-      const video = signals.context.videoRendererActor.get()!;
+      const audio = player.context.audioRendererActor.get()!;
+      const video = player.context.videoRendererActor.get()!;
       const firstAudioUs = audio.getClockTimeUs()!;
       const firstVideoUs = video.snapshot.get().context.lastPresentedTimestampUs!;
       const skews: number[] = [];

@@ -1,11 +1,12 @@
-import { isFunction, isObject, isUndefined } from '@videojs/utils/predicate';
+import { isBoolean, isFunction, isObject, isUndefined } from '@videojs/utils/predicate';
 
 import { EMPTY_REMOTE, EMPTY_TEXT_TRACKS, EMPTY_TIME_RANGES } from './constants';
-import type { MediaBufferState, MediaTimeState } from './state';
+import type { MediaBufferState, MediaPlaybackState, MediaTimeState } from './state';
 import { MediaReadyState } from './types';
 import type {
   EngineAdapter,
   MediaAudioTrackCapability,
+  MediaAutoplayCapability,
   MediaBufferCapability,
   MediaCaptureDevicesCapability,
   MediaCaptureSourceCapability,
@@ -32,8 +33,10 @@ export function hasMetadata(media: Pick<MediaSourceCapability, 'readyState'>): b
   return media.readyState >= MediaReadyState.HAVE_METADATA;
 }
 
+/** @internal */
 export type MediaTimeRangeState = Pick<MediaTimeState, 'duration'> & Pick<MediaBufferState, 'seekable'>;
 
+/** @internal */
 export function getTimeRangeEnd(media: MediaTimeRangeState): number {
   if (Number.isFinite(media.duration) && media.duration > 0) return media.duration;
 
@@ -43,8 +46,25 @@ export function getTimeRangeEnd(media: MediaTimeRangeState): number {
   return end;
 }
 
+/** @internal */
 export function hasTimeRange(media: MediaTimeRangeState): boolean {
   return getTimeRangeEnd(media) > 0;
+}
+
+/**
+ * Whether playback is running without waiting for data.
+ *
+ * @internal
+ */
+export function isMediaPlaying(
+  media: Pick<MediaPlaybackState, 'paused' | 'ended' | 'waiting'> | null | undefined
+): boolean {
+  return !!media && !media.paused && !media.ended && !media.waiting;
+}
+
+/** @internal */
+export function isMediaAutoplayCapable(value: unknown): value is MediaAutoplayCapability {
+  return isObject(value) && isBoolean((value as Record<string, unknown>).autoplay);
 }
 
 export function isMediaPauseCapable(value: unknown): value is MediaPauseCapability {
@@ -87,6 +107,8 @@ export function isMediaVolumeCapable(value: unknown): value is MediaVolumeCapabi
 /**
  * Whether the media reports a mute at all, which is a narrower question than `isMediaVolumeCapable`: an embed can take
  * a mute command while offering no way to set a level.
+ *
+ * @internal
  */
 export function isMediaMutedCapable(value: unknown): value is Pick<MediaVolumeCapability, 'muted'> {
   if (!isObject(value)) return false;
@@ -107,6 +129,8 @@ export function isMediaPlaybackRateCapable(value: unknown): value is MediaPlayba
 /**
  * Only `requestPictureInPicture` is required. A native video element carries it but leaves exiting to `document`, so
  * demanding the pair would rule out the one media that most certainly can.
+ *
+ * @internal
  */
 export function isMediaPictureInPictureCapable(value: unknown): value is MediaPictureInPictureCapability {
   if (!isObject(value)) return false;
@@ -185,6 +209,7 @@ export function isMediaStreamTypeCapable(value: unknown): value is MediaStreamTy
   return !isUndefined(media.streamType);
 }
 
+/** @internal */
 export function isMediaContentDataCapable(value: unknown): value is MediaContentDataCapability {
   if (!isObject(value)) return false;
 
@@ -243,7 +268,11 @@ export function isMediaPublishStatsCapable(value: unknown): value is MediaPublis
   return 'publishStats' in media;
 }
 
-/** Framework-agnostic `NodeList`-like shape returned by `querySelectorAll`. */
+/**
+ * Framework-agnostic `NodeList`-like shape returned by `querySelectorAll`.
+ *
+ * @internal
+ */
 export interface NodeListLike<Element> {
   readonly length: number;
   readonly [index: number]: Element;
@@ -251,6 +280,7 @@ export interface NodeListLike<Element> {
   [Symbol.iterator](): Iterator<Element>;
 }
 
+/** @internal */
 export function isQuerySelectorAllCapable<Element = unknown>(
   value: unknown
 ): value is { querySelectorAll: (selectors: string) => NodeListLike<Element> } {
@@ -262,6 +292,8 @@ export function isQuerySelectorAllCapable<Element = unknown>(
 /**
  * Whether `value` is an adapter fronting a JS playback engine (an hls.js instance, a dash.js player, an SPF
  * composition). Narrows to the caller's type so an adapter keeps its own members alongside `engine`.
+ *
+ * @internal
  */
 export function isEngineAdapter<T>(value: T): value is T & EngineAdapter {
   if (!isObject(value)) return false;

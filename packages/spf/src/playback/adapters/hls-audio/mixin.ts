@@ -1,3 +1,5 @@
+import { type MediaCrossOriginType, toMediaCrossOrigin } from '@videojs/media';
+import { onEvent } from '@videojs/utils/dom';
 import type { Constructor, MixinReturn } from '@videojs/utils/types';
 
 import type { Composition } from '../../../core/composition/create-composition';
@@ -7,13 +9,9 @@ import {
   SVTA_UNSUPPORTED_PLAYBACK_FEATURE,
   type SvtaError,
 } from '../../../media/errors';
-import {
-  createHlsAudioEngine,
-  type HlsAudioEngineConfig,
-  type HlsAudioEngineContext,
-  type HlsAudioEngineSignals,
-  type HlsAudioEngineState,
-} from '../../engines/hls/engine-audio-only';
+import { crossOriginToRequestCredentials } from '../../../network/request-credentials';
+import { resolveSourceUrl } from '../../../network/resolve-source-url';
+import { createEngine, type EngineConfig, type EngineContext, type EngineState } from '../../engines/hls-audio';
 import { UNSUPPORTED_PLAYBACK_FEATURE_MESSAGE } from '../../primitives/error-messages';
 import {
   firstFatal,
@@ -25,19 +23,25 @@ import type { HlsVideoSource } from '../hls-video/mixin';
 
 /** What `new HlsAudioAdapter(options)` accepts; see `HlsVideoAdapterOptions` for why it is typed here. */
 export interface HlsAudioAdapterOptions {
-  /** Engine config forwarded to `createHlsAudioEngine`. */
-  config?: HlsAudioEngineConfig;
+  /** Engine config forwarded to `createEngine`. */
+  config?: EngineConfig;
 }
 
 export interface HlsAudioAdapterProps {
   src: string;
   source: HlsVideoSource | null;
   preload: '' | 'none' | 'metadata' | 'auto';
+  /**
+   * The element's CORS-settings attribute: a mode, the bare attribute (`''`, read as `anonymous`), or `null` for none.
+   * `use-credentials` also sends cookies with every manifest, playlist, and segment request the engine makes; any other
+   * value leaves those requests at the platform default.
+   */
+  crossOrigin: MediaCrossOriginType | '' | null;
   disableRemotePlayback: boolean;
 }
 
 export interface HlsAudioAdapterAPI extends HlsAudioAdapterProps {
-  readonly engine: Composition<HlsAudioEngineState, HlsAudioEngineContext>;
+  readonly engine: Composition<EngineState, EngineContext>;
   readonly error: HlsVideoMediaError | null;
   attach(mediaElement: HTMLMediaElement): void;
   detach(): void;
@@ -56,8 +60,8 @@ const FATAL_SVTA_CODES: ReadonlySet<number> = new Set<number>([SVTA_NO_SUPPORTED
  * Mixin that adds SPF audio-only HLS playback to any base class.
  *
  * Parallel to `HlsVideoMixin` with one substantive difference: the underlying engine is the audio-only variant
- * (`createHlsAudioEngine`), which omits video and text-track behaviors. The src / preload / disableRemotePlayback /
- * play() contract per the WHATWG HTML spec is identical to the default adapter.
+ * (`createEngine`), which omits video and text-track behaviors. The src / preload / disableRemotePlayback / play()
+ * contract per the WHATWG HTML spec is identical to the default adapter.
  *
  * Selecting this adapter is the variant decision: instantiating `HlsAudioAdapterCore` opts the consumer into audio-only
  * delivery even when the source is a mixed-AV HLS manifest.
@@ -77,8 +81,15 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       src: '',
       source: null,
       preload: '',
+      crossOrigin: null,
       disableRemotePlayback: false,
     };
+
+    /**
+     * Engine this media plays through, reported to analytics such as Mux Data. Names the SPF engine entry point it
+     * composes (`@videojs/spf/engines/hls-audio`), since each SPF engine is its own composition.
+     */
+    static readonly engineName: string = 'spf-hls-audio';
 
     /**
      * A complete sentence naming the Media to reach for when this one can't play a source. Appended to the copy this
@@ -92,18 +103,18 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       return undefined;
     }
 
-    readonly #engine: Composition<HlsAudioEngineState, HlsAudioEngineContext>;
-    #config: HlsAudioEngineConfig;
-    #signals!: HlsAudioEngineSignals;
+    readonly #engine: Composition<EngineState, EngineContext>;
+    #config: EngineConfig;
     #preload: '' | 'none' | 'metadata' | 'auto' = HlsAudioImpl.defaultProps.preload;
+    #crossOrigin: MediaCrossOriginType | null = toMediaCrossOrigin(HlsAudioImpl.defaultProps.crossOrigin);
     #disableRemotePlayback: boolean = HlsAudioImpl.defaultProps.disableRemotePlayback;
     #error: HlsVideoMediaError | null = null;
     /** Reported condition currently surfaced — see the video adapter's note. */
     #reportedCode: number | null = null;
     #stopErrorSync: () => void;
 
-    /** Pending loadstart listener from a deferred play() retry, if any. */
-    #loadstartListener: (() => void) | null = null;
+    /** Aborting a generation cancels all retries, including ones not yet registered. */
+    #playGeneration = new AbortController();
     #source: HlsVideoSource | null = HlsAudioImpl.defaultProps.source;
 
     constructor(...args: any[]) {
@@ -119,7 +130,7 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       // resets the slot per source, so a new source starts with no error without
       // this needing its own source-change hook.
       this.#stopErrorSync = effect(() => {
-        const errors = this.#signals.state.errors.get();
+        const errors = this.#engine.state.errors.get();
 
         this.#setError(firstFatal(errors, FATAL_SVTA_CODES), errors);
       });
@@ -169,7 +180,7 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
      * Underlying playback engine — the low-level SPF reactive composition that drives playback. An advanced escape
      * hatch for direct engine access; normal playback is driven through this element's own properties and methods.
      */
-    get engine(): Composition<HlsAudioEngineState, HlsAudioEngineContext> {
+    get engine(): Composition<EngineState, EngineContext> {
       return this.#engine;
     }
 
@@ -178,13 +189,21 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
     // -------------------------------------------------------------------------
 
     attach(mediaElement: HTMLMediaElement): void {
+      if (mediaElement !== this.#engine.context.mediaElement.get()) {
+        this.#cancelPendingPlay();
+      }
+
       super.attach?.(mediaElement);
-      this.#signals.context.mediaElement.set(mediaElement);
+      this.#engine.context.mediaElement.set(mediaElement);
+
+      // Most-recent-wins on attach — see the video mixin.
+      this.#crossOrigin = toMediaCrossOrigin(mediaElement.crossOrigin) ?? this.#crossOrigin;
+      mediaElement.crossOrigin = this.#crossOrigin;
     }
 
     detach(): void {
       this.#cancelPendingPlay();
-      this.#signals.context.mediaElement.set(undefined);
+      this.#engine.context.mediaElement.set(undefined);
       super.detach?.();
     }
 
@@ -192,6 +211,27 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       this.#cancelPendingPlay();
       this.#stopErrorSync();
       this.#engine.destroy();
+    }
+
+    // -------------------------------------------------------------------------
+    // crossOrigin — synchronous IDL attribute (WHATWG §4.8.11.2)
+    // Reflected onto the attached media element (`null` removes it), and the
+    // author's request-credentials intent for the engine's own fetches, read
+    // per request through the policy `#createEngine` installs. See the video
+    // mixin.
+    // -------------------------------------------------------------------------
+
+    get crossOrigin(): MediaCrossOriginType | null {
+      return this.#crossOrigin;
+    }
+
+    set crossOrigin(value: MediaCrossOriginType | '' | null) {
+      // Limited to known values, as the element reflects it — see the video mixin.
+      this.#crossOrigin = toMediaCrossOrigin(value);
+
+      const mediaElement = this.#engine.context.mediaElement.get();
+
+      if (mediaElement) mediaElement.crossOrigin = value;
     }
 
     // -------------------------------------------------------------------------
@@ -207,7 +247,7 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       this.#preload = value;
 
       if (value) {
-        this.#signals.state.preload.set(value);
+        this.#engine.state.preload.set(value);
       }
     }
 
@@ -227,7 +267,7 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
 
     set disableRemotePlayback(value: boolean) {
       this.#disableRemotePlayback = value;
-      this.#signals.state.disableRemotePlayback.set(value);
+      this.#engine.state.disableRemotePlayback.set(value);
     }
 
     // -------------------------------------------------------------------------
@@ -241,15 +281,17 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
     // -------------------------------------------------------------------------
 
     get src(): string {
-      return this.#signals.state.presentation.get()?.url ?? '';
+      return this.#engine.state.presentation.get()?.url ?? '';
     }
 
     set src(value: string) {
+      // Resolved before comparing or storing — see the video adapter's note.
+      const url = resolveSourceUrl(value);
       // Unchanged URL, no reload — see the video adapter's note.
-      if (value === this.src) return;
+      if (url === this.src) return;
 
-      this.#source = value ? { src: value } : null;
-      this.#applySrc(value);
+      this.#source = url ? { src: url } : null;
+      this.#applySrc(url);
       this.dispatchEvent?.(new Event('sourcechange'));
     }
 
@@ -275,12 +317,13 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       this.dispatchEvent?.(new Event('sourcechange'));
     }
 
-    /** Point the engine at a URL; an unchanged one is not a reload request. */
+    /** Point the engine at a URL, resolved; an unchanged one is not a reload request. */
     #applySrc(value: string): void {
-      if (value === this.src) return;
+      const url = resolveSourceUrl(value);
+      if (url === this.src) return;
 
       this.#cancelPendingPlay();
-      this.#signals.state.presentation.set(value ? { url: value } : undefined);
+      this.#engine.state.presentation.set(url ? { url } : undefined);
     }
 
     // -------------------------------------------------------------------------
@@ -288,21 +331,21 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
     // -------------------------------------------------------------------------
 
     play(): Promise<void> {
-      const mediaElement = this.#signals.context.mediaElement.get();
+      const mediaElement = this.#engine.context.mediaElement.get();
       if (!mediaElement) return Promise.reject(new Error('HlsAudioAdapterCore: no media element attached'));
 
-      this.#signals.state.loadActivated.set(true);
+      const { signal } = this.#playGeneration;
+
+      this.#engine.state.loadActivated.set(true);
 
       return mediaElement.play().catch((err: unknown) => {
-        if (this.src) {
-          return new Promise<void>((resolve, reject) => {
-            const listener = () => {
-              this.#loadstartListener = null;
-              mediaElement.play().then(resolve, reject);
-            };
+        signal.throwIfAborted();
 
-            this.#loadstartListener = listener;
-            mediaElement.addEventListener('loadstart', listener, { once: true });
+        if (this.src) {
+          return onEvent(mediaElement, 'loadstart', { signal }).then(() => {
+            signal.throwIfAborted();
+
+            return mediaElement.play();
           });
         }
 
@@ -319,22 +362,18 @@ export function HlsAudioMixin<Base extends Constructor<any>>(BaseClass: Base) {
       return withAlternativeMediaSuggestion(message, this);
     }
 
-    #createEngine(): Composition<HlsAudioEngineState, HlsAudioEngineContext> {
-      return createHlsAudioEngine({
+    #createEngine(): Composition<EngineState, EngineContext> {
+      return createEngine({
         ...this.#config,
-        onSignalsReady: (signals) => {
-          this.#signals = signals;
-        },
+        // A policy, not a value — see the video mixin. A consumer-supplied one wins.
+        requestCredentials:
+          this.#config?.requestCredentials ?? (() => crossOriginToRequestCredentials(this.#crossOrigin)),
       });
     }
 
     #cancelPendingPlay(): void {
-      if (!this.#loadstartListener) return;
-
-      const mediaElement = this.#signals.context.mediaElement.get();
-
-      mediaElement?.removeEventListener('loadstart', this.#loadstartListener);
-      this.#loadstartListener = null;
+      this.#playGeneration.abort();
+      this.#playGeneration = new AbortController();
     }
   }
 

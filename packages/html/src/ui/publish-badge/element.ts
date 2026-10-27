@@ -1,7 +1,8 @@
-import { PublishBadgeCore, PublishBadgeDataAttrs } from '@videojs/core';
+import { PublishBadgeCore, PublishBadgeDataAttrs, type PublishBadgeState } from '@videojs/core';
 import { selectPublish } from '@videojs/core/dom';
 import { type Text, translateText } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
+import type { MediaPublishState } from '@videojs/media';
 
 import { i18nContext } from '../../i18n/context';
 import { I18nController } from '../../i18n/controller';
@@ -14,7 +15,7 @@ import { MediaUIElement } from '../media-ui-element';
  * "Offline") as default content when no custom content is authored, and reflects the session lifecycle on
  * `data-publish-state` for styling.
  */
-export class PublishBadgeElement extends MediaUIElement<PublishBadgeCore> {
+export class PublishBadgeElement extends MediaUIElement<PublishBadgeState, MediaPublishState> {
   static readonly tagName = 'media-publish-badge';
 
   static override properties: PropertyDeclarationMap = {

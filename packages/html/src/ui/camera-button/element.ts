@@ -1,4 +1,4 @@
-import { CameraButtonCore, CameraButtonDataAttrs } from '@videojs/core';
+import { CameraButtonCore, CameraButtonDataAttrs, type CameraButtonState } from '@videojs/core';
 import { selectCaptureTracks } from '@videojs/core/dom';
 import type { MediaCaptureTracksState } from '@videojs/media';
 
@@ -6,7 +6,7 @@ import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
 import { MediaButtonElement } from '../media-button-element';
 
-export class CameraButtonElement extends MediaButtonElement<CameraButtonCore> {
+export class CameraButtonElement extends MediaButtonElement<CameraButtonState, MediaCaptureTracksState> {
   static readonly tagName = 'media-camera-button';
 
   protected readonly core = new CameraButtonCore();

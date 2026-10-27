@@ -8,7 +8,7 @@
  * Two independent single-effect sub-behaviors (one per source); no cleanup beyond the effect itself — track state dies
  * with the stream, which the acquire behaviors own.
  */
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import { effect } from '../../../core/signals/effect';
 import type { ReadonlySignal } from '../../../core/signals/primitives';
 

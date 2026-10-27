@@ -11,5 +11,5 @@ export type { CreateMoqTransport, MoqAuthProvider } from '../../actors/moq-sessi
 export type { LatencyControlConfig, PlayoutState } from '../../behaviors/sync-latency';
 export type { MoqAudioContext, MoqMediaAPI, MoqMediaOptions, MoqMediaProps } from './adapter';
 export { MoqMediaElement, MoqMediaMixin, moqMediaDefaultProps } from './adapter';
-export type { MoqEngineConfig, MoqEngineContext, MoqEngineSignals, MoqEngineState } from './engine';
+export type { MoqEngineConfig, MoqEngineContext, MoqEngineState } from './engine';
 export { createMoqEngine } from './engine';

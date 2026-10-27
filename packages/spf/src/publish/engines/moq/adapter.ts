@@ -1,9 +1,9 @@
 /**
  * Media-host adapter for the MoQ publish engine, mirroring `SimpleHlsMediaMixin` / `MoqMediaMixin`'s shape: one engine
- * per instance (created at construction, signals captured via `onSignalsReady`), with the publisher media-contract
- * surface — `MediaPublishCapability`, `MediaCaptureSourceCapability`, `MediaCaptureDevicesCapability`,
- * `MediaCaptureToggleCapability`, `MediaPublishStatsCapability` — expressed structurally so any host base class can
- * compose it without inheriting from the contracts package.
+ * per instance (created at construction), with the publisher media-contract surface — `MediaPublishCapability`,
+ * `MediaCaptureSourceCapability`, `MediaCaptureDevicesCapability`, `MediaCaptureToggleCapability`,
+ * `MediaPublishStatsCapability` — expressed structurally so any host base class can compose it without inheriting from
+ * the contracts package.
  *
  * All members are prototype accessors/methods: `CustomMediaElement` only forwards prototype accessors, so instance
  * fields would not surface on a custom-element host.
@@ -23,7 +23,6 @@ import type {
   CaptureStatus,
   MoqPublishEngineConfig,
   MoqPublishEngineContext,
-  MoqPublishEngineSignals,
   MoqPublishEngineState,
   PreviewSource,
   PublishSessionStatus,
@@ -46,8 +45,8 @@ export interface MoqPublishMediaError {
 
 /** Constructor options for {@link MoqPublishMediaMixin} classes, read from the first constructor argument. */
 export interface MoqPublishMediaOptions {
-  /** Engine config forwarded to `createMoqPublishEngine`. The adapter owns `onSignalsReady`, so it is not overridable. */
-  engineConfig?: Omit<MoqPublishEngineConfig, 'onSignalsReady'>;
+  /** Engine config forwarded to `createMoqPublishEngine`. */
+  engineConfig?: MoqPublishEngineConfig;
 }
 
 export interface MoqPublishMediaProps {
@@ -171,7 +170,6 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 ): MixinReturn<Base, MoqPublishMediaAPI, [options?: MoqPublishMediaOptions]> {
   class MoqPublishMediaImpl extends BaseClass {
     readonly #engine: Composition<MoqPublishEngineState, MoqPublishEngineContext>;
-    #signals!: MoqPublishEngineSignals;
     #publishEndpoint = moqPublishMediaDefaultProps.publishEndpoint;
     #publishNamespace = moqPublishMediaDefaultProps.publishNamespace;
     #publishAuthToken = moqPublishMediaDefaultProps.publishAuthToken;
@@ -183,14 +181,8 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     constructor(...args: any[]) {
       super(...args);
       const { engineConfig } = (args?.[0] ?? {}) as MoqPublishMediaOptions;
-      const config: MoqPublishEngineConfig = {
-        ...engineConfig,
-        onSignalsReady: (refs) => {
-          this.#signals = refs;
-        },
-      };
 
-      this.#engine = createMoqPublishEngine(config);
+      this.#engine = createMoqPublishEngine(engineConfig);
       this.#disposeBridges = this.#installEventBridges();
     }
 
@@ -243,7 +235,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     #syncEndpoint(): void {
       // No URL, no endpoint — the namespace mirror waits locally until an
       // endpoint URL makes the pair meaningful to the engine.
-      this.#signals.state.endpoint.set(
+      this.#engine.state.endpoint.set(
         this.#publishEndpoint
           ? {
               url: this.#publishEndpoint,
@@ -265,59 +257,59 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     // -------------------------------------------------------------------------
 
     get cameraActive(): boolean {
-      return this.#signals.state.cameraActive.get() ?? false;
+      return this.#engine.state.cameraActive.get() ?? false;
     }
 
     set cameraActive(value: boolean) {
-      this.#signals.state.cameraActive.set(value);
+      this.#engine.state.cameraActive.set(value);
     }
 
     get screenShareActive(): boolean {
-      return this.#signals.state.screenShareActive.get() ?? false;
+      return this.#engine.state.screenShareActive.get() ?? false;
     }
 
     set screenShareActive(value: boolean) {
-      this.#signals.state.screenShareActive.set(value);
+      this.#engine.state.screenShareActive.set(value);
     }
 
     get micActive(): boolean {
-      return this.#signals.state.micActive.get() ?? false;
+      return this.#engine.state.micActive.get() ?? false;
     }
 
     set micActive(value: boolean) {
-      this.#signals.state.micActive.set(value);
+      this.#engine.state.micActive.set(value);
     }
 
     get previewSource(): PreviewSource {
-      return this.#signals.state.previewSource.get() ?? 'camera';
+      return this.#engine.state.previewSource.get() ?? 'camera';
     }
 
     set previewSource(value: PreviewSource) {
-      this.#signals.state.previewSource.set(value);
+      this.#engine.state.previewSource.set(value);
     }
 
     get cameraState(): CaptureStatus {
-      return this.#signals.state.cameraState.get() ?? 'idle';
+      return this.#engine.state.cameraState.get() ?? 'idle';
     }
 
     get screenShareState(): CaptureStatus {
-      return this.#signals.state.screenShareState.get() ?? 'idle';
+      return this.#engine.state.screenShareState.get() ?? 'idle';
     }
 
     get micState(): CaptureStatus {
-      return this.#signals.state.micState.get() ?? 'idle';
+      return this.#engine.state.micState.get() ?? 'idle';
     }
 
     get cameraStream(): MediaStream | null {
-      return this.#signals.context.cameraStream.get() ?? null;
+      return this.#engine.context.cameraStream.get() ?? null;
     }
 
     get screenShareStream(): MediaStream | null {
-      return this.#signals.context.screenStream.get() ?? null;
+      return this.#engine.context.screenStream.get() ?? null;
     }
 
     get captureDevices(): readonly CaptureDeviceFacts[] {
-      return this.#signals.state.captureDevices.get() ?? [];
+      return this.#engine.state.captureDevices.get() ?? [];
     }
 
     get videoInputDeviceId(): string {
@@ -328,7 +320,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
       if (value === this.#videoInputDeviceId) return;
 
       this.#videoInputDeviceId = value;
-      this.#signals.state.videoInputDeviceId.set(value);
+      this.#engine.state.videoInputDeviceId.set(value);
       // Selections travel on the devices event — store slices re-read both
       // the device list and the selected ids from it.
       this.#dispatch('capturedeviceschange');
@@ -342,7 +334,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
       if (value === this.#audioInputDeviceId) return;
 
       this.#audioInputDeviceId = value;
-      this.#signals.state.audioInputDeviceId.set(value);
+      this.#engine.state.audioInputDeviceId.set(value);
       this.#dispatch('capturedeviceschange');
     }
 
@@ -351,19 +343,19 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     // -------------------------------------------------------------------------
 
     get cameraMuted(): boolean {
-      return this.#signals.state.cameraMuted.get() ?? false;
+      return this.#engine.state.cameraMuted.get() ?? false;
     }
 
     set cameraMuted(value: boolean) {
-      this.#signals.state.cameraMuted.set(value);
+      this.#engine.state.cameraMuted.set(value);
     }
 
     get micMuted(): boolean {
-      return this.#signals.state.micMuted.get() ?? false;
+      return this.#engine.state.micMuted.get() ?? false;
     }
 
     set micMuted(value: boolean) {
-      this.#signals.state.micMuted.set(value);
+      this.#engine.state.micMuted.set(value);
     }
 
     // -------------------------------------------------------------------------
@@ -371,7 +363,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     // -------------------------------------------------------------------------
 
     get publishState(): MoqPublishMediaSessionState {
-      return toPublishState(this.#signals.state.sessionStatus.get());
+      return toPublishState(this.#engine.state.sessionStatus.get());
     }
 
     get publishStartedAt(): number {
@@ -379,17 +371,17 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     }
 
     get publishError(): MoqPublishMediaError | null {
-      const error = this.#signals.state.publishError.get();
+      const error = this.#engine.state.publishError.get();
 
       return error ? { code: publishErrorCodes[error.code], message: error.message } : null;
     }
 
     get publishStats(): PublishStatsFacts | null {
-      return this.#signals.state.publishStats.get() ?? null;
+      return this.#engine.state.publishStats.get() ?? null;
     }
 
     publish(): Promise<void> {
-      const { state } = this.#signals;
+      const { state } = this.#engine;
 
       // play()-like precondition rejections: the session gate requires an
       // endpoint and active capture — neither is something publish() can
@@ -413,7 +405,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     }
 
     async #activatePublish(): Promise<void> {
-      const { state } = this.#signals;
+      const { state } = this.#engine;
 
       if (peek(state.sessionStatus) === 'error') {
         // Restart after a failure: the session behavior reconnects on the
@@ -475,7 +467,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     }
 
     unpublish(): void {
-      this.#signals.state.publishActivated.set(false);
+      this.#engine.state.publishActivated.set(false);
     }
 
     // -------------------------------------------------------------------------
@@ -484,11 +476,11 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
 
     attach(previewElement: HTMLVideoElement): void {
       super.attach?.(previewElement);
-      this.#signals.context.previewElement.set(previewElement);
+      this.#engine.context.previewElement.set(previewElement);
     }
 
     detach(): void {
-      this.#signals.context.previewElement.set(undefined);
+      this.#engine.context.previewElement.set(undefined);
       super.detach?.();
     }
 
@@ -504,7 +496,7 @@ export function MoqPublishMediaMixin<Base extends Constructor<any>>(
     // -------------------------------------------------------------------------
 
     #installEventBridges(): () => void {
-      const { state, context } = this.#signals;
+      const { state, context } = this.#engine;
       const cleanups = [
         this.#bridge(
           () => toPublishState(state.sessionStatus.get()),

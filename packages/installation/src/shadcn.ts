@@ -1,4 +1,4 @@
-import { PACKAGE_MANAGERS, type InstallationProject, type PackageManager } from './parameters';
+import { PACKAGE_MANAGERS, PACKAGE_RUNNERS, type InstallationProject, type PackageManager } from './parameters';
 import { getInstallationPreset, type Skin, type UseCase } from './presets';
 import {
   INSTALLATION_NEW_APP_DIRECTORY,
@@ -9,7 +9,7 @@ import {
 
 export type RegistryFramework = 'html' | 'react';
 export type RegistryStyling = 'css' | 'tailwind';
-export type RegistryTheme = 'default' | 'minimal';
+export type RegistryTheme = 'default' | 'neutral' | 'compat' | 'scaffold';
 export type RegistryPreset = 'audio' | 'live-audio' | 'live-video' | 'video';
 export type ShadcnRunner = PackageManager;
 
@@ -22,16 +22,16 @@ export const REGISTRY_INSTALL_DIRECTORY = 'components/videojs';
 export const SHADCN_RUNNER_NAMES = PACKAGE_MANAGERS;
 
 export const SHADCN_RUNNERS = {
-  npm: 'npx shadcn@latest',
-  pnpm: 'pnpm dlx shadcn@latest',
-  yarn: 'npx shadcn@latest',
-  bun: 'bunx --bun shadcn@latest',
+  npm: `${PACKAGE_RUNNERS.npm} shadcn@latest`,
+  pnpm: `${PACKAGE_RUNNERS.pnpm} shadcn@latest`,
+  yarn: `${PACKAGE_RUNNERS.yarn} shadcn@latest`,
+  bun: `${PACKAGE_RUNNERS.bun} --bun shadcn@latest`,
 } as const satisfies Record<ShadcnRunner, string>;
 
 export const REGISTRY_STYLINGS = ['tailwind', 'css'] as const satisfies readonly RegistryStyling[];
 const HTML_REGISTRY_STYLINGS = ['css'] as const satisfies readonly RegistryStyling[];
 
-export const REGISTRY_THEMES = ['default', 'minimal'] as const satisfies readonly RegistryTheme[];
+export const REGISTRY_THEMES = ['default', 'neutral', 'compat', 'scaffold'] as const satisfies readonly RegistryTheme[];
 
 export const DEFAULT_REGISTRY_PRESET = 'video' satisfies RegistryPreset;
 
@@ -73,9 +73,23 @@ export const REGISTRY_SKINS: readonly RegistrySkin[] = REGISTRY_PRESETS.flatMap(
   },
   {
     item: preset,
-    label: `Minimal ${label}`,
+    label: `Neutral ${label}`,
     preset,
-    theme: 'minimal',
+    theme: 'neutral',
+    directory,
+  },
+  {
+    item: preset,
+    label: `Compat ${label}`,
+    preset,
+    theme: 'compat',
+    directory,
+  },
+  {
+    item: preset,
+    label: `Scaffold ${label}`,
+    preset,
+    theme: 'scaffold',
     directory,
   },
 ]);
@@ -94,16 +108,24 @@ export function resolveRegistryStyling(framework: RegistryFramework, styling: Re
   return styling && registryStylings(framework).includes(styling) ? styling : defaultRegistryStyling(framework);
 }
 
+/** The registry path of one catalog under `r/`, such as `react`, `react/css`, or `html/scaffold`. */
+export function registryCatalog(
+  framework: RegistryFramework,
+  styling: RegistryStyling,
+  theme: RegistryTheme = 'default'
+): string {
+  const target = framework === 'react' && styling === 'css' ? 'react/css' : framework;
+
+  return theme === 'default' ? target : `${target}/${theme}`;
+}
+
 /** The `{name}` template Shadcn stores in `components.json` for one catalog. */
 export function registryNamespaceUrl(
   framework: RegistryFramework,
   styling: RegistryStyling,
   theme: RegistryTheme = 'default'
 ): string {
-  const target = framework === 'react' && styling === 'css' ? 'react/css' : framework;
-  const catalog = theme === 'minimal' ? `${target}/minimal` : target;
-
-  return `${REGISTRY_ORIGIN}/r/${catalog}/{name}.json`;
+  return `${REGISTRY_ORIGIN}/r/${registryCatalog(framework, styling, theme)}/{name}.json`;
 }
 
 export function shadcnCommand(runner: ShadcnRunner, action: string): string {
@@ -243,6 +265,12 @@ export function registrySkinSelection({
 
   return {
     item,
-    theme: skin.startsWith('minimal-') ? 'minimal' : 'default',
+    theme: skin.startsWith('neutral-')
+      ? 'neutral'
+      : skin.startsWith('compat-')
+        ? 'compat'
+        : skin.startsWith('scaffold-')
+          ? 'scaffold'
+          : 'default',
   };
 }

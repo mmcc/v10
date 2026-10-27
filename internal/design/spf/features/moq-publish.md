@@ -31,7 +31,7 @@ without it, publishing doesn't exist at all. It anchors the new
   `syncPreview`, `applyTrackToggles` (capture), `probeEncoderSupport`,
   `setupEncoderActors`, `pumpMediaFrames`, `trackPublishStats` (encode),
   `openPublishSession`, `setupTrackPublishers`, `deriveCatalog`
-  (transport), with `shareSignals` last. Exported as
+  (transport), with the `defineExternalSignals` declaration last. Exported as
   `@videojs/spf/moq-publish`.
 - **Definition depth:** sketched — implemented and code-grounded. The
   vertical slice sits behind [rfc/moq-publisher.md](../../../../rfc/moq-publisher.md)
@@ -101,12 +101,12 @@ group boundary, resuming cleanly at the boundary keyframe.
 
 ## Signals inventory
 
-State slots (consumer-intent slots are materialized by `shareSignals`
+State slots (consumer-intent slots are declared by `defineExternalSignals`
 and written by the adapter; fact slots are behavior-owned):
 
 | Slot | Kind | Writer(s) |
 |---|---|---|
-| `endpoint`, `publishActivated`, `captureSource`, `cameraMuted`, `micMuted` | intent | adapter (via `onSignalsReady` refs) |
+| `endpoint`, `publishActivated`, `captureSource`, `cameraMuted`, `micMuted` | intent | adapter (via `engine.state`) |
 | `captureDevices` | fact | `enumerateCaptureDevices` (sole) |
 | `captureStatus`, `captureTracks` | fact | `acquireCaptureSource` (sole) |
 | `encoderSupport`, `activeEncodings` | fact | `probeEncoderSupport` (sole) |
@@ -118,7 +118,7 @@ Context slots (platform objects and owned resources):
 
 | Slot | Owner |
 |---|---|
-| `previewElement` | adapter (intent, via `shareSignals`) |
+| `previewElement` | adapter (intent, via `defineExternalSignals`) |
 | `captureStream` | `acquireCaptureSource` |
 | `videoEncoderActor`, `audioEncoderActor` | `setupEncoderActors` |
 | `publishSessionActor` | `openPublishSession` |
@@ -324,9 +324,9 @@ publisher initiates no requests, so there is no response to bound.
   async — the same sync-vs-async split that doc records for key-system
   probing.
 - **[engine-adapter-integration](./engine-adapter-integration.md)** —
-  `MoqPublishMediaMixin` follows the same one-engine-per-instance,
-  `shareSignals` / `onSignalsReady` adapter shape as
-  `SimpleHlsMediaMixin`.
+  `MoqPublishMediaMixin` follows the same one-engine-per-instance
+  adapter shape as `SimpleHlsMediaMixin`, driving the returned
+  composition's signals.
 
 ## See also
 

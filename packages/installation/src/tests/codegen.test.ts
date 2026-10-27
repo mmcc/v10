@@ -156,6 +156,13 @@ describe('generateReactInstallCode', () => {
 });
 
 describe('generateHTMLUsageCode', () => {
+  it('imports and renders the Compat skin for HTML', () => {
+    const result = generateHTMLUsageCode({ ...baseHTML, skin: 'compat-video' });
+
+    expect(result.imports).toContain('@videojs/html/video/compat-skin');
+    expect(result.html).toContain('<video-compat-skin');
+  });
+
   it('generates HTML with video-player and video-skin for default video', () => {
     const result = generateHTMLUsageCode(baseHTML);
 
@@ -199,6 +206,28 @@ describe('generateHTMLUsageCode', () => {
     expect(result.html).toContain('<audio-skin>');
     expect(result.html).toContain(`<audio src="${INSTALLATION_DEMO_SOURCES.audio}"`);
     expect(result.html).not.toContain('playsinline');
+  });
+
+  it('links to the help page from native video and audio fallback content', () => {
+    const video = generateHTMLUsageCode(baseHTML);
+    const audio = generateHTMLUsageCode({
+      ...baseHTML,
+      useCase: 'default-audio',
+      skin: 'audio',
+      media: 'html5-audio',
+    });
+
+    expect(video.html).toContain(
+      'playsinline><a href="https://videojs.org/help">Video player not working?</a></video>'
+    );
+    expect(audio.html).toContain('><a href="https://videojs.org/help">Audio player not working?</a></audio>');
+  });
+
+  it('leaves custom media elements without fallback content', () => {
+    const result = generateHTMLUsageCode({ ...baseHTML, media: 'mux-video' });
+
+    expect(result.html).toContain('playsinline></mux-video>');
+    expect(result.html).not.toContain('videojs.org/help');
   });
 
   it('uses background-video tags', () => {
@@ -307,11 +336,11 @@ describe('generateHTMLUsageCode', () => {
     expect(result.imports).toContain("import '@videojs/html/extensions/mux-data'");
   });
 
-  it('uses minimal skin tag', () => {
-    const result = generateHTMLUsageCode({ ...baseHTML, skin: 'minimal-video' });
+  it('uses neutral skin tag', () => {
+    const result = generateHTMLUsageCode({ ...baseHTML, skin: 'neutral-video' });
 
-    expect(result.html).toContain('<video-minimal-skin style=');
-    expect(result.imports).toContain("import '@videojs/html/video/minimal-skin'");
+    expect(result.html).toContain('<video-neutral-skin style=');
+    expect(result.imports).toContain("import '@videojs/html/video/neutral-skin'");
   });
 
   it('omits skin tag and skin import when skin is none', () => {
@@ -353,16 +382,16 @@ describe('generateHTMLUsageCode', () => {
     expect(result.imports).toContain("import '@videojs/html/media/hlsjs-video'");
   });
 
-  it('uses the minimal live video skin tag', () => {
+  it('uses the neutral live video skin tag', () => {
     const result = generateHTMLUsageCode({
       ...baseHTML,
       useCase: 'live-video',
-      skin: 'minimal-video',
+      skin: 'neutral-video',
       media: 'hls',
     });
 
-    expect(result.html).toContain('<live-video-minimal-skin style=');
-    expect(result.imports).toContain("import '@videojs/html/live-video/minimal-skin'");
+    expect(result.html).toContain('<live-video-neutral-skin style=');
+    expect(result.imports).toContain("import '@videojs/html/live-video/neutral-skin'");
   });
 
   it('omits the skin for a headless live video player', () => {
@@ -397,10 +426,14 @@ describe('generateHTMLUsageCode', () => {
     const live = generateHTMLUsageCode({ ...baseHTML, useCase: 'live-video', media: 'hls' });
     const onDemand = generateHTMLUsageCode({ ...baseHTML, media: 'hls' });
 
-    expect(live.html).toContain('.m3u8');
-    // A distinct asset from the on-demand demo, so the live player actually
-    // reports live-edge state.
-    expect(live.html).not.toEqual(onDemand.html);
+    const liveSource = live.html.match(/<hlsjs-video\s+src="([^"]+)"/);
+    const onDemandSource = onDemand.html.match(/<hlsjs-video\s+src="([^"]+)"/);
+
+    expect(liveSource).not.toBeNull();
+    expect(onDemandSource).not.toBeNull();
+    expect(liveSource?.[1]).toBe(INSTALLATION_DEMO_SOURCES.live);
+    expect(onDemandSource?.[1]).toBe(INSTALLATION_DEMO_SOURCES.videoHls);
+    expect(liveSource?.[1]).not.toBe(onDemandSource?.[1]);
   });
 });
 
@@ -479,6 +512,12 @@ video-skin {
     expect(usage['App.svelte']).toContain('<hlsjs-video src={"https://example.com/live.m3u8"} playsinline>');
   });
 
+  it('links to the help page from native video in Svelte usage', () => {
+    const usage = generateSvelteUsageCode(baseHTML);
+
+    expect(usage['App.svelte']).toContain('<a href="https://videojs.org/help">Video player not working?</a></video>');
+  });
+
   it('emits custom Svelte sources as JavaScript string expressions', () => {
     const sourceUrl = 'https://example.com/video.mp4?label={quoted}&path=\\media';
     const usage = generateSvelteUsageCode({ ...hlsOptions, sourceUrl });
@@ -552,8 +591,53 @@ describe('generateReactCreateCode', () => {
     const code = result['app/page.tsx'];
 
     expect(code).toContain("import { MuxVideo } from '@videojs/react/media/mux-video'");
-    expect(code).toContain('<MuxVideo src={"');
+    expect(code).toContain('<MuxVideo source={{ playbackId: "');
     expect(code).toContain('playsInline />');
+  });
+
+  it('passes a Mux stream URL to Mux video as a structured source', () => {
+    const code = generateReactCreateCode({
+      ...baseReact,
+      media: 'mux-video',
+      sourceUrl: 'https://stream.media.example.com/abc123.m3u8?max_resolution=1080p&redundant_streams=true',
+    })['app/page.tsx'];
+
+    expect(code).toContain(
+      '<MuxVideo source={{ playbackId: "abc123", customDomain: "media.example.com", playback: { maxResolution: "1080p", redundantStreams: true } }} playsInline />'
+    );
+  });
+
+  it('keeps src for a URL Mux video cannot parse into a source', () => {
+    const code = generateReactCreateCode({
+      ...baseReact,
+      media: 'mux-video',
+      sourceUrl: 'https://example.com/video.m3u8',
+    })['app/page.tsx'];
+
+    expect(code).toContain('<MuxVideo src={"https://example.com/video.m3u8"} playsInline />');
+  });
+
+  it('passes a Mux stream URL to Mux audio as a structured source', () => {
+    const code = generateReactCreateCode({
+      ...baseReact,
+      useCase: 'default-audio',
+      skin: 'audio',
+      media: 'mux-audio',
+      sourceUrl: 'https://stream.mux.com/abc123.m3u8',
+    })['app/page.tsx'];
+
+    expect(code).toContain('<MuxAudio source={{ playbackId: "abc123" }} />');
+  });
+
+  it('keeps src for Mux background video, which takes no structured source', () => {
+    const code = generateReactCreateCode({
+      ...baseReact,
+      useCase: 'background-video',
+      media: 'mux-background-video',
+      sourceUrl: 'https://stream.mux.com/abc123.m3u8',
+    })['app/page.tsx'];
+
+    expect(code).toContain('<MuxBackgroundVideo src={"https://stream.mux.com/abc123.m3u8"} playsInline />');
   });
 
   it('renders and imports the Mux Data component alongside Mux video by default', () => {
@@ -627,12 +711,12 @@ describe('generateReactCreateCode', () => {
     expect(code).not.toContain('playsInline');
   });
 
-  it('uses minimal skin component', () => {
-    const result = generateReactCreateCode({ ...baseReact, skin: 'minimal-video' });
+  it('uses neutral skin component', () => {
+    const result = generateReactCreateCode({ ...baseReact, skin: 'neutral-video' });
     const code = result['app/page.tsx'];
 
-    expect(code).toContain('<MinimalVideoSkin style=');
-    expect(code).toContain("import '@videojs/react/video/minimal-skin.css'");
+    expect(code).toContain('<NeutralVideoSkin style=');
+    expect(code).toContain("import '@videojs/react/video/neutral-skin.css'");
   });
 
   it('omits skin component and CSS import when skin is none', () => {
@@ -662,17 +746,17 @@ describe('generateReactCreateCode', () => {
     expect(code).toContain('playsInline />');
   });
 
-  it('uses the minimal live video skin component', () => {
+  it('uses the neutral live video skin component', () => {
     const result = generateReactCreateCode({
       ...baseReact,
       useCase: 'live-video',
-      skin: 'minimal-video',
+      skin: 'neutral-video',
       media: 'hls',
     });
     const code = result['app/page.tsx'];
 
-    expect(code).toContain('<MinimalLiveVideoSkin style=');
-    expect(code).toContain("import '@videojs/react/live-video/minimal-skin.css'");
+    expect(code).toContain('<NeutralLiveVideoSkin style=');
+    expect(code).toContain("import '@videojs/react/live-video/neutral-skin.css'");
   });
 
   it('omits the skin for a headless live video player', () => {
@@ -704,15 +788,15 @@ describe('generateReactCreateCode', () => {
     expect(code).toContain('<MuxData />');
   });
 
-  it('uses the minimal live audio skin component', () => {
+  it('uses the neutral live audio skin component', () => {
     const result = generateReactCreateCode({
       ...baseReact,
       useCase: 'live-audio',
-      skin: 'minimal-audio',
+      skin: 'neutral-audio',
       media: 'mux-audio',
     });
 
-    expect(result['app/page.tsx']).toContain('<MinimalLiveAudioSkin>');
+    expect(result['app/page.tsx']).toContain('<NeutralLiveAudioSkin>');
   });
 
   it('uses background video components', () => {
@@ -800,11 +884,21 @@ describe('source installation code', () => {
     expect(source).toContain(`src={${JSON.stringify(sourceUrl)}}`);
   });
 
-  it('keeps the local component name stable when the Minimal catalog is selected', () => {
-    const code = generateSourceReactCreateCode({ ...baseReact, skin: 'minimal-video' })['app/page.tsx'];
+  it('passes a Mux stream URL to the local skin as a structured source', () => {
+    const code = generateSourceReactCreateCode({
+      ...baseReact,
+      media: 'mux-video',
+      sourceUrl: 'https://stream.mux.com/abc123.m3u8',
+    })['app/page.tsx'];
+
+    expect(code).toContain('<MuxVideo source={{ playbackId: "abc123" }} playsInline />');
+  });
+
+  it('keeps the local component name stable when the Neutral catalog is selected', () => {
+    const code = generateSourceReactCreateCode({ ...baseReact, skin: 'neutral-video' })['app/page.tsx'];
 
     expect(code).toContain("import { VideoSkin } from '@/components/videojs/video/skin'");
-    expect(code).not.toContain('MinimalVideoSkin');
+    expect(code).not.toContain('NeutralVideoSkin');
   });
 
   it('shows the exact HTML skin file, media markup, and registrations to edit', () => {
@@ -852,17 +946,21 @@ describe('getRendererComponent', () => {
 describe('getSkinTag', () => {
   it('follows the preset and skin tier', () => {
     expect(getSkinTag('default-video', 'video')).toBe('video-skin');
-    expect(getSkinTag('live-audio', 'minimal-audio')).toBe('live-audio-minimal-skin');
+    expect(getSkinTag('live-audio', 'neutral-audio')).toBe('live-audio-neutral-skin');
+    expect(getSkinTag('default-video', 'compat-video')).toBe('video-compat-skin');
+    expect(getSkinTag('live-audio', 'compat-audio')).toBe('live-audio-compat-skin');
   });
 
   it('always uses the background skin for background video', () => {
-    expect(getSkinTag('background-video', 'minimal-video')).toBe('background-video-skin');
+    expect(getSkinTag('background-video', 'neutral-video')).toBe('background-video-skin');
   });
 });
 
 describe('getSkinComponent', () => {
   it('follows the preset and skin tier', () => {
     expect(getSkinComponent('default-audio', 'audio')).toBe('AudioSkin');
-    expect(getSkinComponent('live-video', 'minimal-video')).toBe('MinimalLiveVideoSkin');
+    expect(getSkinComponent('live-video', 'neutral-video')).toBe('NeutralLiveVideoSkin');
+    expect(getSkinComponent('default-video', 'compat-video')).toBe('CompatVideoSkin');
+    expect(getSkinComponent('live-audio', 'compat-audio')).toBe('CompatLiveAudioSkin');
   });
 });

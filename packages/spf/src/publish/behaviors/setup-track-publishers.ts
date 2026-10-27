@@ -31,7 +31,7 @@
  * subgroup streams on every unsubscribe, so a stream failure is ordinary lifecycle — the publishers count it
  * (`droppedGroups`) and genuine transport death surfaces through the session's own `closed`/`failed` path.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { peek, type ReadonlySignal, type Signal, signal } from '../../core/signals/primitives';

@@ -1,4 +1,4 @@
-import type { HlsBackgroundVideoAdapter } from '@videojs/spf/hls-background-video';
+import type { HlsBackgroundVideoAdapter } from '@videojs/spf/adapters/hls-background-video';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { MuxBackgroundVideo } from '../../mux-background-video';
@@ -134,13 +134,14 @@ describe('HlsBackgroundVideo', () => {
       expect(element.video?.error).toBeFalsy();
     });
 
-    it('clears when a new source resets the sequence', async () => {
+    it('follows a cleared media error', async () => {
       const element = create(defineElement());
 
       mediaOf(element).engine.state.errors.set([{ code: NO_SUPPORTED_VIDEO_TRACK }]);
       await flush();
 
-      // collectErrors clears the slot on source change.
+      expect(element.error?.code).toBe(NO_SUPPORTED_VIDEO_TRACK);
+
       mediaOf(element).engine.state.errors.set(undefined);
       await flush();
 
