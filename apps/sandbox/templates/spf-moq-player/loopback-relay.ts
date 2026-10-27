@@ -45,7 +45,8 @@ const LOC_TIMESTAMP = 0x10;
 
 /**
  * The vi64 varint of draft-15+ (§8.1) — leading ones on the first byte give the encoded length minus one, so an L-byte
- * encoding carries 7L value bits. NOT the QUIC RFC 9000 varint.
+ * encoding of up to 8 bytes carries 7L value bits, and the 9-byte form (first byte 0xFF) a full 64. NOT the QUIC RFC
+ * 9000 varint. Encoding stops at 8 bytes: their 56 bits already hold every integer a JS number represents exactly.
  */
 function varintByteLength(value: number): number {
   for (let length = 1; length < 8; length++) {
@@ -684,8 +685,11 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
           }
 
           const { value, done } = await reader.read();
-          // Cancellation *is* the stream lifecycle (§6.4.2.3): the subscriber
-          // aborting its sending direction ends the subscription.
+          // A FIN only means the subscriber will send nothing more (§6.4.2.2),
+          // yet this loopback ends the subscription on it as well as on a
+          // cancellation (§6.4.2.3), which lands in the catch below. The player
+          // cancels with a reset and FINs only after the publisher has, so the
+          // shortcut never cuts a live subscription short.
           if (done) break;
 
           const merged = new Uint8Array(buffer.length + value.length);
