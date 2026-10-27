@@ -8,7 +8,7 @@ Your publisher and relay must serve the versions the subscriber speaks:
 
 | Layer | Version | What to serve |
 | --- | --- | --- |
-| Transport | `draft-ietf-moq-transport-20`, protocol ID `moqt-20` | MOQT over WebTransport |
+| Transport | `draft-ietf-moq-transport-22`, protocol ID `moqt-22` (`moqt-20` also accepted) | MOQT over WebTransport |
 | Catalog | `draft-ietf-moq-msf-01` | UTF-8 JSON on a catalog track |
 | Media | `draft-ietf-moq-loc-04` | One encoded audio or video chunk per MOQT object |
 

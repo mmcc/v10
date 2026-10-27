@@ -18,6 +18,13 @@ the spec text is ambiguous, and calls out each place it does.
 
 Temporary implementation notes — delete before merge per `AGENTS.md`.
 
+**Superseded on the player (2026-10-27):** `mmcc/moq` now takes its transport
+from `@caprid/moq-core`, which was extracted from `network/moqt/`. It offers
+`moqt-22` first and falls back to `moqt-20`. The local modules this plan
+names, and the vendored draft-20 text, are gone. `internal/specs/moq/` now
+carries draft-22. Section numbers below are draft-20's. The publisher still
+runs the local codec until its own move.
+
 **Issue #45 verification (2026-09-16, moq-relay 0.14.17):** the shared codec
 uses bare Locations in both directions. Fixed-byte tests pin SUBSCRIBE_OK,
 REQUEST_OK, multi-byte IDs, following parameters/properties, and truncation.

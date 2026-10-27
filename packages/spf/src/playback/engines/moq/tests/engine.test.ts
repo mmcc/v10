@@ -1,23 +1,21 @@
+import { type BidirectionalStreamLike, ByteWriter, type MoqtTransport, REQUEST_ERROR_CODE } from '@caprid/moq-core';
 import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { isResolvedPresentation } from '../../../../media/types';
-import { ByteWriter, StreamReader, utf8Encode } from '../../../../network/moqt/bytes';
 import {
   type ControlMessage,
-  ControlMessageDeframer,
   decodeControlMessage,
   encodeRequestError,
   encodeSetup,
   encodeSubscribeOk,
-  REQUEST_ERROR_CODE,
-} from '../../../../network/moqt/control-messages';
-import type { BidirectionalStreamLike } from '../../../../network/moqt/request-stream';
-import type { MoqtTransport } from '../../../../network/moqt/session';
+  StreamReader,
+  utf8Encode,
+} from '../../../../network/tests/helpers/moqt-wire';
 import type { CreateMoqTransport } from '../../../actors/moq-session';
 import { createMoqEngine, type MoqEngineConfig, type MoqEngineSignals } from '../engine';
 
 // ============================================================================
-// In-memory relay: speaks real draft-20 bytes over a fake WebTransport.
+// In-memory relay: speaks real draft-22 bytes over a fake WebTransport.
 // ============================================================================
 
 const CATALOG = JSON.stringify({
@@ -83,15 +81,12 @@ function createFakeRelay(catalog: string = CATALOG) {
 
   const handleRequestStream = async (stream: BidirectionalStreamLike) => {
     const reader = new StreamReader(stream.readable);
-    const deframer = new ControlMessageDeframer();
     const writer = stream.writable.getWriter();
     const type = await reader.readVarint();
     const high = await reader.readUint8();
     const low = await reader.readUint8();
     const body = await reader.readBytes(high * 256 + low);
     const message = decodeControlMessage({ type, body });
-
-    void deframer;
 
     if (message.kind === 'subscribe') {
       const trackAlias = nextAlias++;
@@ -108,7 +103,7 @@ function createFakeRelay(catalog: string = CATALOG) {
     }
 
     if (message.kind === 'fetch') {
-      // The engine never fetches (a draft-20 join is a subscription filter);
+      // The engine never fetches (a draft-22 join is a subscription filter);
       // anything that does is refused — no history is retained.
       await writer.write(encodeRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'nothing published'));
       await writer.close();
@@ -407,10 +402,10 @@ describe('createMoqEngine', () => {
     await engine.destroy();
   });
 
-  // A relay can replay buffered groups to a joining subscriber (a draft-20
-  // current-group join replays that group from cache; older relays replayed
-  // several), so the jitter buffer can start seconds deep. `latency.joinAtEdge` decides
-  // whether playout starts at the front of that replay or at its edge.
+  // A relay can replay buffered groups to a joining subscriber (a current-group
+  // join replays that group from cache; older relays replayed several), so the
+  // jitter buffer can start seconds deep. `latency.joinAtEdge` decides whether
+  // playout starts at the front of that replay or at its edge.
   //
   // The canvas is attached after the replay lands so the assertion is about
   // the anchor and not about how fast the burst arrives; the controller is

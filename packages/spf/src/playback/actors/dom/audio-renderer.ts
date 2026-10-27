@@ -1,20 +1,22 @@
 /**
- * AudioDecoder → Web Audio renderer actor. **Owns the master clock**: once audio is scheduled, `getClockTimeUs()` maps
- * the AudioContext's hardware clock back to media time, and the video renderer (and `currentTime` derivation) follow
- * it.
+ * Audio renderer actor over the shared AudioWorklet player core, `@caprid/moq-media`'s `createAudioPlayer`. Frames in
+ * from the subscriber's jitter buffer, the **master clock** out: the video renderer and `currentTime` follow it.
  *
- * Decoded `AudioData` is copied into `AudioBuffer`s and scheduled gaplessly with `AudioBufferSourceNode`s. Each
- * scheduled buffer records a clock segment (context-time span ↔ media time × rate), and the clock reads the segment
- * containing `currentTime` — so it reports what was _actually_ scheduled: late arrivals and rate nudges shift the
- * timeline forward from where they happen instead of rescaling elapsed time. Rate nudges from the latency controller
- * apply as `playbackRate` on the scheduled sources (a ±5% nudge is a barely audible pitch shift).
+ * The core decodes with WebCodecs, holds an adaptive jitter buffer in an `AudioWorklet`, and reports the audible
+ * timestamp about every 20 ms. **Latency stays v10's.** The renderer meters frames into the core so the worklet holds
+ * about its own jitter target, and the rest of the target latency stays in the subscriber's buffer, where `syncLatency`
+ * measures and steers it. The core's adaptive target is left alone: under metering its growth only moves depth from one
+ * buffer to the other. The controller's rate nudges apply as the input's `playbackRate` (a ±5% nudge is a barely
+ * audible pitch shift).
  *
- * Where the schedule _starts_ is `getJoinAnchorUs`: with one supplied the clock anchors at the live edge and the
- * buffered backlog is discarded, instead of anchoring at the oldest replayed group and playing all of it.
- *
- * TODO(audio-worklet): replace source-node scheduling with an AudioWorklet ring buffer for tighter jitter control and
- * clean rate adjustment; the actor surface (frame source in, master clock out) is designed so that swap is internal.
+ * The clock the core reports into is the renderer's own, not the SDK's `PlayoutClock`, so `getClockTimeUs` keeps the
+ * contract the video renderer and `trackPlayoutTime` rely on: `undefined` before any audio, and **held where the
+ * worklet ran dry** rather than paced on by wall time — a wall-paced clock steps back when audio resumes, which holds
+ * slaved video on its last frame for the whole step.
  */
+import { createAudioPlayer as createCoreAudioPlayer, opusPacketDurationUs } from '@caprid/moq-media';
+import { clamp } from '@videojs/utils/number';
+
 import { createTransitionActor, type TransitionActor } from '../../../core/actors/create-transition-actor';
 import { TIMELINE_DISCONTINUITY_US } from '../../../media/moq/timeline';
 import type { JitterFrame } from '../track-subscriber';
@@ -36,7 +38,7 @@ export interface AudioFrameSource {
 export interface AudioContextLike {
   readonly currentTime: number;
   readonly destination: AudioNode;
-  /** Seconds between the graph and the audio subsystem; the worklet renderer places its clock behind it. */
+  /** Seconds between the graph and the audio subsystem; the clock is placed behind it. */
   readonly baseLatency?: number;
   /** Seconds from the audio subsystem to the speaker; read fresh, as it changes with the device. */
   readonly outputLatency?: number;
@@ -45,8 +47,6 @@ export interface AudioContextLike {
    * `AudioWorkletNode` cannot be constructed on a plain object.
    */
   readonly baseContext?: BaseAudioContext;
-  createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
-  createBufferSource(): AudioBufferSourceNode;
 }
 
 export type AudioRendererStatus = 'idle' | 'rendering' | 'error';
@@ -54,13 +54,13 @@ export type AudioRendererStatus = 'idle' | 'rendering' | 'error';
 export interface AudioRendererContext {
   status: AudioRendererStatus;
   framesScheduled: number;
-  /** Media time of the newest scheduled audio, in microseconds. */
+  /** Media time of the newest audio handed to the core, in microseconds. */
   scheduledUntilUs?: number;
   /**
-   * **Times the schedule ran dry** — the context clock passed the end of everything scheduled while a track was still
-   * attached. Counted per rising edge, not per tick, so one starvation is one increment.
+   * **Times the worklet ran dry** — rendering passed the end of everything pushed while a track was still attached.
+   * Counted per rising edge, not per tick, so one starvation is one increment.
    *
-   * The clock itself hides this: `getClockTimeUs` clamps to the segment end and resumes seamlessly, which is right for
+   * The clock itself hides this: `getClockTimeUs` holds at the dry point and resumes seamlessly, which is right for
    * presentation and useless as a signal. This is the direct "the target latency is below what the path can sustain"
    * evidence the adaptive controller has no other way to obtain — a shallow buffer looks identical to a well-behaved
    * one right up until it is empty.
@@ -69,63 +69,143 @@ export interface AudioRendererContext {
   error?: unknown;
 }
 
+export interface AudioRendererActor extends Pick<TransitionActor<AudioRendererContext, RendererMessage>, 'snapshot'> {
+  /** Point the renderer at a (new) frame source + decoder config. */
+  setTrack(source: AudioFrameSource | null, config: AudioDecoderConfig | null): void;
+  /** Master playout clock: current media time in microseconds, or `undefined` before any audio is audible. */
+  getClockTimeUs(): number | undefined;
+  destroy(): void;
+}
+
+/**
+ * The part of `@caprid/moq-media`'s `PlayoutClock` an audio player input calls. The renderer implements it, so the
+ * input reports into the renderer's clock.
+ */
+export interface AudioPlayerClock {
+  /** Caps the input's jitter target: the core keeps it under this less the output delay and 40 ms. */
+  readonly targetLatencyUs: number;
+  /** The time source reports are measured on, in microseconds. */
+  localNow(): number;
+  /** The audio with this timestamp is audible at local time `atUs`. */
+  reportAudio(timestampUs: number, atUs?: number): void;
+  /** The input stopped. */
+  stopAudio(): void;
+}
+
+/** The part of `@caprid/moq-media`'s `AudioInputOptions` the renderer passes. */
+export interface AudioPlayerInputOptions {
+  clock?: AudioPlayerClock;
+  decoderConfig?: AudioDecoderConfig;
+  /** See `AudioPlayerInput.playbackRate`. */
+  playbackRate?: number;
+  /** A decoder error. The core decodes again from the next frame, with a new decoder. */
+  onError?(cause: unknown): void;
+}
+
+/** The part of `@caprid/moq-media`'s `AudioInputStats` the renderer reads. Durations are microseconds. */
+export interface AudioPlayerInputStats {
+  /** Whether the worklet is playing, rather than filling to its target. */
+  readonly playing: boolean;
+  /** Decoded audio the worklet holds. */
+  readonly bufferedUs: number;
+  /** How much the worklet holds before it plays, at the start and after running dry. */
+  readonly jitterTargetUs: number;
+}
+
+/** The part of `@caprid/moq-media`'s `AudioPlayerInput` the renderer uses: one track. */
+export interface AudioPlayerInput {
+  /** Decode and hold a frame, in decode order. */
+  push(frame: { timestampUs: number; payload: Uint8Array }): void;
+  /** Without a range: drop everything held or still decoding. */
+  cut(): void;
+  /** Held audio played per output frame, from the next render quantum; 0.5–2, or the core throws. */
+  playbackRate: number;
+  readonly stats: AudioPlayerInputStats;
+  remove(): void;
+}
+
+/** The part of `@caprid/moq-media`'s `AudioPlayer` the renderer uses. */
+export interface AudioPlayer {
+  /** The mix of every input; the renderer connects it to its context's `destination`. */
+  readonly output: { connect(destination: AudioNode): void };
+  addInput(options?: AudioPlayerInputOptions): AudioPlayerInput;
+  /** Remove every input and disconnect the output. */
+  close(): void;
+}
+
+/** Create the player on the renderer's context. Default: the core on the context's `baseContext`. */
+export type CreateAudioPlayer = (context: AudioContextLike) => Promise<AudioPlayer>;
+
 export interface CreateAudioRendererOptions {
+  /** Where the player's output connects (`destination`), and the output latencies the clock is placed behind. */
   audioContext: AudioContextLike;
-  /** Playout rate (latency nudges). Default 1. */
+  createAudioPlayer?: CreateAudioPlayer;
+  /** Playout rate (latency nudges), clamped to the core's 0.5–2. Default 1. */
   getPlaybackRate?: () => number;
-  /** Scheduling safety margin in seconds ahead of `currentTime`. Default 0.05. */
-  scheduleMargin?: number;
-  /** Decode/schedule cadence in ms. Default 10. */
-  tickIntervalMs?: number;
   /**
-   * **Join at the live edge.** Media timestamp the schedule should start at while it has no anchor — at join, and again
-   * after a catch-up skip. Buffered audio older than it is discarded rather than played: audio cannot be fast-forwarded
-   * the way video can without pitch artifacts. `undefined` (the default, and whatever the caller returns before any
-   * frame has arrived) anchors at the oldest buffered frame instead.
+   * **Join at the live edge.** Media timestamp the playout should start at while it has no anchor — at join, and again
+   * after a catch-up skip. Buffered audio older than it is discarded before it reaches the core: audio cannot be
+   * fast-forwarded the way video can without pitch artifacts. `undefined` (the default, and whatever the caller returns
+   * before any frame has arrived) starts at the oldest buffered frame instead.
    */
   getJoinAnchorUs?: () => number | undefined;
+  /**
+   * The target latency in microseconds, read on every clock report. It caps the core's jitter target, so the worklet
+   * never holds more than the latency the controller is aiming at. Default 2 s, where the core's own 400 ms ceiling
+   * applies instead.
+   */
+  getTargetLatencyUs?: () => number | undefined;
+  /** Metering cadence in ms. Default 10. */
+  tickIntervalMs?: number;
 }
 
 type RendererMessage =
   | { type: 'status'; status: AudioRendererStatus; error?: unknown }
+  | { type: 'decoder-error'; error: unknown }
   | { type: 'scheduled'; untilUs: number }
   | { type: 'underrun' };
-
-export interface AudioRendererActor extends Pick<TransitionActor<AudioRendererContext, RendererMessage>, 'snapshot'> {
-  /** Point the renderer at a (new) frame source + decoder config. */
-  setTrack(source: AudioFrameSource | null, config: AudioDecoderConfig | null): void;
-  /** Master playout clock: current media time in microseconds, or `undefined` before any audio has been scheduled. */
-  getClockTimeUs(): number | undefined;
-  destroy(): void;
-}
 
 // =============================================================================
 // Implementation
 // =============================================================================
 
-const DEFAULT_SCHEDULE_MARGIN_S = 0.05;
 const DEFAULT_TICK_INTERVAL_MS = 10;
+const DEFAULT_TARGET_LATENCY_US = 2_000_000;
+/** The frame duration assumed before a frame has shown one: Opus's usual 20 ms. */
+const DEFAULT_FRAME_DURATION_US = 20_000;
+/** Reports and pushed spans may disagree by sample rounding and resampling offsets. */
+const REPORT_TOLERANCE_US = 5_000;
 /**
- * Max chunks in flight inside the decoder. The schedule horizon only moves when decoder _outputs_ arrive (async), so
- * without this bound a single tick would dequeue an entire backlog — scheduling seconds of audio at once and
- * sawtoothing the jitter-buffer depth the latency controller measures.
+ * How long a fill may sit short of playback before one more frame is pushed. The fill pushes exactly the jitter target
+ * plus a frame, so audio the core drops on arrival (behind what it already decoded) could otherwise leave it waiting
+ * forever.
  */
-const MAX_PENDING_DECODES = 4;
-/** Allow sample rounding without treating a missing audio packet as contiguous. */
-const AUDIO_TIMESTAMP_TOLERANCE_US = 1_000;
+const FILL_STALL_US = 100_000;
 /**
  * Media-time jump beyond which incoming audio is a timeline reset rather than a gap or reorder within the same timeline
  * (see `TIMELINE_DISCONTINUITY_US`). **Both directions.** Forward: a latency catch-up skipped groups, or the
- * publisher's capture gapped — scheduling the jump as silence would keep the latency it was meant to shed. Backward:
- * the publisher re-anchored the track's timeline (a capture source switch) — butt-joining it would keep audio playing
+ * publisher's capture gapped — playing the jump as silence would keep the latency it was meant to shed. Backward: the
+ * publisher re-anchored the track's timeline (a capture source switch) — butt-joining it would keep audio playing
  * seamlessly while the master clock silently steps backwards by the jump, holding the slaved video renderer "early" on
- * every frame it ever receives again. Either way the schedule re-anchors on the jumped-to timeline.
+ * every frame it ever receives again. Either way playout re-anchors on the jumped-to timeline.
  */
 const DISCONTINUITY_THRESHOLD_US = TIMELINE_DISCONTINUITY_US;
+/** The core's `playbackRate` range; it throws outside it. */
+const MIN_PLAYBACK_RATE = 0.5;
+const MAX_PLAYBACK_RATE = 2;
+
+/** The core on the real context behind `context`: an `AudioWorkletNode` needs one. */
+const createDefaultAudioPlayer: CreateAudioPlayer = async (context) => {
+  if (!context.baseContext) throw new Error('audio renderer context has no baseContext to host the AudioWorklet');
+
+  // WebCodecs, not the core's WebAssembly libopus: that decoder is single-stream and ignores the OpusHead
+  // channel mapping, so a multistream (above stereo) track the catalog allows would decode as noise. A lost
+  // frame plays as silence instead of being concealed.
+  return createCoreAudioPlayer({ context: context.baseContext, lossConcealment: false });
+};
 
 export function createAudioRendererActor(options: CreateAudioRendererOptions): AudioRendererActor {
   const { audioContext } = options;
-  const scheduleMargin = options.scheduleMargin ?? DEFAULT_SCHEDULE_MARGIN_S;
 
   const inner = createTransitionActor<AudioRendererContext, RendererMessage>(
     { status: 'idle', framesScheduled: 0, underruns: 0 },
@@ -133,6 +213,8 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       switch (message.type) {
         case 'status':
           return { ...context, status: message.status, error: message.error };
+        case 'decoder-error':
+          return { ...context, error: message.error };
         case 'scheduled':
           return {
             ...context,
@@ -146,16 +228,13 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     }
   );
 
+  let destroyed = false;
+  let player: AudioPlayer | undefined;
+  let input: AudioPlayerInput | undefined;
   let source: AudioFrameSource | null = null;
   let decoderConfig: AudioDecoderConfig | null = null;
-  let decoder: AudioDecoder | null = null;
-  let destroyed = false;
-  /** Timestamp of the last chunk fed to the decoder, for discontinuity detection. */
-  let lastEnqueuedUs: number | undefined;
-  let lastDecodedDurationUs: number | undefined;
-  let lastDecodedEndUs: number | undefined;
-  let drainingDecoder: AudioDecoder | undefined;
-  /** The schedule has no anchor yet: the next one should be placed at the live edge. */
+
+  /** Playout has no anchor yet: the next one should be placed at the live edge. */
   let needsJoinAnchor = true;
   /**
    * The pending anchor placement follows a mid-stream discontinuity rather than a track (re)start. The distinction
@@ -165,103 +244,166 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
    * pitch-shifted seconds rebuilding.
    */
   let rejoinAnchorArmed = false;
-  /**
-   * Media time the next scheduled buffer should be placed relative to: the landed re-join anchor. Consumed by the first
-   * buffer scheduled onto an empty schedule — it starts `(timestamp − scheduleFromUs)` later than arrival, with a
-   * bookkeeping segment spanning the gap so the clock advances smoothly from the anchor instead of stepping to the
-   * buffer.
-   */
-  let scheduleFromUs: number | undefined;
+
+  // What this timeline has pushed into the core. Reset with the timeline.
+  let firstPushedUs: number | undefined;
+  let lastPushedUs: number | undefined;
+  /** Known once a packet's duration or two frames' spacing has shown it. */
+  let frameDurationUs: number | undefined;
+  /** Where the newest pushed frame ends: the furthest the clock can read. */
+  let pushedEndUs: number | undefined;
+  /** First timestamp pushed in the current fill, and the context time of the latest push. */
+  let fillStartUs: number | undefined;
+  let lastPushAtUs = 0;
 
   /**
-   * One scheduled buffer's context-time span mapped to media time. The media time at context time `t` inside the span
-   * is `mediaUs + (t - startCtx) * 1e6 * rate`.
+   * The clock: timeline position `mediaUs` is audible at context time `contextUs`, advancing with the context clock
+   * times `playbackRate` from there. Set by every core report, or **placed** at a re-join anchor before the core plays
+   * anything (see `dropToJoinAnchor`).
+   *
+   * Context time, not `performance.now()`, because it is what stops when the adapter suspends the context on pause: a
+   * wall-paced clock would run on through the pause, read the frozen worklet as dry and refill it, and step back on the
+   * first report after resume. The core times its reports on the same source (`localNow`), so its render clock's
+   * calibration does not carry a pause into the first reports after it either.
    */
-  interface ClockSegment {
-    startCtx: number;
-    endCtx: number;
-    mediaUs: number;
-    rate: number;
-  }
+  let anchor: { mediaUs: number; contextUs: number; placed: boolean; frozen?: boolean } | undefined;
+  /** Bumped per input, so a report from a removed input cannot anchor its replacement. */
+  let inputGeneration = 0;
+  /**
+   * Where the worklet ran dry. The clock holds there until a report of audio past it arrives: frames pushed to refill
+   * the worklet move `pushedEndUs` before they play, and must not drag the clock forward with them.
+   */
+  let dryLimitUs: number | undefined;
+  /**
+   * The position the clock held at through the latest underrun, kept as a floor after it ends. The first report of the
+   * refill is dated ahead by the output latency — the sample is not audible yet — so its anchor extrapolates to before
+   * the hold, and the clock would otherwise step back by that much.
+   */
+  let holdFloorUs: number | undefined;
+  /**
+   * The core has reported itself stopped since the dry point was set. Until it has, a report near the dry point is the
+   * tail of the audio before it, still in flight, and must not end the hold.
+   */
+  let stoppedSinceDry = false;
+  /** The rate the current input plays at, and the clock advances at. */
+  let playbackRate = 1;
+
+  /** The audio between rendering and audible, in media time. */
+  const outputLatencyUs = (): number =>
+    ((audioContext.baseLatency ?? 0) + (audioContext.outputLatency ?? 0)) * 1_000_000 * playbackRate;
+
+  const contextNowUs = (): number => audioContext.currentTime * 1_000_000;
+
+  /** The audible position extrapolated from the anchor, ignoring every limit. */
+  const extrapolatedUs = (): number | undefined =>
+    anchor && (anchor.frozen ? anchor.mediaUs : anchor.mediaUs + (contextNowUs() - anchor.contextUs) * playbackRate);
 
   /**
-   * The scheduled timeline, in start order. Bounded by the schedule horizon (`scheduleMargin * 4` of audio ≈ a dozen
-   * 20ms buffers) plus whatever `pruneSegments` hasn't collected yet.
+   * Apply the controller's rate from the next render quantum. The clock is rebased first, so the time before the change
+   * keeps the old pace; the audio still in the output path plays out at it too, which the next report corrects.
    */
-  const segments: ClockSegment[] = [];
-  const activeSources = new Set<AudioBufferSourceNode>();
+  const applyPlaybackRate = (active: AudioPlayerInput): void => {
+    const rate = clamp(options.getPlaybackRate?.() ?? 1, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE);
+    if (rate === playbackRate) return;
 
-  const rate = (): number => options.getPlaybackRate?.() ?? 1;
+    if (anchor && !anchor.frozen) anchor = { ...anchor, mediaUs: extrapolatedUs()!, contextUs: contextNowUs() };
 
-  const segmentEndMediaUs = (segment: ClockSegment): number =>
-    segment.mediaUs + (segment.endCtx - segment.startCtx) * 1_000_000 * segment.rate;
+    active.playbackRate = rate;
+    playbackRate = rate;
+  };
 
-  /** True while the context clock is past everything scheduled (see `underruns`). */
-  let starved = false;
+  /** The clock one input reports into; it goes deaf once that input is replaced. */
+  const createClock = (): AudioPlayerClock => {
+    const generation = ++inputGeneration;
+
+    return {
+      get targetLatencyUs() {
+        return options.getTargetLatencyUs?.() ?? DEFAULT_TARGET_LATENCY_US;
+      },
+      localNow: contextNowUs,
+      reportAudio(timestampUs, atUs) {
+        if (generation !== inputGeneration) return;
+
+        reportAudio(timestampUs, atUs);
+      },
+      // The renderer resets the clock itself wherever a track or timeline ends.
+      stopAudio() {},
+    };
+  };
+
+  const raiseHoldFloor = (heldUs: number): void => {
+    holdFloorUs = Math.max(holdFloorUs ?? heldUs, heldUs);
+  };
 
   /**
-   * Count the rising edge of a schedule that has run dry. An empty schedule is not an underrun — at join, and after
-   * every re-anchor that clears it, there was no schedule to starve.
+   * A placed clock runs from the anchor until the core plays, but never past the audio pushed: a fill that stays short
+   * of the jitter target cannot start the worklet, and the clock would otherwise run on through audio not there.
    */
-  const detectUnderrun = (): void => {
-    const last = segments[segments.length - 1];
+  const placedPositionUs = (): number | undefined => {
+    const positionUs = extrapolatedUs();
 
-    if (!last) {
-      starved = false;
+    return positionUs === undefined || pushedEndUs === undefined ? positionUs : Math.min(positionUs, pushedEndUs);
+  };
+
+  /** `timestampUs` is audible at context time `atUs` (default now). */
+  const reportAudio = (timestampUs: number, atUs: number | undefined): void => {
+    // Only audio pushed on this timeline: a report already in flight when
+    // the timeline restarted describes audio the cut dropped.
+    if (
+      firstPushedUs === undefined ||
+      pushedEndUs === undefined ||
+      timestampUs < firstPushedUs - REPORT_TOLERANCE_US ||
+      timestampUs > pushedEndUs + REPORT_TOLERANCE_US
+    ) {
       return;
     }
 
-    const dry = last.endCtx <= audioContext.currentTime;
-
-    if (dry && !starved) inner.send({ type: 'underrun' });
-
-    starved = dry;
-  };
-
-  /** Drop segments that finished playing; keep the current/newest one so the clock can hold on underrun. */
-  const pruneSegments = (): void => {
-    const now = audioContext.currentTime;
-
-    while (segments.length > 1 && now >= segments[1]!.startCtx) segments.shift();
-  };
-
-  const stopAll = (): void => {
-    for (const node of activeSources) {
-      try {
-        node.stop();
-      } catch {
-        // never started or already stopped
-      }
+    // The refill's first report ends the hold. Its floor is what the clock
+    // reads at that moment — the audible position, which can still be short
+    // of the dry point while the device plays out what it had queued.
+    if (
+      dryLimitUs !== undefined &&
+      ((stoppedSinceDry && timestampUs >= dryLimitUs - REPORT_TOLERANCE_US) ||
+        timestampUs > dryLimitUs + REPORT_TOLERANCE_US)
+    ) {
+      raiseHoldFloor(Math.min(extrapolatedUs() ?? dryLimitUs, dryLimitUs));
+      dryLimitUs = undefined;
     }
 
-    activeSources.clear();
-    segments.length = 0;
+    // Likewise the first report after a placed re-join, which is dated ahead
+    // of the placed clock by the output latency.
+    if (anchor?.placed) raiseHoldFloor(placedPositionUs()!);
+
+    anchor = { mediaUs: timestampUs, contextUs: atUs ?? contextNowUs(), placed: false };
   };
 
-  const closeDecoder = (): void => {
-    if (decoder && decoder.state !== 'closed') decoder.close();
+  /** Forget everything pushed on the current timeline, and the clock placed on it. */
+  const resetTimeline = (): void => {
+    firstPushedUs = undefined;
+    lastPushedUs = undefined;
+    frameDurationUs = undefined;
+    pushedEndUs = undefined;
+    fillStartUs = undefined;
+    anchor = undefined;
+    dryLimitUs = undefined;
+    holdFloorUs = undefined;
+    stoppedSinceDry = false;
+  };
 
-    decoder = null;
-    drainingDecoder = undefined;
-    lastDecodedDurationUs = undefined;
-    lastDecodedEndUs = undefined;
-    // A fresh decoder starts a fresh input timeline: the next chunk fed is
-    // not a jump within the old one, so it must not re-trigger the
-    // discontinuity restart that closed this decoder — and a gap placement
-    // landed against the old timeline must not span into the new one.
-    lastEnqueuedUs = undefined;
-    scheduleFromUs = undefined;
-    stopAll();
+  const removeInput = (): void => {
+    if (!input) return;
+
+    inputGeneration++;
+    input.remove();
+    input = undefined;
   };
 
   /**
-   * Discard buffered audio older than the join anchor, so the schedule starts at the live edge rather than at the
-   * oldest group the relay replayed. Video decode-forwards its backlog; audio cannot (pitch), so the backlog is dropped
-   * unheard.
-   *
-   * Anything already scheduled belongs to the pre-anchor timeline, so a landed drop closes the decoder — the jumped-to
-   * audio then anchors fresh instead of being butt-joined after a matching stretch of scheduled silence, which would
-   * keep exactly the latency the drop shed.
+   * Discard buffered audio older than the join anchor before the first push of a (re)start, so playout starts at the
+   * live edge rather than at the oldest group the relay replayed. A re-join anchor lands by **placement** when the
+   * whole buffer is already past it (see `rejoinAnchorArmed`): the clock is placed at the anchor and runs from there,
+   * and metering by timeline holds the head back until it is due, so playout resumes at the target depth rather than at
+   * the live edge.
    */
   const dropToJoinAnchor = (): void => {
     const anchorUs = options.getJoinAnchorUs?.();
@@ -277,266 +419,135 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     if (dropped > 0) {
       needsJoinAnchor = false;
       rejoinAnchorArmed = false;
-      // The buffer head now sits at the anchor, so scheduling it on
-      // arrival lands the clock there with the target depth behind it.
-      scheduleFromUs = undefined;
-      closeDecoder();
       return;
     }
 
-    // Nothing behind the edge (yet). At a fresh join, stay armed: a relay's
-    // group replay arrives as a burst (oldest first), so the buffer's live
-    // edge may still be moving.
-    if (!rejoinAnchorArmed) return;
+    // A fresh join stays armed: a relay's group replay arrives as a burst,
+    // oldest first, so the buffer's live edge may still be moving.
+    if (!rejoinAnchorArmed || !source.peek()) return;
 
-    // A discontinuity re-join whose whole buffer is already ahead of the
-    // anchor — no replay is coming (bursts arrive oldest-first, and the
-    // oldest is already past the anchor). Land the anchor by *placement*
-    // instead of by trimming: the head schedules at its distance from the
-    // anchor, so playout resumes at the target depth rather than racing to
-    // the live edge and pitch-rebuilding from zero.
-    if (!source.peek()) return;
-
-    scheduleFromUs = anchorUs;
+    anchor = { mediaUs: anchorUs, contextUs: contextNowUs(), placed: true };
     rejoinAnchorArmed = false;
     needsJoinAnchor = false;
   };
 
-  const scheduleAudioData = (data: AudioData): void => {
-    try {
-      if (destroyed || data.numberOfFrames === 0) return;
+  /**
+   * Whether `timestampUs` should reach the core now. Filling — before the first report, or after running dry — pushes
+   * the jitter target plus a frame, which is what the worklet waits for before playing. Playing pushes what will be
+   * rendered within the jitter target, so the worklet holds about that much and the rest waits in the subscriber.
+   */
+  const isDue = (timestampUs: number, stats: AudioPlayerInputStats): boolean => {
+    const positionUs = anchor?.placed ? placedPositionUs() : extrapolatedUs();
 
-      lastDecodedDurationUs = data.duration;
-      lastDecodedEndUs = data.timestamp + data.duration;
-
-      const buffer = audioContext.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
-
-      for (let channel = 0; channel < data.numberOfChannels; channel++) {
-        const channelData = new Float32Array(data.numberOfFrames);
-
-        data.copyTo(channelData, { planeIndex: channel, format: 'f32-planar' });
-        buffer.copyToChannel(channelData, channel);
+    // A frozen placement is a fill too: its clock waits for the worklet to
+    // start, so only the fill rules (including the stall rescue) can move it.
+    if (positionUs === undefined || dryLimitUs !== undefined || anchor?.frozen) {
+      if (
+        fillStartUs === undefined ||
+        timestampUs < fillStartUs + stats.jitterTargetUs + (frameDurationUs ?? DEFAULT_FRAME_DURATION_US)
+      ) {
+        return true;
       }
 
-      const currentRate = rate();
-      // A jump past the discontinuity threshold in either direction means
-      // the source is on a different timeline — skipped ahead (latency
-      // catch-up: scheduling it as silence would keep the latency it was
-      // meant to shed, and re-trigger the catch-up loop forever) or
-      // re-anchored behind (a publisher source switch: butt-joining it
-      // would step the master clock backwards under the slaved video).
-      // Drop the stale schedule and anchor fresh.
-      //
-      // "Fresh" has to mean *through the join anchor*, the same way the dequeue
-      // path above re-arms it. Clearing the schedule alone left `needsJoinAnchor`
-      // false — and nothing on this path ever set it — so the next buffer took the
-      // no-previous-segment branch below and started at
-      // `currentTime + scheduleMargin`, keeping whatever latency the skip was meant
-      // to shed, with no pending re-anchor left to correct it.
-      //
-      // Returning rather than scheduling this buffer is what lets the re-anchor
-      // see an empty schedule (`tick` only drops while `segments.length === 0`);
-      // `finally` closes the AudioData, and one dropped buffer is cheaper than a
-      // timeline anchored at the wrong place.
-      //
-      // **Kept as a guard against a decoder, not as a live path.** The dequeue
-      // path's own check fires first on every jump that reaches this one: it is
-      // armed exactly when `previous` exists (only `closeDecoder` clears
-      // `lastEnqueuedUs`, and it clears `segments` in the same breath), it
-      // compares the same threshold, and `AudioDecoder.close()` discards every
-      // in-flight decode — measured, not assumed — so no pre-jump output can
-      // arrive after it either. What is left for this branch is a decoder whose
-      // *outputs* jump where its inputs did not, the mirror image of the
-      // timestamp rebasing the dequeue check exists for. Anything relying on it
-      // firing has no coverage; treat it as unexercised.
-      const previous = segments[segments.length - 1];
-
-      if (previous && Math.abs(data.timestamp - segmentEndMediaUs(previous)) > DISCONTINUITY_THRESHOLD_US) {
-        stopAll();
-        needsJoinAnchor = true;
-        rejoinAnchorArmed = true;
-        return;
-      }
-
-      const last = segments[segments.length - 1];
-      // Continue the scheduled timeline: media-contiguous data butt-joins
-      // the previous buffer; a media gap inserts a matching stretch of
-      // context-time silence. Late arrivals (and the first buffer) start
-      // no earlier than the context clock — the timeline shifts forward
-      // from there rather than trying to make up lost time.
-      let idealStart: number;
-
-      if (last) {
-        const mediaEndUs = segmentEndMediaUs(last);
-        const gapS = Math.max(0, data.timestamp - mediaEndUs) / 1_000_000 / currentRate;
-
-        idealStart = last.endCtx + gapS;
-
-        if (gapS > 0) {
-          // The next packet establishes the gap's duration. Advance the
-          // master clock through that known silence so video need not
-          // freeze with each missing audio packet.
-          segments.push({ startCtx: last.endCtx, endCtx: idealStart, mediaUs: mediaEndUs, rate: currentRate });
-        }
-      } else {
-        idealStart = audioContext.currentTime + scheduleMargin;
-
-        // A landed re-join anchor places this first buffer at its distance
-        // from the anchor rather than at arrival, resuming playout at the
-        // target depth. The bookkeeping segment spanning the gap plays
-        // nothing (nothing is scheduled over it) but lets the clock advance
-        // smoothly from the anchor — so the slaved video renderer plays
-        // through the gap instead of seeing the clock step to the buffer.
-        if (scheduleFromUs !== undefined) {
-          const gapS = Math.max(0, data.timestamp - scheduleFromUs) / 1_000_000 / currentRate;
-
-          if (gapS > 0) {
-            segments.push({
-              startCtx: idealStart,
-              endCtx: idealStart + gapS,
-              mediaUs: scheduleFromUs,
-              rate: currentRate,
-            });
-            idealStart += gapS;
-          }
-
-          scheduleFromUs = undefined;
-        }
-      }
-
-      const startAt = Math.max(idealStart, audioContext.currentTime);
-
-      const node = audioContext.createBufferSource();
-
-      node.buffer = buffer;
-      node.playbackRate.value = currentRate;
-      node.connect(audioContext.destination);
-      node.onended = () => activeSources.delete(node);
-      node.start(startAt);
-      activeSources.add(node);
-
-      const durationS = data.numberOfFrames / data.sampleRate / currentRate;
-
-      segments.push({ startCtx: startAt, endCtx: startAt + durationS, mediaUs: data.timestamp, rate: currentRate });
-      inner.send({ type: 'scheduled', untilUs: data.timestamp + data.duration });
-    } finally {
-      data.close();
+      return contextNowUs() - lastPushAtUs > FILL_STALL_US && stats.bufferedUs < stats.jitterTargetUs;
     }
+
+    return timestampUs < positionUs + outputLatencyUs() + stats.jitterTargetUs;
   };
 
-  const ensureDecoder = (): AudioDecoder | null => {
-    if (decoder || !decoderConfig) return decoder;
+  const push = (active: AudioPlayerInput, timestampUs: number, payload: Uint8Array): void => {
+    active.push({ timestampUs, payload });
 
-    decoder = new AudioDecoder({
-      output: scheduleAudioData,
-      error: (error) => inner.send({ type: 'status', status: 'error', error }),
-    });
-    decoder.configure(decoderConfig);
-    return decoder;
+    // Opus says how long each packet is. Otherwise the shortest step between
+    // pushed frames is the frame length: a step over lost packets is longer,
+    // and must not extend the audio past where it really ends.
+    const opusUs = decoderConfig?.codec === 'opus' ? opusPacketDurationUs(payload) : undefined;
+    const stepUs = lastPushedUs === undefined ? undefined : timestampUs - lastPushedUs;
+
+    if (opusUs !== undefined) frameDurationUs = opusUs;
+    else if (stepUs !== undefined && stepUs > 0) frameDurationUs = Math.min(frameDurationUs ?? stepUs, stepUs);
+
+    firstPushedUs ??= timestampUs;
+    fillStartUs ??= timestampUs;
+    lastPushedUs = timestampUs;
+    lastPushAtUs = contextNowUs();
+    pushedEndUs = timestampUs + (frameDurationUs ?? DEFAULT_FRAME_DURATION_US);
+    inner.send({ type: 'scheduled', untilUs: pushedEndUs });
+  };
+
+  /**
+   * The worklet runs dry once rendering passes everything pushed: metering pushes every frame as soon as it is due, so
+   * nothing was left to push. Each such edge is an underrun (`AudioRendererContext.underruns`). The core's own counter
+   * skips dry spells longer than its jitter ceiling, which `adaptLatencyTarget` still needs as failure evidence.
+   */
+  const detectDry = (): void => {
+    const positionUs = extrapolatedUs();
+
+    if (
+      !anchor ||
+      anchor.placed ||
+      dryLimitUs !== undefined ||
+      pushedEndUs === undefined ||
+      positionUs === undefined ||
+      positionUs + outputLatencyUs() < pushedEndUs
+    ) {
+      return;
+    }
+
+    dryLimitUs = pushedEndUs;
+    stoppedSinceDry = false;
+    fillStartUs = undefined;
+    inner.send({ type: 'underrun' });
   };
 
   const tick = (): void => {
-    // After a decoder error there is nothing productive to pull into —
-    // draining would silently strip the jitter buffer at tick rate.
-    if (destroyed || !source || drainingDecoder || inner.snapshot.get().context.status === 'error') return;
+    if (destroyed || !player || !source || !decoderConfig) return;
 
     try {
-      pruneSegments();
-      detectUnderrun();
+      const active = (input ??= player.addInput({
+        clock: createClock(),
+        decoderConfig,
+        playbackRate,
+        onError: (error) => inner.send({ type: 'decoder-error', error }),
+      }));
+      const { stats } = active;
 
-      // Keep the schedule topped up to the margin horizon; every audio
-      // frame is independently decodable, so no keyframe gating.
-      while (
-        (decoder?.decodeQueueSize ?? 0) < MAX_PENDING_DECODES &&
-        (segments[segments.length - 1]?.endCtx ?? 0) - audioContext.currentTime < scheduleMargin * 4
-      ) {
-        // Only while the schedule has no anchor to disturb: in steady state
-        // the latency controller owns depth corrections (rate nudges inside
-        // its deadband), and dropping audio here would preempt them.
-        if (needsJoinAnchor && segments.length === 0) dropToJoinAnchor();
+      detectDry();
+      applyPlaybackRate(active);
+
+      const positionUs = extrapolatedUs();
+
+      if (dryLimitUs !== undefined && !stats.playing) stoppedSinceDry = true;
+
+      // A placed clock that reaches the end of the audio pushed stops there
+      // until the core plays, so refill frames cannot drag it forward. The
+      // refill is a new fill, as after a dry edge: measured from the timeline's
+      // first frame, packets after a gap would land past its horizon.
+      if (anchor?.placed && !anchor.frozen && pushedEndUs !== undefined && positionUs! >= pushedEndUs) {
+        anchor = { mediaUs: pushedEndUs, contextUs: contextNowUs(), placed: true, frozen: true };
+        fillStartUs = undefined;
+      }
+
+      for (;;) {
+        if (needsJoinAnchor && lastPushedUs === undefined) dropToJoinAnchor();
 
         const next = source.peek();
         if (!next) return;
 
-        // FFmpeg-backed audio decoders rebase output timestamps by frame
-        // accumulation from the first input, hiding an input-side jump
-        // from the scheduler. Restart the decoder at the discontinuity so
-        // outputs re-base to the jumped-to timeline (every audio frame is
-        // independently decodable, so a restart is glitch-free).
-        if (lastEnqueuedUs !== undefined && Math.abs(next.timestampUs - lastEnqueuedUs) > DISCONTINUITY_THRESHOLD_US) {
-          closeDecoder();
-          // Re-place the anchor before feeding the jumped-to timeline: a
-          // forward jump (catch-up skip) landed on a group start still up
-          // to one GOP behind the live edge, and a backward jump (publisher
-          // re-anchor) is a whole new timeline whose edge the anchor must
-          // be re-read against.
+        // A timeline reset, either way: drop what the core holds and re-place
+        // the anchor on the jumped-to timeline (see `DISCONTINUITY_THRESHOLD_US`).
+        if (lastPushedUs !== undefined && Math.abs(next.timestampUs - lastPushedUs) > DISCONTINUITY_THRESHOLD_US) {
+          active.cut();
+          resetTimeline();
           needsJoinAnchor = true;
           rejoinAnchorArmed = true;
           continue;
         }
 
-        // Some audio decoders accumulate output timestamps across missing
-        // packets. Even a single short gap then permanently shifts the
-        // audio master clock behind the wire timeline. Drain before
-        // restarting so pending outputs and scheduled audio survive. The
-        // output-end check also handles codecs that split one input into
-        // several outputs: packet duration is only a prompt to check.
-        if (
-          decoder &&
-          lastEnqueuedUs !== undefined &&
-          (lastDecodedDurationUs === undefined ||
-            next.timestampUs - lastEnqueuedUs > lastDecodedDurationUs + AUDIO_TIMESTAMP_TOLERANCE_US)
-        ) {
-          const current = decoder;
-          const timestampUs = next.timestampUs;
+        if (!isDue(next.timestampUs, stats)) return;
 
-          drainingDecoder = current;
-          void current.flush().then(
-            () => {
-              if (decoder !== current || destroyed) return;
-
-              if (lastDecodedEndUs !== undefined && timestampUs - lastDecodedEndUs > AUDIO_TIMESTAMP_TOLERANCE_US) {
-                current.close();
-                decoder = null;
-                lastDecodedDurationUs = undefined;
-                lastDecodedEndUs = undefined;
-              }
-
-              lastEnqueuedUs = undefined;
-              drainingDecoder = undefined;
-            },
-            (error) => {
-              if (decoder !== current || destroyed) return;
-
-              drainingDecoder = undefined;
-              inner.send({ type: 'status', status: 'error', error });
-            }
-          );
-          return;
-        }
-
-        const active = ensureDecoder();
-        // An errored decoder is closed but still referenced — stop pulling
-        // instead of feeding it doomed decode calls.
-        if (!active || active.state === 'closed') return;
-
-        // Decode before dequeue: if decode throws, the frame stays
-        // buffered for a later decoder instead of being silently dropped.
-        active.decode(
-          new EncodedAudioChunk({
-            // Every audio sample is independently decodable — `isKey` is a
-            // LOC group-boundary marker (meaningful for video's GOP
-            // gating), not a decodability signal here. A live-edge
-            // (`next-object`) join almost never lands on group object 0,
-            // and WebCodecs requires the first post-configure chunk to be
-            // 'key', so gating on `next.isKey` would reject it.
-            type: 'key',
-            timestamp: next.timestampUs,
-            data: next.payload,
-          })
-        );
+        push(active, next.timestampUs, next.payload);
         source.dequeue();
-        lastEnqueuedUs = next.timestampUs;
       }
     } catch (error) {
       inner.send({ type: 'status', status: 'error', error });
@@ -544,24 +555,45 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
   };
   const timer = setInterval(tick, options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS);
 
+  (options.createAudioPlayer ?? createDefaultAudioPlayer)(audioContext).then(
+    (created) => {
+      if (destroyed) {
+        created.close();
+        return;
+      }
+
+      try {
+        created.output.connect(audioContext.destination);
+        player = created;
+      } catch (error) {
+        created.close();
+        inner.send({ type: 'status', status: 'error', error });
+      }
+    },
+    (error) => {
+      if (!destroyed) inner.send({ type: 'status', status: 'error', error });
+    }
+  );
+
   return {
     get snapshot() {
       return inner.snapshot;
     },
 
     setTrack(nextSource, nextConfig): void {
-      // A source without a decodable config can never schedule audio — it
-      // would spin every tick while the subscriber's jitter buffer grows
-      // unbounded. Fail fast instead.
+      // A source without a decodable config can never play — it would spin
+      // every tick while the subscriber's jitter buffer grows unbounded.
+      // Fail fast instead.
       const missingConfig = nextSource !== null && nextConfig === null;
 
       source = missingConfig ? null : nextSource;
       decoderConfig = nextConfig;
       needsJoinAnchor = true;
-      // A track (re)start is a fresh join, not a re-join: time-to-first-audio
-      // wins over landing at depth (see `rejoinAnchorArmed`).
       rejoinAnchorArmed = false;
-      closeDecoder();
+      // An edge since the last tick still counts: the reset below forgets it.
+      detectDry();
+      removeInput();
+      resetTimeline();
 
       if (missingConfig) {
         inner.send({
@@ -576,19 +608,23 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
     },
 
     getClockTimeUs(): number | undefined {
-      pruneSegments();
-      const segment = segments[0];
-      if (!segment) return undefined;
+      const positionUs = extrapolatedUs();
+      if (positionUs === undefined) return undefined;
 
-      // Clamp into the segment: before the first sample plays the clock
-      // holds at its start; past the last scheduled sample (underrun) it
-      // holds at the end and resumes seamlessly when audio is scheduled.
-      const elapsed = Math.min(
-        Math.max(0, audioContext.currentTime - segment.startCtx),
-        segment.endCtx - segment.startCtx
-      );
+      if (anchor?.placed) return placedPositionUs();
 
-      return segment.mediaUs + elapsed * 1_000_000 * segment.rate;
+      // Never past the audio pushed, and once the worklet ran dry never past
+      // where it did: the clock holds through an underrun and resumes when
+      // audio does.
+      const limitUs = dryLimitUs ?? pushedEndUs;
+      const clampedUs = limitUs === undefined ? positionUs : Math.min(positionUs, limitUs);
+
+      if (holdFloorUs === undefined) return clampedUs;
+
+      if (clampedUs < holdFloorUs) return holdFloorUs;
+
+      holdFloorUs = undefined;
+      return clampedUs;
     },
 
     destroy(): void {
@@ -596,7 +632,9 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
 
       destroyed = true;
       clearInterval(timer);
-      closeDecoder();
+      removeInput();
+      player?.close();
+      player = undefined;
       inner.destroy();
     },
   };

@@ -1,14 +1,15 @@
+import {
+  type MessageParameters,
+  type MoqtSession,
+  PUBLISH_DONE_STATUS,
+  REQUEST_ERROR_CODE,
+  type SubscriptionHandlers,
+} from '@caprid/moq-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { signal } from '../../../core/signals/primitives';
 import type { MoqAudioTrack, MoqVideoTrack } from '../../../media/moq/parse-catalog';
 import type { MaybeResolvedPresentation } from '../../../media/types';
-import {
-  type MessageParameters,
-  PUBLISH_DONE_STATUS,
-  REQUEST_ERROR_CODE,
-} from '../../../network/moqt/control-messages';
-import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import {
   createTrackSubscriberActor,
@@ -956,6 +957,7 @@ describe.each([
       },
       fetch: () => ({ requestId: 0, cancel: vi.fn() }),
       trackStatus: vi.fn(),
+      subscribeNamespace: () => ({ requestId: 0, cancel: vi.fn() }),
       close: vi.fn(),
       destroy: vi.fn(),
     };
@@ -1260,6 +1262,7 @@ describe('subscriber priority on the wire', () => {
       },
       fetch: () => ({ requestId: 0, cancel: vi.fn() }),
       trackStatus: vi.fn(),
+      subscribeNamespace: () => ({ requestId: 0, cancel: vi.fn() }),
       close: vi.fn(),
       destroy: vi.fn(),
     };

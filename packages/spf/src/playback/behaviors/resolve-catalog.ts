@@ -11,7 +11,7 @@
  * `state.presentation` (delta re-parse). Stable track ids (`parse-catalog`) keep unchanged track lists from re-firing
  * selection.
  *
- * Join shape: a `relative-group 1` Location Filter (draft-20 §5.1.2) asks for `{Largest.Group, 0}` onward, and relays
+ * Join shape: a `relative-group 1` Location Filter (draft-22 §3.3.1) asks for `{Largest.Group, 0}` onward, and relays
  * serve the already-published head of that group from cache on the ordinary subgroup stream. msf-01 §5 still words the
  * join as SUBSCRIBE plus a Joining FETCH; draft-20 removed Joining FETCH, and against moq-relay a FETCH never carried
  * catalog data anyway — the catalog resolved from the relay's current-group replay. This filter asks for that replay
@@ -34,6 +34,16 @@
  * Multi-writer on `state.presentation` with the engine adapter (initial `{ url }` input) — same legitimate split as
  * `resolvePresentation`.
  */
+import {
+  isRetryablePublishDoneStatus,
+  isRetryableRequestErrorCode,
+  type LocationFilter,
+  type MessageParameters,
+  REQUEST_ERROR_CODE,
+  type Subscription,
+  utf8Decode,
+} from '@caprid/moq-core';
+
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
@@ -46,14 +56,6 @@ import {
 } from '../../media/moq/parse-catalog';
 import { isMoqSourceUrl, parseMoqSource } from '../../media/moq/parse-source';
 import type { MaybeResolvedPresentation } from '../../media/types';
-import { utf8Decode } from '../../network/moqt/bytes';
-import type { LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
-import {
-  isRetryablePublishDoneStatus,
-  isRetryableRequestErrorCode,
-  REQUEST_ERROR_CODE,
-} from '../../network/moqt/control-messages';
-import type { Subscription } from '../../network/moqt/session';
 import {
   DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
   MAX_SERVER_RETRY_INTERVAL_MS,
@@ -90,7 +92,7 @@ export interface ResolveCatalogConfig {
   subscribeRetry?: Partial<RetryBackoffConfig>;
 }
 
-/** The current group from its start: the independent catalog object and the deltas published since (§5.1.2). */
+/** The current group from its start: the independent catalog object and the deltas published since (moqt-22 §3.3.1). */
 const CATALOG_JOIN_FILTER: LocationFilter = { type: 'relative-group', groupsBeforeNext: 1 };
 
 type ResolveCatalogFsmState = 'preconditions-unmet' | 'awaiting-session' | 'catalog-active';
