@@ -1247,9 +1247,12 @@ importers:
 
   packages/spf:
     dependencies:
+      '@caprid/moq-core':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@caprid/moq-media':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.1.1
+        version: 0.1.1
       '@videojs/media':
         specifier: workspace:*
         version: link:../media
@@ -2106,12 +2109,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@caprid/moq-core@0.1.0':
-    resolution: {integrity: sha512-GWNqRU+XODpG/4fCUQVXYZtONVibYOY4BwYH4rt7lQuvBJ0sh49W4gw+1jAhY+a924bMGSSGzJ1shr8G5xMMmQ==}
+  '@caprid/moq-core@0.1.1':
+    resolution: {integrity: sha512-y6jUAxcqwutliM3gfIQeWspmw/rtfcJDgktgyx/JkRQwlMeiojMv8No6X4uVyTm2HwBDTRRagTVpDjtPQuhNrw==}
     engines: {node: '>=24'}
 
-  '@caprid/moq-media@0.1.0':
-    resolution: {integrity: sha512-Iu2+r7JYZoRYzoM9Xf3aK2KqBH8x26NGpKhdI3jFICoSr3IeAIXPYaad46HkHq68ottv5LwV4cxyVaFGrQfbZg==}
+  '@caprid/moq-media@0.1.1':
+    resolution: {integrity: sha512-H4KkqLqgdYz01hT2aG+gtza/Af9fXAOjfoMcR0OlbelQmnd9IC4ngCNlp17bPqyfUr7OOtiJzHN0EUxUrk91vQ==}
     engines: {node: '>=24'}
 
   '@capsizecss/unpack@4.0.0':
@@ -11015,11 +11018,11 @@ snapshots:
   '@bruits/satteri-win32-x64-msvc@0.10.5':
     optional: true
 
-  '@caprid/moq-core@0.1.0': {}
+  '@caprid/moq-core@0.1.1': {}
 
-  '@caprid/moq-media@0.1.0':
+  '@caprid/moq-media@0.1.1':
     dependencies:
-      '@caprid/moq-core': 0.1.0
+      '@caprid/moq-core': 0.1.1
 
   '@capsizecss/unpack@4.0.0':
     dependencies:
