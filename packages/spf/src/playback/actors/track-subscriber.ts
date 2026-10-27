@@ -164,7 +164,7 @@ export const DEFAULT_STALL_TIMEOUT_MS = 10_000;
  * SUBSCRIBER_PRIORITY by catalog track kind, lower being more urgent: audio ahead of video on a congested downlink.
  * moq-relay 0.17 orders what it sends a viewer by subscriber priority alone and ignores the publisher's, and the value
  * cannot change later — any REQUEST_UPDATE ends the subscription there — so it rides every SUBSCRIBE. Same values as
- * the relay SDKs' `mediaSubscribeParameters` (muxinc/relay-sdks#337). Other kinds send none, leaving the peer's
+ * `@caprid/relay`'s `mediaSubscribeParameters` (muxinc/relay-sdks#337). Other kinds send none, leaving the peer's
  * default.
  */
 export const MEDIA_SUBSCRIBER_PRIORITY: Readonly<Partial<Record<MoqTrack['type'], number>>> = {
