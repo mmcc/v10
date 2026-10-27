@@ -198,10 +198,7 @@ const MAX_PLAYBACK_RATE = 2;
 const createDefaultAudioPlayer: CreateAudioPlayer = async (context) => {
   if (!context.baseContext) throw new Error('audio renderer context has no baseContext to host the AudioWorklet');
 
-  // WebCodecs, not the core's WebAssembly libopus: that decoder is single-stream and ignores the OpusHead
-  // channel mapping, so a multistream (above stereo) track the catalog allows would decode as noise. A lost
-  // frame plays as silence instead of being concealed.
-  return createCoreAudioPlayer({ context: context.baseContext, lossConcealment: false });
+  return createCoreAudioPlayer({ context: context.baseContext });
 };
 
 export function createAudioRendererActor(options: CreateAudioRendererOptions): AudioRendererActor {
