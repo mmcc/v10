@@ -1,3 +1,5 @@
+import { isNil } from '@videojs/utils/predicate';
+
 // ----------------------------------------
 // Event primitives
 // ----------------------------------------
@@ -18,6 +20,7 @@ export interface EventTargetLike<Events extends { [K in keyof Events]: EventLike
   dispatchEvent(event: EventLike): boolean;
 }
 
+/** @internal */
 export function TypedEventTarget<Events extends { [K in keyof Events]: EventLike }>() {
   return EventTarget as unknown as { new (): EventTargetLike<Events> };
 }
@@ -106,6 +109,27 @@ export interface MediaSeekCapability {
 
 export type MediaPreloadType = '' | 'none' | 'metadata' | 'auto';
 
+/**
+ * A media element's CORS mode as its `crossOrigin` IDL attribute reflects it — "limited to only known values": the
+ * empty string and unknown keywords read as `anonymous`. `null` (no attribute) is not a mode; the element is not in
+ * CORS mode at all.
+ */
+export type MediaCrossOriginType = 'anonymous' | 'use-credentials';
+
+/**
+ * Normalize a `crossorigin` value the way the element's IDL attribute reflects it: missing stays `null`,
+ * `use-credentials` in any ASCII case is itself, and everything else — the empty string and unknown keywords included —
+ * is `anonymous`. A custom element delivers the raw attribute string, so this is where author spelling is settled.
+ *
+ * @internal
+ */
+export function toMediaCrossOrigin(value: string | null | undefined): MediaCrossOriginType | null {
+  if (isNil(value)) return null;
+
+  return value.toLowerCase() === 'use-credentials' ? 'use-credentials' : 'anonymous';
+}
+
+/** @internal */
 export const MediaReadyState = {
   HAVE_NOTHING: 0,
   HAVE_METADATA: 1,
@@ -114,7 +138,8 @@ export const MediaReadyState = {
   HAVE_ENOUGH_DATA: 4,
 } as const;
 
-export type MediaReadyStateValue = (typeof MediaReadyState)[keyof typeof MediaReadyState];
+/** An `HTMLMediaElement.readyState` value, from `0` (`HAVE_NOTHING`) to `4` (`HAVE_ENOUGH_DATA`). */
+export type MediaReadyStateValue = 0 | 1 | 2 | 3 | 4;
 
 export interface MediaSourceEvents {
   loadstart: EventLike;
@@ -325,6 +350,7 @@ export interface MediaAudioTrackCapability {
   removeAudioTrack(track: AudioTrackLike): void;
 }
 
+/** @experimental */
 export interface MediaVideoTrackCapability {
   readonly videoTracks: VideoTrackListLike;
   addVideoTrack(kind: string, label?: string, language?: string): VideoTrackLike;
@@ -383,6 +409,7 @@ export interface VideoRenditionListLike extends EventTargetLike<VideoRenditionLi
   selectedIndex: number;
 }
 
+/** @experimental */
 export interface MediaAudioRenditionCapability {
   readonly audioRenditions: AudioRenditionListLike;
 }
@@ -422,12 +449,9 @@ export interface MediaPictureInPictureCapability {
 // ----------------------------------------
 
 /**
- * Canonical values for {@link MediaStreamType}.
+ * Named values of {@link MediaStreamType}.
  *
- * - `ON_DEMAND` — a finite-duration asset (VOD). Scrubbing is generally supported across the full timeline.
- * - `LIVE` — a live or DVR stream. The seekable window may slide as new segments are published, and `duration` is
- *   typically `Infinity`.
- * - `UNKNOWN` — the stream type has not been determined yet (no source, or metadata has not loaded).
+ * @internal
  */
 export const MediaStreamTypes = {
   ON_DEMAND: 'on-demand',
@@ -435,7 +459,15 @@ export const MediaStreamTypes = {
   UNKNOWN: 'unknown',
 } as const;
 
-export type MediaStreamType = (typeof MediaStreamTypes)[keyof typeof MediaStreamTypes];
+/**
+ * How a stream is delivered.
+ *
+ * - `on-demand` — a finite-duration asset (VOD). Scrubbing is generally supported across the full timeline.
+ * - `live` — a live or DVR stream. The seekable window may slide as new segments are published, and `duration` is
+ *   typically `Infinity`.
+ * - `unknown` — the stream type has not been determined yet (no source, or metadata has not loaded).
+ */
+export type MediaStreamType = 'on-demand' | 'live' | 'unknown';
 
 export interface MediaStreamTypeEvents {
   streamtypechange: EventLike;
@@ -620,8 +652,10 @@ export interface Video
     MediaPictureInPictureCapability,
     MediaVideoDimensionsCapability {}
 
+/** @internal */
 export interface AudioEvents extends CommonMediaEvents {}
 
+/** @internal */
 export interface Audio extends CommonMedia<AudioEvents> {}
 
 // ----------------------------------------
@@ -656,6 +690,7 @@ export interface VideoTargetLike
   requestFullscreen(): Promise<unknown>;
 }
 
+/** @experimental */
 export interface EngineAdapter<Engine = unknown, Target = unknown> {
   readonly engine: Engine | null;
   attach?(target: Target): void;

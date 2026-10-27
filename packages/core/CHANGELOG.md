@@ -1,5 +1,126 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/core@10.1.0...@videojs/core@10.2.0) (2026-10-22)
+
+
+### Features
+
+* **core:** depend on video.js ([#9507](https://github.com/videojs/video.js/issues/9507)) ([4cbfdea](https://github.com/videojs/video.js/commit/4cbfdeaa83df07c6c9608492b4fd2d9e0d2a4bcc))
+
+
+### Bug Fixes
+
+* **hlsjs-video:** read live edge start from hls.js live sync position ([#9409](https://github.com/videojs/video.js/issues/9409)) ([4676472](https://github.com/videojs/video.js/commit/4676472d9136580a5d45e0e8d2929a7e124ad122))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.2.0
+    * @videojs/store bumped to 10.2.0
+    * @videojs/utils bumped to 10.2.0
+    * video.js bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/core@10.0.1...@videojs/core@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **spf:** send credentials with hls requests for crossorigin="use-credentials" ([#2870](https://github.com/videojs/video.js/issues/2870)) ([897901b](https://github.com/videojs/video.js/commit/897901b88359dca0dc3e59fcecd766cb59f8fe24))
+* **video.js:** publish video.js to npm under next ([#9477](https://github.com/videojs/video.js/issues/9477)) ([79a12d2](https://github.com/videojs/video.js/commit/79a12d2e44fdca98e53aa86f4e03d0781c527dfc))
+* **video.js:** route installs to the framework packages ([#9258](https://github.com/videojs/video.js/issues/9258)) ([875da58](https://github.com/videojs/video.js/commit/875da5821ad17f7b9d28813be3864ca8682f640e))
+
+
+### Bug Fixes
+
+* **core:** sample playback time on animation frames ([88e229c](https://github.com/videojs/video.js/commit/88e229cf6a6ae110f8a2a041efd2ba0f8fc57a66))
+* **core:** smooth time slider playback progress ([50f59a2](https://github.com/videojs/video.js/commit/50f59a23f1ca2c394998ba38cc274df6154ef214))
+* **core:** smooth time slider playback progress ([6a21d0b](https://github.com/videojs/video.js/commit/6a21d0b4ee6211f705edc3efbac36bc53cb8855f))
+* **core:** stop extrapolating stalled native media time ([7d88ca2](https://github.com/videojs/video.js/commit/7d88ca248ec6b9a2b0acb5e251f7b7e1b1d72a5c))
+* **core:** sync time slider progress with seekable ranges ([5fe31de](https://github.com/videojs/video.js/commit/5fe31def6689ac4a84a2f619afeb3d51f104ae19))
+
+
+### Performance Improvements
+
+* **core:** skip semantic updates on time slider frames ([258fafb](https://github.com/videojs/video.js/commit/258fafb32814be36e67c390bf1ffdb64e1fe1a41))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.1.0
+    * @videojs/store bumped to 10.1.0
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/core@10.0.0...@videojs/core@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/core:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.1
+    * @videojs/store bumped to 10.0.1
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/core@10.0.0-rc.5...@videojs/core@10.0.0) (2026-10-01)
+
+
+### Features
+
+* **packages:** release Video.js 10.0.0 as stable ([#3058](https://github.com/videojs/v10/issues/3058)) ([37477fc](https://github.com/videojs/v10/commit/37477fc187f36fc2ab3cbc0db7c1b2d3fc6bcca9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0
+    * @videojs/store bumped to 10.0.0
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/core@10.0.0-rc.4...@videojs/core@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880))
+* **media:** tidy text track state ([#3057](https://github.com/videojs/v10/issues/3057))
+* **core:** align player store API ([#3012](https://github.com/videojs/v10/issues/3012))
+
+### Features
+
+* **core:** add deriveCustomStatus to display custom actions ([#3064](https://github.com/videojs/v10/issues/3064)) ([5b4ed5e](https://github.com/videojs/v10/commit/5b4ed5e323f48b0f674f0c5640ee41c527f10f81))
+* **packages:** export a per-package VERSION from core, html, and react ([#3078](https://github.com/videojs/v10/issues/3078)) ([bd8f072](https://github.com/videojs/v10/commit/bd8f072a6591079b64baf20b18af52a415195b97))
+
+
+### Bug Fixes
+
+* **core:** preserve submenu exit transitions ([#3025](https://github.com/videojs/v10/issues/3025)) ([89c1c58](https://github.com/videojs/v10/commit/89c1c5803d152025e88f34e0d1782bbd52632d67))
+
+
+### Code Refactoring
+
+* **core:** align player store API ([#3012](https://github.com/videojs/v10/issues/3012)) ([d1f57f8](https://github.com/videojs/v10/commit/d1f57f8ea733d10247b8e9bd9f8b5577e52ed66b))
+* **media:** tidy text track state ([#3057](https://github.com/videojs/v10/issues/3057)) ([614b77d](https://github.com/videojs/v10/commit/614b77dce7d9a3ed60baa1b0e2af854c8c8d865b))
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880)) ([9b6675e](https://github.com/videojs/v10/commit/9b6675e3cfe50e3b54f4d4d07a563a4fdc712291))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0-rc.5
+    * @videojs/store bumped to 10.0.0-rc.5
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/core@10.0.0-rc.3...@videojs/core@10.0.0-rc.4) (2026-09-26)
 
 

@@ -1,5 +1,62 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/video.js@10.1.0...video.js@10.2.0) (2026-10-22)
+
+
+### Miscellaneous Chores
+
+* **video.js:** Synchronize videojs versions
+
+## [10.1.0](https://github.com/videojs/video.js/compare/video.js@10.0.1...video.js@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **video.js:** publish video.js to npm under next ([#9477](https://github.com/videojs/video.js/issues/9477)) ([79a12d2](https://github.com/videojs/video.js/commit/79a12d2e44fdca98e53aa86f4e03d0781c527dfc))
+* **video.js:** route installs to the framework packages ([#9258](https://github.com/videojs/video.js/issues/9258)) ([875da58](https://github.com/videojs/video.js/commit/875da5821ad17f7b9d28813be3864ca8682f640e))
+
+## [10.0.1](https://github.com/videojs/v10/compare/video.js@10.0.0...video.js@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **video.js:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/html bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/video.js@10.0.0-rc.5...video.js@10.0.0) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **video.js:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/html bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/video.js@10.0.0-rc.4...video.js@10.0.0-rc.5) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **video.js:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/html bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/video.js@10.0.0-rc.3...video.js@10.0.0-rc.4) (2026-09-26)
 
 

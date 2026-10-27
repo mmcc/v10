@@ -62,6 +62,14 @@ describe('Thumbnail', () => {
     expect(getByTestId('image').tagName).toBe('IMG');
     expect(getByTestId('image').getAttribute('src')).toBe('thumbnail.jpg');
     expect(getByTestId('image').getAttribute('decoding')).toBe('async');
+    expect(getByTestId('image').getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('keeps image props on Thumbnail.Image', () => {
+    const { getByTestId } = render(<DefaultThumbnail imageProps={{ crossOrigin: 'anonymous', loading: 'eager' }} />);
+
+    expect(getByTestId('image').getAttribute('crossorigin')).toBe('anonymous');
+    expect(getByTestId('image').getAttribute('loading')).toBe('eager');
   });
 
   it('reports state on the root', () => {
@@ -145,12 +153,12 @@ describe('Thumbnail', () => {
   });
 
   describe('crossOrigin', () => {
-    it('inherits the media element CORS mode when unset', () => {
+    it('inherits the media component CORS mode when unset', () => {
       expect(renderCrossOrigin('anonymous')).toBe('anonymous');
       expect(renderCrossOrigin('use-credentials')).toBe('use-credentials');
     });
 
-    it('sets nothing when the media element is not in CORS mode', () => {
+    it('sets nothing when the media component is not in CORS mode', () => {
       expect(renderCrossOrigin(null)).toBeNull();
     });
 

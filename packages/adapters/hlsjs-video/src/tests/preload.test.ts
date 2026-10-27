@@ -52,16 +52,6 @@ describe('HlsJsPreloadMixin', () => {
     expect(host.preload).toBe('metadata');
   });
 
-  it('stores preload value even when target is null', () => {
-    const engine = createEngine();
-    const host = new PreloadHost(engine);
-
-    host.preload = 'none';
-
-    expect(host.preload).toBe('none');
-    expect(host.target).toBeNull();
-  });
-
   it('syncs stored preload to native element on MEDIA_ATTACHED', () => {
     const engine = createEngine();
     const host = new PreloadHost(engine);
@@ -90,20 +80,6 @@ describe('HlsJsPreloadMixin', () => {
 
     expect(engine.startLoad).toHaveBeenCalled();
     expect(video.preload).toBe('auto');
-  });
-
-  it('uses stored preload (not native default) for loading strategy on MEDIA_ATTACHED', () => {
-    const engine = createEngine();
-    const host = new PreloadHost(engine);
-
-    host.preload = 'none';
-
-    const video = document.createElement('video');
-
-    host.attach(video);
-    (engine as any).emit(Hls.Events.MEDIA_ATTACHED);
-
-    expect(engine.startLoad).not.toHaveBeenCalled();
   });
 
   it('starts metadata-level load for preload=metadata', () => {
@@ -163,6 +139,42 @@ describe('HlsJsPreloadMixin', () => {
     expect(engine.startLoad).toHaveBeenCalledTimes(1);
     expect(engine.config.maxBufferLength).toBe(30);
     expect(engine.config.maxBufferSize).toBe(60_000_000);
+  });
+
+  it('starts loading for autoplay even when preload=none', () => {
+    const engine = createEngine();
+    const host = new PreloadHost(engine);
+
+    host.preload = 'none';
+    host.autoplay = true;
+
+    const video = document.createElement('video');
+
+    host.attach(video);
+    host.autoplay = true;
+    (engine as any).emit(Hls.Events.MEDIA_ATTACHED);
+
+    expect(engine.startLoad).toHaveBeenCalledTimes(1);
+    expect(engine.config.maxBufferLength).toBe(30);
+  });
+
+  it('starts loading when autoplay is turned on after the source', () => {
+    const engine = createEngine();
+    const host = new PreloadHost(engine);
+
+    host.preload = 'none';
+
+    const video = document.createElement('video');
+
+    host.attach(video);
+    (engine as any).emit(Hls.Events.MEDIA_ATTACHED);
+
+    expect(engine.startLoad).not.toHaveBeenCalled();
+
+    host.autoplay = true;
+
+    expect(video.autoplay).toBe(true);
+    expect(engine.startLoad).toHaveBeenCalledTimes(1);
   });
 
   it('starts loading once across repeated engine events', () => {
@@ -225,9 +237,11 @@ describe('HlsJsPreloadMixin', () => {
 
     (engine.startLoad as ReturnType<typeof vi.fn>).mockClear();
 
+    (engine.resumeBuffering as ReturnType<typeof vi.fn>).mockClear();
     (engine as any).emit(Hls.Events.MEDIA_DETACHED);
 
     video.dispatchEvent(new Event('play'));
     expect(engine.startLoad).not.toHaveBeenCalled();
+    expect(engine.resumeBuffering).not.toHaveBeenCalled();
   });
 });

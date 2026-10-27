@@ -1,5 +1,5 @@
 import { createStore } from '@videojs/store';
-import { describe, expect, it } from 'vite-plus/test';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 import type { PlayerTarget } from '../../../player';
 import { createMockVideo, createTimeRanges } from '../../../tests/test-helpers';
@@ -48,6 +48,65 @@ describe('timeFeature', () => {
       video.dispatchEvent(new Event('timeupdate'));
 
       expect(store.state.currentTime).toBe(42);
+    });
+
+    it('samples playback on frames without overwriting a pending seek', async () => {
+      vi.useFakeTimers();
+      const video = createMockVideo({ paused: false, currentTime: 0, duration: 120, readyState: 4 });
+      const store = createStore<PlayerTarget>()(timeFeature);
+
+      const detach = store.attach({ media: video, container: null });
+
+      try {
+        video.currentTime = 1.25;
+        vi.advanceTimersByTime(16);
+        expect(store.state.currentTime).toBe(1.25);
+
+        const seek = store.seek(40);
+
+        video.currentTime = 1.25;
+        vi.advanceTimersByTime(32);
+        expect(store.state.currentTime).toBe(40);
+
+        video.currentTime = 40;
+        video.dispatchEvent(new Event('seeked'));
+        await seek;
+        video.currentTime = 40.5;
+        vi.advanceTimersByTime(16);
+        expect(store.state.currentTime).toBe(40.5);
+      } finally {
+        detach();
+        vi.useRealTimers();
+      }
+    });
+
+    it('stops frame updates on pause and detach, and resumes on play', () => {
+      vi.useFakeTimers();
+      const video = createMockVideo({ paused: false, currentTime: 1 });
+      const store = createStore<PlayerTarget>()(timeFeature);
+
+      const detach = store.attach({ media: video, container: null });
+
+      try {
+        Object.defineProperty(video, 'paused', { value: true, configurable: true });
+        video.dispatchEvent(new Event('pause'));
+        video.currentTime = 2;
+        vi.advanceTimersByTime(32);
+        expect(store.state.currentTime).toBe(1);
+
+        Object.defineProperty(video, 'paused', { value: false, configurable: true });
+        video.dispatchEvent(new Event('play'));
+        vi.advanceTimersByTime(16);
+        expect(store.state.currentTime).toBe(2);
+
+        detach();
+        video.currentTime = 3;
+        vi.advanceTimersByTime(32);
+        expect(store.state.currentTime).toBe(0);
+      } finally {
+        detach();
+        vi.useRealTimers();
+      }
     });
 
     it('updates on durationchange event', () => {
@@ -173,8 +232,16 @@ describe('timeFeature', () => {
         store.attach({ media: video, container: null });
 
         const resultPromise = store.seek(45);
+        let settled = false;
+
+        void resultPromise.then(() => {
+          settled = true;
+        });
 
         expect(video.currentTime).toBe(45);
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(settled).toBe(false);
 
         // Simulate browser firing seeked event
         video.dispatchEvent(new Event('seeked'));
@@ -261,34 +328,6 @@ describe('timeFeature', () => {
         const result2 = await seek2Promise;
 
         expect(result2).toBe(20);
-      });
-
-      it('optimistically updates currentTime before seeked event fires', () => {
-        const video = createMockVideo({ readyState: HTMLMediaElement.HAVE_METADATA });
-        const store = createStore<PlayerTarget>()(timeFeature);
-
-        store.attach({ media: video, container: null });
-
-        expect(store.state.currentTime).toBe(0);
-
-        // Start seek but don't fire any DOM events.
-        store.seek(45);
-
-        // Store should reflect target time immediately (no waiting for seeked).
-        expect(store.state.currentTime).toBe(45);
-      });
-
-      it('optimistically sets seeking to true before seeking event fires', () => {
-        const video = createMockVideo({ readyState: HTMLMediaElement.HAVE_METADATA });
-        const store = createStore<PlayerTarget>()(timeFeature);
-
-        store.attach({ media: video, container: null });
-
-        expect(store.state.seeking).toBe(false);
-
-        store.seek(45);
-
-        expect(store.state.seeking).toBe(true);
       });
 
       it('optimistic seeking is corrected by seeked event', async () => {

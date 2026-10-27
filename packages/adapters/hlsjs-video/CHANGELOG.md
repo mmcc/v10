@@ -1,5 +1,102 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/hlsjs-video@10.1.0...@videojs/hlsjs-video@10.2.0) (2026-10-22)
+
+
+### Bug Fixes
+
+* **hlsjs-video:** read live edge start from hls.js live sync position ([#9409](https://github.com/videojs/video.js/issues/9409)) ([4676472](https://github.com/videojs/video.js/commit/4676472d9136580a5d45e0e8d2929a7e124ad122))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.2.0
+    * @videojs/native-hls-video bumped to 10.2.0
+    * @videojs/spf bumped to 10.2.0
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/hlsjs-video@10.0.1...@videojs/hlsjs-video@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **packages:** support hls json chapters in hls.js and native hls ([#2993](https://github.com/videojs/video.js/issues/2993)) ([511e8a6](https://github.com/videojs/video.js/commit/511e8a69db8fb111d2d41f9e55910a243b5ef6ed))
+* **spf:** send credentials with hls requests for crossorigin="use-credentials" ([#2870](https://github.com/videojs/video.js/issues/2870)) ([897901b](https://github.com/videojs/video.js/commit/897901b88359dca0dc3e59fcecd766cb59f8fe24))
+
+
+### Bug Fixes
+
+* **hlsjs-video:** bump hls.js ([#3171](https://github.com/videojs/video.js/issues/3171)) ([fe34200](https://github.com/videojs/video.js/commit/fe342001739bf47d4d135871d4aab0a9fc425c24))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.1.0
+    * @videojs/native-hls-video bumped to 10.1.0
+    * @videojs/spf bumped to 10.1.0
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/hlsjs-video@10.0.0...@videojs/hlsjs-video@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/hlsjs-video:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.1
+    * @videojs/native-hls-video bumped to 10.0.1
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/hlsjs-video@10.0.0-rc.5...@videojs/hlsjs-video@10.0.0) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/hlsjs-video:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0
+    * @videojs/native-hls-video bumped to 10.0.0
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/hlsjs-video@10.0.0-rc.4...@videojs/hlsjs-video@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880))
+
+### Bug Fixes
+
+* **media:** keep hls.js text tracks when MEDIA_ATTACHED follows the manifest ([#3099](https://github.com/videojs/v10/issues/3099)) ([0ca1e1a](https://github.com/videojs/v10/commit/0ca1e1a2cbf47d9b6c8ebf870e565dff4bfc90f0))
+
+
+### Code Refactoring
+
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880)) ([9b6675e](https://github.com/videojs/v10/commit/9b6675e3cfe50e3b54f4d4d07a563a4fdc712291))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0-rc.5
+    * @videojs/native-hls-video bumped to 10.0.0-rc.5
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/hlsjs-video@10.0.0-rc.3...@videojs/hlsjs-video@10.0.0-rc.4) (2026-09-26)
 
 

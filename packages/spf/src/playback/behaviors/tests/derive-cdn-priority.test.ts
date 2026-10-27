@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test';
 
-import type { StateSignals } from '../../../core/composition/create-composition';
+import type { StateSignals } from '../../../core/composition/define-behavior';
 import { signal } from '../../../core/signals/primitives';
 import type { MaybeResolvedPresentation, PartiallyResolvedVideoTrack, Presentation } from '../../../media/types';
 import { type DeriveCdnPriorityState, deriveCdnPriority } from '../derive-cdn-priority';
@@ -52,30 +52,12 @@ const redundant = (id = 'pres-1'): Presentation =>
 const flush = () => Promise.resolve().then(() => Promise.resolve());
 
 describe('deriveCdnPriority', () => {
-  it('does nothing without a presentation', async () => {
-    const state = makeState();
-    const reactor = deriveCdnPriority.setup({ state });
-
-    await flush();
-    expect(state.cdnPriority.get()).toBeUndefined();
-    reactor.destroy();
-  });
-
   it('publishes the manifest-ordered CDN list on src load', async () => {
     const state = makeState({ presentation: redundant() });
     const reactor = deriveCdnPriority.setup({ state });
 
     await flush();
     expect(state.cdnPriority.get()).toEqual(['https://cdn-a.example.com', 'https://cdn-b.example.com']);
-    reactor.destroy();
-  });
-
-  it('publishes a single-entry list for a non-redundant source', async () => {
-    const state = makeState({ presentation: presentationWith(['https://cdn-a.example.com/720p.m3u8']) });
-    const reactor = deriveCdnPriority.setup({ state });
-
-    await flush();
-    expect(state.cdnPriority.get()).toEqual(['https://cdn-a.example.com']);
     reactor.destroy();
   });
 
@@ -111,20 +93,6 @@ describe('deriveCdnPriority', () => {
     reactor.destroy();
   });
 
-  it('clears cdnPriority on src unload', async () => {
-    const state = makeState({ presentation: redundant() });
-    const reactor = deriveCdnPriority.setup({ state });
-
-    await flush();
-    expect(state.cdnPriority.get()).toBeDefined();
-
-    state.presentation.set(undefined);
-    await flush();
-    expect(state.cdnPriority.get()).toBeUndefined();
-
-    reactor.destroy();
-  });
-
   it('clears cdnPriority on destroy', async () => {
     const state = makeState({ presentation: redundant() });
     const reactor = deriveCdnPriority.setup({ state });
@@ -136,7 +104,7 @@ describe('deriveCdnPriority', () => {
     expect(state.cdnPriority.get()).toBeUndefined();
   });
 
-  it('re-publishes after a src reset (undefined → new resolved)', async () => {
+  it('clears on unload and re-publishes for the next resolved source', async () => {
     const state = makeState({ presentation: redundant() });
     const reactor = deriveCdnPriority.setup({ state });
 

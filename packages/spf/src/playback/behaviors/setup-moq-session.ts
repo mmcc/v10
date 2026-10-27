@@ -14,7 +14,7 @@
  * The `authProvider` config seam (MSF §11.4) rides through to the actor: initial token attach on connect/subscribe,
  * refresh + retry on auth-expiry errors.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, type ReadonlySignal, type Signal } from '../../core/signals/primitives';

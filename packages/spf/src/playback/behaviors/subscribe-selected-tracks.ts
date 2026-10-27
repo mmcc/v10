@@ -38,7 +38,7 @@
  * pending-snapshot changes, plus status _transitions_ of its own actors (equality-gated `computed`s over the slots) and
  * the rejoin timer's tick, not on its own slot writes.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, peek, type ReadonlySignal, type Signal, signal } from '../../core/signals/primitives';

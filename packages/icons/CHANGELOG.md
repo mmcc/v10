@@ -1,5 +1,89 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/icons@10.1.0...@videojs/icons@10.2.0) (2026-10-22)
+
+
+### Miscellaneous Chores
+
+* **@videojs/icons:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/icons@10.0.1...@videojs/icons@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **skin:** add scaffold skin ([#9251](https://github.com/videojs/video.js/issues/9251)) ([c39479b](https://github.com/videojs/video.js/commit/c39479baf04c906d8fe732bf1e93a5483c6b1cc4))
+
+
+### Bug Fixes
+
+* **icons:** optically center the compat play icon ([#3146](https://github.com/videojs/video.js/issues/3146)) ([04d29bc](https://github.com/videojs/video.js/commit/04d29bc44d6275396c22618613546b00f55fadb4))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0...@videojs/icons@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/icons:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-rc.5...@videojs/icons@10.0.0) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/icons:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-rc.4...@videojs/icons@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** rename the minimal skin to neutral ([#3092](https://github.com/videojs/v10/issues/3092))
+
+### Features
+
+* **skin:** add compat skin ([#3026](https://github.com/videojs/v10/issues/3026)) ([5d419de](https://github.com/videojs/v10/commit/5d419de6980310364c36ffe6bc131573ac8b785d))
+
+
+### Code Refactoring
+
+* **packages:** rename the minimal skin to neutral ([#3092](https://github.com/videojs/v10/issues/3092)) ([1d1eafc](https://github.com/videojs/v10/commit/1d1eafc022f78135a292035bc58fdb4befb6401e))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/icons@10.0.0-rc.3...@videojs/icons@10.0.0-rc.4) (2026-09-26)
 
 

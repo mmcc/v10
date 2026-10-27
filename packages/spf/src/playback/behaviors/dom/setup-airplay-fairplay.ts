@@ -28,10 +28,6 @@
  * conditional: both this behavior and `setupMediaKeys` react to the same falling edge, so it releases the element only
  * while it still holds it, exactly as the native path does.
  *
- * **Compose it ahead of `setupMediaKeys`**, beside `exchangeLicenses` and for the same reason: `createComposition`
- * calls cleanups in registration order, so the receiver MediaKeys detach before the re-entering negotiation attaches
- * its own.
- *
  * **EME first, then the legacy key system.** Measured on macOS/Safari 26.6.2 against a real receiver: the CDM grants
  * access for `initDataTypes: ['skd']` and then throws `NotSupportedError` from `generateRequest` — self-inconsistent,
  * and the reason the pre-EME `WebKitMediaKeys` path still exists. That refusal, and only that refusal while the target
@@ -52,14 +48,13 @@
  */
 import { listen } from '@videojs/utils/dom';
 
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
 import { computed, type ReadonlySignal } from '../../../core/signals/primitives';
 import {
   attachMediaKeys,
   declaredDrmKeys,
-  type DrmSystemsConfig,
   fetchServerCertificate,
   type KeySystemModule,
   keySystemCandidates,
@@ -77,12 +72,13 @@ import { listenForEncryptedInitData, openLicenseSession } from '../../../media/d
 import {
   SVTA_DRM_CERTIFICATE_ERROR,
   SVTA_DRM_INITIALIZATION_ERROR,
-  SVTA_DRM_LICENSE_REQUEST_GENERATION_FAILED,
+  SVTA_LICENSE_REQUEST_GENERATION_ERROR,
   SVTA_UNSUPPORTED_DRM_SYSTEM,
   type SvtaError,
 } from '../../../media/errors';
 import { isResolvedPresentation, type MaybeResolvedPresentation } from '../../../media/types';
 import { type ErrorEmitterState, emitError } from '../collect-errors';
+import type { NegotiableDrmSystemsConfig } from './setup-media-keys';
 
 /**
  * What an AirPlay receiver's key requests arrive as. FairPlay's `skd://` key URI carries no EME init data, so the
@@ -113,7 +109,7 @@ export interface AirPlayFairPlayContext {
 /** Config for the AirPlay FairPlay handoff. */
 export interface AirPlayFairPlayConfig {
   /** License servers keyed by EME key-system id. Semantics on `MediaKeysSetupConfig['drm']`. */
-  drm: DrmSystemsConfig;
+  drm: NegotiableDrmSystemsConfig;
   /** The key systems this composition can negotiate. Semantics on `MediaKeysSetupConfig['keySystems']`. */
   keySystems: readonly KeySystemModule[];
 }
@@ -192,6 +188,9 @@ function setupAirPlayFairPlaySetup({
 
           /** Non-sticky, per session: nothing here sniffs an OS, so a fixed WebKit simply stops taking this path. */
           let useLegacy = false;
+
+          /** Only requests from the reloaded resource can use the legacy CDM. */
+          let legacyReady = false;
 
           // Fetched once and shared by both paths. EME hands it to the CDM;
           // the legacy API packs it into the session's init data instead, which
@@ -370,15 +369,14 @@ function setupAirPlayFairPlaySetup({
 
           /**
            * Hand the session over to the legacy API. EME has to release the element's keys before the old API can claim
-           * them, and the request it failed on is not re-issued — but `webkitneedkey` has already delivered the same
-           * key request, so the cached payload is what resumes the exchange.
+           * them, and reloading the resource supplies the fresh `webkitneedkey` payload that resumes the exchange.
            */
           const fallBackToLegacy = async (error: unknown) => {
             if (useLegacy) return;
 
             if (!isAirPlayGenerateRequestRefusal(error, mediaElement) || !supportsWebKitFairPlay(mediaElement)) {
               report({
-                code: SVTA_DRM_LICENSE_REQUEST_GENERATION_FAILED,
+                code: SVTA_LICENSE_REQUEST_GENERATION_ERROR,
                 data: { keySystem: fairPlayAirPlayKeySystem.keySystem, reason: String(error) },
               });
               return;
@@ -461,6 +459,7 @@ function setupAirPlayFairPlaySetup({
             );
 
             mediaElement.load();
+            legacyReady = true;
           };
 
           const serve = async (initDataType: string, initData: Uint8Array<ArrayBuffer>) => {
@@ -486,7 +485,7 @@ function setupAirPlayFairPlaySetup({
             });
           };
 
-          // Armed from entry but inert until the handover, so the old key
+          // Armed from entry but inert until the reload completes, so the old key
           // system is never installed on a sender whose EME works. Both events
           // fire for the same key; after the reload it is this one that carries
           // the request the legacy CDM can serve.
@@ -495,7 +494,7 @@ function setupAirPlayFairPlaySetup({
             'webkitneedkey',
             (event) => {
               const { initData } = event as MediaEncryptedEvent;
-              if (!initData || !useLegacy) return;
+              if (!initData || !legacyReady) return;
 
               void serveLegacy(initData);
             },

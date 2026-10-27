@@ -26,7 +26,7 @@
  * Sole writer of `mediaSuspended`. Transition-driven: the timer starts on pause entry, and the entry-returned cleanup
  * (clear timer + clear slot) fires on resume and on destroy alike.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
 import { preferredTargetLatencySeconds } from '../../media/moq/timeline';

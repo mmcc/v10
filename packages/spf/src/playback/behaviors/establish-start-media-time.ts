@@ -20,7 +20,7 @@
  *
  * DOM-free reactor; sticky per source (`inactive → monitoring → established`).
  */
-import type { Behavior } from '../../core/composition/create-composition';
+import type { Behavior } from '../../core/composition/define-behavior';
 import { createMachineReactor, type Reactor } from '../../core/reactors/create-machine-reactor';
 import { type ReadonlySignal, type Signal, update } from '../../core/signals/primitives';
 import {
@@ -76,7 +76,7 @@ function ownOrigin(data: MediaContainerData | undefined): number | undefined {
  * the presentation's duration. Also snaps negatives to `0` — a negative origin would relocate _forward_, which is never
  * the intent.
  */
-export const NEAR_ZERO_ORIGIN_THRESHOLD = 1;
+const NEAR_ZERO_ORIGIN_THRESHOLD = 1;
 
 /** Snap a below-threshold (incl. negative) origin to `0` so it isn't relocated. */
 function thresholdOrigin(origin: number): number {

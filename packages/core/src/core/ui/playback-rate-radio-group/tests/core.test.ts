@@ -8,6 +8,7 @@ function createMediaState(overrides: Partial<MediaPlaybackRateState> = {}): Medi
   return {
     playbackRates: [0.5, 1, 1.5, 2],
     playbackRate: 1,
+    playbackRateAvailability: 'available',
     setPlaybackRate: vi.fn(),
     ...overrides,
   };
@@ -43,21 +44,22 @@ describe('PlaybackRateRadioGroupCore', () => {
       ]);
     });
 
-    it('marks state disabled when no rates are available', () => {
-      const core = new PlaybackRateRadioGroupCore();
-      const media = createMediaState({ playbackRates: [] });
-
-      core.setMedia(media);
-
-      expect(core.getState().disabled).toBe(true);
-    });
-
     it('marks availability unavailable when no rates are available', () => {
       const core = new PlaybackRateRadioGroupCore();
 
       core.setMedia(createMediaState({ playbackRates: [] }));
 
       expect(core.getState()).toMatchObject({ availability: 'unavailable', disabled: true, hidden: true });
+    });
+
+    it('reports the media playback rate availability when the media has no playback rate', () => {
+      // The feature keeps its default rates for a media without a playback
+      // rate, so the rates alone would still show a menu that does nothing.
+      const core = new PlaybackRateRadioGroupCore();
+
+      core.setMedia(createMediaState({ playbackRateAvailability: 'unsupported' }));
+
+      expect(core.getState()).toMatchObject({ availability: 'unsupported', disabled: true, hidden: true });
     });
 
     it('marks availability available when rates exist', () => {
@@ -91,14 +93,6 @@ describe('PlaybackRateRadioGroupCore', () => {
       });
 
       expect(core.getLabel(createState({ rate: 2 }))).toBe('2× speed');
-    });
-  });
-
-  describe('getLabelParams', () => {
-    it('returns no parameters for the stable group label', () => {
-      const core = new PlaybackRateRadioGroupCore();
-
-      expect(core.getLabelParams(createState({ rate: 2 }))).toBeUndefined();
     });
   });
 
@@ -153,6 +147,14 @@ describe('PlaybackRateRadioGroupCore', () => {
     it('does nothing when disabled', () => {
       const core = new PlaybackRateRadioGroupCore({ disabled: true });
       const media = createMediaState();
+
+      core.select(media, 1.5);
+      expect(media.setPlaybackRate).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when the media has no playback rate', () => {
+      const core = new PlaybackRateRadioGroupCore();
+      const media = createMediaState({ playbackRateAvailability: 'unsupported' });
 
       core.select(media, 1.5);
       expect(media.setPlaybackRate).not.toHaveBeenCalled();

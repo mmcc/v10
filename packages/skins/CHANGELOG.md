@@ -1,5 +1,118 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/skins@10.1.0...@videojs/skins@10.2.0) (2026-10-22)
+
+
+### Bug Fixes
+
+* **skin:** keep media text colors when merging Tailwind classes ([#9491](https://github.com/videojs/video.js/issues/9491)) ([ff8d26f](https://github.com/videojs/video.js/commit/ff8d26f5192678dcaf74adc86f981bf11233c27b))
+* **skin:** remove dead captions and AirPlay controls from audio skins ([#9560](https://github.com/videojs/video.js/issues/9560)) ([29592ba](https://github.com/videojs/video.js/commit/29592baaeed98fee2a0e9d304c2e96c9e741d342))
+* **skin:** scale scaffold controls in fullscreen ([#9487](https://github.com/videojs/video.js/issues/9487)) ([6172124](https://github.com/videojs/video.js/commit/6172124f41f5ffbd455d0c8644a83454d3115ae6))
+* **skin:** show elapsed time on compact neutral players ([#9484](https://github.com/videojs/video.js/issues/9484)) ([c056868](https://github.com/videojs/video.js/commit/c056868a72abb9970e4b3d3610253390c6be5be2))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/core bumped to 10.2.0
+    * @videojs/element bumped to 10.2.0
+    * @videojs/icons bumped to 10.2.0
+    * @videojs/installation bumped to 10.2.0
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/skins@10.0.1...@videojs/skins@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **skin:** add scaffold skin ([#9251](https://github.com/videojs/video.js/issues/9251)) ([c39479b](https://github.com/videojs/video.js/commit/c39479baf04c906d8fe732bf1e93a5483c6b1cc4))
+* **skin:** publish the button tooltip as a registry component ([#3194](https://github.com/videojs/video.js/issues/3194)) ([f16a42d](https://github.com/videojs/video.js/commit/f16a42d4dbce7cc758d414284dda5366ed4d645e))
+
+
+### Bug Fixes
+
+* **core:** smooth time slider playback progress ([50f59a2](https://github.com/videojs/video.js/commit/50f59a23f1ca2c394998ba38cc274df6154ef214))
+* **core:** smooth time slider playback progress ([6a21d0b](https://github.com/videojs/video.js/commit/6a21d0b4ee6211f705edc3efbac36bc53cb8855f))
+* **skin:** clean up title and caption alignment ([#9389](https://github.com/videojs/video.js/issues/9389)) ([fe45929](https://github.com/videojs/video.js/commit/fe45929069fd5f0e05f63972ca5113208ab3736a))
+* **skin:** correct scaffold parity checks and rtl controls ([#9269](https://github.com/videojs/video.js/issues/9269)) ([69b53d9](https://github.com/videojs/video.js/commit/69b53d9b85c96ac597e83419bc84f65ca55396ac))
+* **skin:** improve scaffold reduced-transparency controls ([#9287](https://github.com/videojs/video.js/issues/9287)) ([74cf8cd](https://github.com/videojs/video.js/commit/74cf8cd93f18b0dd55bd00fdb22ed2703da3a1a2))
+* **skin:** show compat backdrop while buffering ([#9252](https://github.com/videojs/video.js/issues/9252)) ([f23b55c](https://github.com/videojs/video.js/commit/f23b55c2e5133f0bf16f7704328fb5fcd6220605))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/core bumped to 10.1.0
+    * @videojs/element bumped to 10.1.0
+    * @videojs/icons bumped to 10.1.0
+    * @videojs/installation bumped to 10.1.0
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/skins@10.0.0...@videojs/skins@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/skins:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/core bumped to 10.0.1
+    * @videojs/element bumped to 10.0.1
+    * @videojs/icons bumped to 10.0.1
+    * @videojs/installation bumped to 10.0.1
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/skins@10.0.0-rc.5...@videojs/skins@10.0.0) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/skins:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/core bumped to 10.0.0
+    * @videojs/icons bumped to 10.0.0
+    * @videojs/installation bumped to 10.0.0
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/skins@10.0.0-rc.4...@videojs/skins@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** rename the minimal skin to neutral ([#3092](https://github.com/videojs/v10/issues/3092))
+
+### Features
+
+* **packages:** support chrome 111, firefox 121, and safari 16.4 ([#2951](https://github.com/videojs/v10/issues/2951)) ([710df96](https://github.com/videojs/v10/commit/710df96fc1bb5aceca96fa831082d61fd83af3c3))
+* **skin:** add compat skin ([#3026](https://github.com/videojs/v10/issues/3026)) ([5d419de](https://github.com/videojs/v10/commit/5d419de6980310364c36ffe6bc131573ac8b785d))
+* **vjsc:** flatten [@scope](https://github.com/scope) in the packaged skins ([#2966](https://github.com/videojs/v10/issues/2966)) ([d5721ab](https://github.com/videojs/v10/commit/d5721abebbe0a0b3d8e65820c7152d302f20bb9d))
+
+
+### Code Refactoring
+
+* **packages:** rename the minimal skin to neutral ([#3092](https://github.com/videojs/v10/issues/3092)) ([1d1eafc](https://github.com/videojs/v10/commit/1d1eafc022f78135a292035bc58fdb4befb6401e))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @videojs/core bumped to 10.0.0-rc.5
+    * @videojs/icons bumped to 10.0.0-rc.5
+    * @videojs/installation bumped to 10.0.0-rc.5
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/skins@10.0.0-rc.3...@videojs/skins@10.0.0-rc.4) (2026-09-26)
 
 

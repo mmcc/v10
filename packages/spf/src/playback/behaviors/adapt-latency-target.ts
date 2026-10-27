@@ -86,7 +86,7 @@
  * dropping its own arrival baseline across an auth-expiry resubscribe. Re-arming only the sample count would leave the
  * window counting from an epoch that had ended.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';

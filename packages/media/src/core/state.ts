@@ -1,4 +1,10 @@
-import type { ErrorLike, MediaFeatureAvailability, MediaStreamType, TextTrackKind } from './types';
+import type {
+  ErrorLike,
+  MediaCrossOriginType,
+  MediaFeatureAvailability,
+  MediaStreamType,
+  TextTrackKind,
+} from './types';
 
 export type { TextTrackKind };
 
@@ -24,13 +30,26 @@ export interface MediaPlaybackState {
    */
   waiting: boolean;
   /**
+   * Whether the media starts playing on its own once it can.
+   *
+   * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/autoplay
+   */
+  autoplay: boolean;
+  /**
+   * Whether the media is trying to autoplay: `autoplay` is set, and playback hasn't started yet. Clears when playback
+   * starts, when `pause()` cancels it, and when the autoplay is refused. Browsers don't announce a refusal, so it shows
+   * as the media being able to play through but staying paused; embeds report one with a `pause` or `error` event.
+   * Controls treat it as playback that's about to begin.
+   */
+  autoplaying: boolean;
+  /**
    * Start playback. Updates `paused` immediately when the media starts.
    *
    * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/play
    */
   play(): Promise<void>;
   /**
-   * Pause playback. Updates `paused` immediately.
+   * Pause playback. Updates `paused` immediately, and cancels a pending autoplay.
    *
    * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/pause
    */
@@ -128,7 +147,6 @@ export interface MediaStreamTypeState {
    * Components use this to show live-specific UI (for example, a live indicator or a "jump to live edge" button) or
    * hide the time display.
    *
-   * @see {@link MediaStreamTypes} for the canonical string values.
    * @see https://github.com/video-dev/media-ui-extensions/blob/main/proposals/0010-stream-type.md
    */
   streamType: MediaStreamType;
@@ -139,7 +157,7 @@ export interface MediaMetadataState {
   /** The resolved content title. Set it through the player, not through the store. */
   title: string;
   /**
-   * The resolved poster URL, independent of the media element's own `poster`. Set it through the player, not through
+   * The resolved poster URL, independent of the media component's own `poster`. Set it through the player, not through
    * the store.
    */
   poster: string;
@@ -192,7 +210,7 @@ export interface MediaFullscreenState {
    */
   fullscreenAvailability: MediaFeatureAvailability;
   /**
-   * Enter fullscreen mode. Tries container first, falls back to media element.
+   * Enter fullscreen mode. Tries container first, falls back to media component.
    *
    * @see https://developer.mozilla.org/en-US/docs/Web/API/Element/requestFullscreen
    */
@@ -234,6 +252,13 @@ export interface MediaPlaybackRateState {
    * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/playbackRate
    */
   playbackRate: number;
+  /**
+   * Whether the media can change its playback rate. `unsupported` when the attached media has no `playbackRate` at all,
+   * such as an embed whose provider takes no speed command.
+   *
+   * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/playbackRate
+   */
+  playbackRateAvailability: MediaFeatureAvailability;
   /**
    * Set the playback rate.
    *
@@ -317,11 +342,11 @@ export interface MediaThumbnailsTrack {
   /** The `<track>` element's `src` for resolving relative cue text URLs. */
   src: string | null;
   /**
-   * The media element's CORS mode, mapped through the CORS-settings-attribute rules, or `null` when it is not in CORS
+   * The media component's CORS mode, mapped through the CORS-settings-attribute rules, or `null` when it is not in CORS
    * mode. Thumbnail UI fetches the sprite sheets the cues point at with this mode, since a cross-origin `<track>` only
-   * loads at all when the media element is CORS-enabled.
+   * loads at all when the media component is CORS-enabled.
    */
-  crossOrigin: 'anonymous' | 'use-credentials' | null;
+  crossOrigin: MediaCrossOriginType | null;
 }
 
 /**
@@ -329,7 +354,7 @@ export interface MediaThumbnailsTrack {
  * `kind="subtitles"`, `chapters` is `kind="chapters"`, and `thumbnails` is `label="thumbnails"`.
  */
 export interface MediaTextTrackState {
-  /** All text tracks available on the media element. */
+  /** All text tracks available on the media component. */
   textTrackList: MediaTextTrack[];
   /** Whether a captions/subtitles track is showing. */
   subtitlesShowing: boolean;

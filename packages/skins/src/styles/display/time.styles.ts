@@ -18,19 +18,16 @@ export default styles({
         'focus-visible:outline-media-ring focus-visible:outline-offset-2',
       ],
       variants: {
-        minimal:
+        neutral:
           'supports-[corner-shape:squircle]:rounded-2xl supports-[corner-shape:squircle]:[corner-shape:squircle]',
       },
-    },
-    currentValue: {
-      utilities: 'hidden media-2xl:inline',
     },
     separator: {
       utilities: 'hidden media-2xl:inline media-2xl:text-media-controls-foreground/60',
     },
     durationValue: {
       utilities:
-        'tabular-nums transition-opacity duration-media-slow ease-out data-unavailable:opacity-50 media-2xl:text-media-controls-foreground/60',
+        'hidden tabular-nums transition-opacity duration-media-slow ease-out data-unavailable:opacity-50 media-2xl:inline media-2xl:text-media-controls-foreground/60',
     },
   },
 });

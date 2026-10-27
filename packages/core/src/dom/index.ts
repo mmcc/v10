@@ -1,3 +1,6 @@
+export * from './extensions/coordinator';
+export * from './extensions/extension';
+export type { MediaOverride, MediaOverrideSource } from './extensions/media';
 export * from './feature';
 export * from './gesture/action-value';
 export * from './gesture/actions';
@@ -27,6 +30,7 @@ export * from './ui/popover/positioner';
 export * from './ui/slider/slider';
 export * from './ui/slider/css-vars';
 export * from './ui/slider/focus';
+export * from './ui/time-slider/seek';
 export * from './ui/status-announcer';
 export * from './ui/thumbnail';
 export * from './ui/tooltip/tooltip';
