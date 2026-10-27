@@ -473,7 +473,7 @@ describe('createAudioRendererActor', () => {
     expect(renderer.snapshot.get().context.underruns).toBe(1);
   });
 
-  it('rescues a frozen re-join placement whose next packets are past the fill horizon', async () => {
+  it('refills a frozen re-join placement in one go when packets resume past a gap', async () => {
     let anchorUs: number | undefined;
     const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });
     const source = queueSource(framesBetween(0, 80_000));
@@ -489,12 +489,13 @@ describe('createAudioRendererActor', () => {
     tick();
     expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
 
-    // Packets resume 80 ms after the lone one ends: beyond the fill horizon.
+    // Packets resume 80 ms after the lone one ends: past the first fill's
+    // horizon, so the refill measures from where they start.
     fake.inputs[0]!.stats.playing = false;
     source.queue.push(...framesBetween(5_100_000, 5_400_000));
     at(400_000);
     tick();
-    expect(fake.inputs[0]!.pushed).toContain(5_100_000);
+    expect(fake.inputs[0]!.pushed.slice(-4)).toEqual([5_100_000, 5_120_000, 5_140_000, 5_160_000]);
     expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
   });
 

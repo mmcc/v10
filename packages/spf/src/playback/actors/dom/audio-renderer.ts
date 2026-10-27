@@ -517,9 +517,12 @@ export function createAudioRendererActor(options: CreateAudioRendererOptions): A
       if (dryLimitUs !== undefined && !stats.playing) stoppedSinceDry = true;
 
       // A placed clock that reaches the end of the audio pushed stops there
-      // until the core plays, so refill frames cannot drag it forward.
+      // until the core plays, so refill frames cannot drag it forward. The
+      // refill is a new fill, as after a dry edge: measured from the timeline's
+      // first frame, packets after a gap would land past its horizon.
       if (anchor?.placed && !anchor.frozen && pushedEndUs !== undefined && positionUs! >= pushedEndUs) {
         anchor = { mediaUs: pushedEndUs, contextUs: contextNowUs(), placed: true, frozen: true };
+        fillStartUs = undefined;
       }
 
       for (;;) {
