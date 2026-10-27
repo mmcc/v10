@@ -1,645 +1,615 @@
-import { describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import type { JitterFrame } from '../../track-subscriber';
-import { type AudioContextLike, type AudioFrameSource, createAudioRendererActor } from '../audio-renderer';
+import {
+  type AudioContextLike,
+  type AudioFrameSource,
+  type AudioPlayer,
+  type AudioPlayerInput,
+  type AudioPlayerInputOptions,
+  createAudioRendererActor,
+} from '../audio-renderer';
 
-const SAMPLE_RATE = 48_000;
-const FRAME_SAMPLES = 960; // 20ms opus frames
-const FRAME_DURATION_US = 20_000;
+const FRAME_US = 20_000;
+const JITTER_TARGET_US = 60_000;
+const TICK_MS = 10;
+const CONFIG: AudioDecoderConfig = { codec: 'opus', sampleRate: 48_000, numberOfChannels: 1 };
 
-/** Encode a short opus sequence and return LOC-shaped jitter frames. */
-async function encodeTestFrames(count: number): Promise<JitterFrame[]> {
+/** An Opus TOC byte for one 20 ms CELT frame (config 19, code 0). */
+const OPUS_20MS_TOC = 19 << 3;
+
+function frameAt(timestampUs: number): JitterFrame {
+  return { groupId: timestampUs, objectId: 0, timestampUs, isKey: true, payload: new Uint8Array([OPUS_20MS_TOC]) };
+}
+
+/** Frames every 20 ms over `[fromUs, untilUs)`. */
+function framesBetween(fromUs: number, untilUs: number): JitterFrame[] {
   const frames: JitterFrame[] = [];
-  const encoder = new AudioEncoder({
-    output: (chunk) => {
-      const payload = new Uint8Array(chunk.byteLength);
 
-      chunk.copyTo(payload);
-      frames.push({
-        groupId: 0,
-        objectId: frames.length,
-        timestampUs: frames.length * FRAME_DURATION_US,
-        isKey: true,
-        payload,
-      });
-    },
-    error: (error) => {
-      throw error;
-    },
-  });
+  for (let timestampUs = fromUs; timestampUs < untilUs; timestampUs += FRAME_US) frames.push(frameAt(timestampUs));
 
-  encoder.configure({ codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1, bitrate: 32_000 });
-
-  for (let i = 0; i < count; i++) {
-    const samples = new Float32Array(FRAME_SAMPLES);
-
-    for (let s = 0; s < FRAME_SAMPLES; s++) samples[s] = Math.sin((2 * Math.PI * 440 * s) / SAMPLE_RATE) * 0.5;
-
-    const data = new AudioData({
-      format: 'f32',
-      sampleRate: SAMPLE_RATE,
-      numberOfFrames: FRAME_SAMPLES,
-      numberOfChannels: 1,
-      timestamp: i * FRAME_DURATION_US,
-      data: samples,
-    });
-
-    encoder.encode(data);
-    data.close();
-  }
-
-  await encoder.flush();
-  encoder.close();
   return frames;
 }
 
-function arraySource(frames: JitterFrame[]): AudioFrameSource {
+function queueSource(frames: JitterFrame[] = []): AudioFrameSource & { queue: JitterFrame[] } {
   const queue = [...frames];
 
+  return { queue, peek: () => queue[0], dequeue: () => queue.shift() };
+}
+
+interface FakeInput extends AudioPlayerInput {
+  options: AudioPlayerInputOptions;
+  pushed: number[];
+  cuts: number;
+  removed: boolean;
+  stats: { playing: boolean; bufferedUs: number; jitterTargetUs: number };
+}
+
+/** The core's surface with no audio behind it: pushes are recorded, and the test plays the worklet's reports. */
+function createFakePlayer() {
+  const inputs: FakeInput[] = [];
+  const connected: AudioNode[] = [];
+  let closed = false;
+  const player: AudioPlayer = {
+    output: { connect: (destination) => connected.push(destination) },
+    addInput(options = {}) {
+      const input: FakeInput = {
+        options,
+        pushed: [],
+        cuts: 0,
+        removed: false,
+        playbackRate: options.playbackRate ?? 1,
+        stats: { playing: true, bufferedUs: 0, jitterTargetUs: JITTER_TARGET_US },
+        push(frame) {
+          input.pushed.push(frame.timestampUs);
+        },
+        cut() {
+          input.cuts++;
+        },
+        remove() {
+          input.removed = true;
+        },
+      };
+
+      inputs.push(input);
+      return input;
+    },
+    close() {
+      closed = true;
+    },
+  };
+
   return {
-    peek: () => queue[0],
-    dequeue: () => queue.shift(),
+    player,
+    inputs,
+    connected,
+    get closed() {
+      return closed;
+    },
+    /** The worklet reporting that the audio at `timestampUs` is audible now. */
+    report(timestampUs: number, atUs: number) {
+      inputs[inputs.length - 1]!.options.clock!.reportAudio(timestampUs, atUs);
+    },
   };
 }
 
-/**
- * `AudioContextLike` with a hand-cranked clock: scheduling is a no-op, so tests can place `currentTime` anywhere and
- * read the media clock back.
- */
-function createFakeAudioContext(): AudioContextLike & { currentTime: number } {
+// SAFETY: the renderer only hands `destination` to `output.connect`, which the fake records by identity.
+const destination = {} as AudioNode;
+
+/** Context time follows the test's clock; `suspended` freezes it, as `AudioContext.suspend()` does. */
+let contextUs = 0;
+let suspended = false;
+
+function fakeAudioContext(outputLatency?: number): AudioContextLike {
   return {
-    currentTime: 0,
-    destination: {} as AudioNode,
-    createBuffer: (_channels, length, sampleRate) =>
-      ({ copyToChannel: () => {}, duration: length / sampleRate }) as unknown as AudioBuffer,
-    createBufferSource: () =>
-      ({
-        buffer: null,
-        playbackRate: { value: 1 },
-        connect: () => {},
-        start: () => {},
-        stop: () => {},
-        onended: null,
-      }) as unknown as AudioBufferSourceNode,
+    get currentTime() {
+      return contextUs / 1_000_000;
+    },
+    destination,
+    outputLatency,
   };
 }
 
 describe('createAudioRendererActor', () => {
-  it('decodes and schedules audio, exposing the master clock', async () => {
-    const frames = await encodeTestFrames(5);
-    // OfflineAudioContext satisfies AudioContextLike; its clock stays at 0,
-    // so the media clock holds at the anchor — deterministic for a test.
-    const audioContext = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
+  let nowUs = 0;
 
-    expect(renderer.getClockTimeUs()).toBeUndefined();
+  /** Move wall time, and context time with it unless the context is suspended. */
+  const at = (us: number) => {
+    if (!suspended) contextUs += us - nowUs;
 
-    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    nowUs = us;
+  };
 
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
-    });
-    const context = renderer.snapshot.get().context;
-
-    expect(context.status).toBe('rendering');
-    expect(context.scheduledUntilUs).toBeGreaterThan(0);
-
-    // Clock anchored to the first scheduled frame's media time (0), and it
-    // holds there while the offline context clock is not advancing.
-    expect(renderer.getClockTimeUs()).toBe(0);
-
-    renderer.destroy();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    at(0);
+    contextUs = 0;
+    suspended = false;
   });
 
-  // The clock deliberately hides an underrun — it clamps to the segment
-  // end and resumes seamlessly, which is right for presentation and
-  // useless as a signal. This counter is the only direct evidence that a
-  // target latency is below what the path sustains.
-  it('counts the rising edge of a schedule that ran dry', async () => {
-    const frames = await encodeTestFrames(3);
-    const audioContext = createFakeAudioContext();
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05, tickIntervalMs: 1 });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    // Nothing scheduled is not an underrun: at join there is no schedule
-    // to starve.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(renderer.snapshot.get().context.underruns).toBe(0);
-
-    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
+  /** A renderer whose player is ready and whose first input exists. */
+  async function setup(
+    options: {
+      getJoinAnchorUs?: () => number | undefined;
+      getPlaybackRate?: () => number;
+      outputLatency?: number;
+    } = {}
+  ) {
+    const { outputLatency, ...rendererOptions } = options;
+    const fake = createFakePlayer();
+    const renderer = createAudioRendererActor({
+      audioContext: fakeAudioContext(outputLatency),
+      createAudioPlayer: () => Promise.resolve(fake.player),
+      tickIntervalMs: TICK_MS,
+      ...rendererOptions,
     });
-    expect(renderer.snapshot.get().context.underruns).toBe(0);
 
-    // The source is exhausted; walk the hardware clock past everything
-    // scheduled and the schedule is dry.
-    audioContext.currentTime = 60;
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.underruns).toBe(1), { timeout: 5000 });
+    await vi.advanceTimersByTimeAsync(0);
+    return { fake, renderer };
+  }
 
-    // Still dry several ticks later — one starvation, one increment.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  const tick = () => vi.advanceTimersByTime(TICK_MS);
+
+  it('connects the player output to the context destination', async () => {
+    const { fake, renderer } = await setup();
+
+    expect(fake.connected).toEqual([destination]);
+    expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    renderer.destroy();
+    expect(fake.closed).toBe(true);
+  });
+
+  it('fills to the jitter target plus a frame, then meters by the clock', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 1_000_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+
+    const input = fake.inputs[0]!;
+
+    expect(input.options.decoderConfig).toEqual(CONFIG);
+    expect(input.pushed).toEqual([0, 20_000, 40_000, 60_000]);
+    expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    // Playing: the worklet should hold about its target ahead of what renders.
+    fake.report(0, 0);
+    at(30_000);
+    tick();
+
+    expect(input.pushed.at(-1)).toBe(80_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
+    expect(renderer.snapshot.get().context.scheduledUntilUs).toBe(100_000);
+  });
+
+  it('joins at the edge, dropping buffered audio behind the anchor unheard', async () => {
+    const { fake, renderer } = await setup({ getJoinAnchorUs: () => 200_000 });
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+
+    expect(fake.inputs[0]!.pushed[0]).toBe(200_000);
+  });
+
+  it('holds the clock where the worklet ran dry, through the refill, until audio past it plays', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    at(100_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
+
+    // Audio comes back: the refill moves the pushed end, not the clock.
+    fake.inputs[0]!.stats.playing = false;
+    source.queue.push(...framesBetween(80_000, 400_000));
+    at(300_000);
+    tick();
+    expect(fake.inputs[0]!.pushed.slice(4)).toEqual([80_000, 100_000, 120_000, 140_000]);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
+
+    fake.report(80_000, 320_000);
+    at(330_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(90_000, 0);
+  });
+
+  it('does not step back when the refill is reported ahead of being audible', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(100_000);
+    tick();
+
+    fake.inputs[0]!.stats.playing = false;
+    source.queue.push(...framesBetween(80_000, 400_000));
+    at(300_000);
+    tick();
+
+    // Rendered now, audible 100 ms from now: the anchor alone reads 80 ms behind the hold.
+    fake.report(80_000, 400_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
+
+    at(410_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(90_000, 0);
+  });
+
+  it('resumes from the audible position when audio returns before the device drained', async () => {
+    const { fake, renderer } = await setup({ outputLatency: 0.05 });
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    // Rendering passed the last pushed sample; 50 ms of it is still in the device.
+    at(30_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
+
+    fake.inputs[0]!.stats.playing = false;
+    source.queue.push(...framesBetween(80_000, 400_000));
+    at(40_000);
+    tick();
+    fake.report(80_000, 90_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(40_000, 0);
+  });
+
+  it('ends pushed audio where the last packet ends, not across a gap of lost packets', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource([0, 20_000, 40_000, 100_000].map(frameAt)), CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(60_000);
+    tick();
+
+    expect(fake.inputs[0]!.pushed).toEqual([0, 20_000, 40_000, 100_000]);
+    expect(renderer.snapshot.get().context.scheduledUntilUs).toBe(120_000);
+  });
+
+  it('keeps the hold through a late report of the audio before the underrun', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(100_000);
+    tick();
+
+    // The refill is pushed before the core has said it stopped; then the
+    // tail's last report, still in flight, arrives.
+    source.queue.push(...framesBetween(80_000, 400_000));
+    tick();
+    fake.report(77_333, 77_333);
+    at(200_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(80_000, 0);
+  });
+
+  it('holds a placed re-join clock at the audio pushed while the fill is short', async () => {
+    let anchorUs: number | undefined;
+    const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    anchorUs = 4_900_000;
+    source.queue.push(frameAt(5_000_000));
+    tick();
+    at(100_000);
+    tick();
+    expect(fake.inputs[0]!.pushed.at(-1)).toBe(5_000_000);
+
+    // One packet cannot start the worklet; the clock stops at its end.
+    at(2_100_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
+
+    // The refill plays, reported ahead of being audible: no step back.
+    source.queue.push(...framesBetween(5_020_000, 5_200_000));
+    tick();
+    fake.report(5_000_000, 2_150_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
+  });
+
+  it('gives the core a report time source that stops while the context is suspended', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+
+    const clock = fake.inputs[0]!.options.clock!;
+
+    at(40_000);
+    expect(clock.localNow()).toBeCloseTo(40_000, 0);
+
+    suspended = true;
+    at(540_000);
+    expect(clock.localNow()).toBeCloseTo(40_000, 0);
+
+    // The first report after resume, timed on that source, lands where audio is.
+    suspended = false;
+    at(560_000);
+    fake.report(60_000, clock.localNow());
+    expect(renderer.getClockTimeUs()).toBeCloseTo(60_000, 0);
+  });
+
+  it('drops what the core holds at a timeline reset and ignores reports from before it', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    // A publisher re-anchor: the timeline steps back by far more than a gap.
+    source.queue.push(...framesBetween(-5_000_000, -4_000_000));
+    tick();
+
+    const input = fake.inputs[0]!;
+
+    expect(input.cuts).toBe(1);
+    expect(input.pushed.at(4)).toBe(-5_000_000);
+    expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    // Still in flight from the old timeline when the cut landed.
+    fake.report(40_000, 0);
+    expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    fake.report(-5_000_000, 0);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(-5_000_000, 0);
+  });
+
+  it('places a re-join whose whole buffer is past the anchor at its distance from it', async () => {
+    let anchorUs: number | undefined;
+    const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });
+    const source = queueSource(framesBetween(0, 80_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    // A catch-up skip landed on a group 100 ms past where the anchor falls.
+    anchorUs = 4_900_000;
+    source.queue.push(...framesBetween(5_000_000, 6_000_000));
+    tick();
+
+    const input = fake.inputs[0]!;
+
+    expect(input.pushed).toHaveLength(4);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(4_900_000, 0);
+
+    at(50_000);
+    tick();
+    expect(input.pushed.at(4)).toBe(5_000_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(4_950_000, 0);
+  });
+
+  it('freezes the clock and stops metering while the context is suspended', async () => {
+    const { fake, renderer } = await setup();
+    const source = queueSource(framesBetween(0, 1_000_000));
+
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
+    at(30_000);
+    tick();
+
+    const pushed = fake.inputs[0]!.pushed.length;
+
+    // Paused for two seconds: nothing plays, so nothing is due and nothing ran dry.
+    suspended = true;
+    at(2_030_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(30_000, 0);
+    expect(fake.inputs[0]!.pushed).toHaveLength(pushed);
+
+    suspended = false;
+    at(2_040_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(40_000, 0);
+  });
+
+  it('ignores reports from an input that a track change removed', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+
+    const stale = fake.inputs[0]!.options.clock!;
+
+    renderer.setTrack(queueSource(framesBetween(0, 1_000_000)), CONFIG);
+    tick();
+    stale.reportAudio(40_000, 0);
+    expect(renderer.getClockTimeUs()).toBeUndefined();
+
+    fake.report(0, 0);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(0, 0);
+  });
+
+  it('counts every time the worklet runs dry, across track changes', async () => {
+    const { fake, renderer } = await setup();
+
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    tick();
+    fake.report(0, 0);
+
+    // A stall far longer than any jitter ceiling still counts, once.
+    at(100_000);
+    tick();
+    at(3_000_000);
+    tick();
     expect(renderer.snapshot.get().context.underruns).toBe(1);
 
-    renderer.destroy();
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    tick();
+    fake.report(0, 3_000_000);
+    at(3_100_000);
+    tick();
+    expect(renderer.snapshot.get().context.underruns).toBe(2);
   });
 
-  it('clearing the track resets to idle and drops the anchor', async () => {
-    const frames = await encodeTestFrames(2);
-    const audioContext = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
-    const renderer = createAudioRendererActor({ audioContext });
+  it('counts a dry edge that a track change lands on before the next tick', async () => {
+    const { fake, renderer } = await setup();
 
-    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
-    });
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    tick();
+    fake.report(0, 0);
 
-    renderer.setTrack(null, null);
-    expect(renderer.snapshot.get().context.status).toBe('idle');
-    expect(renderer.getClockTimeUs()).toBeUndefined();
-
-    renderer.destroy();
+    at(100_000);
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    expect(renderer.snapshot.get().context.underruns).toBe(1);
   });
 
-  it('errors when a source is set without a decoder config', async () => {
-    const audioContext = createFakeAudioContext();
-    const renderer = createAudioRendererActor({ audioContext, tickIntervalMs: 5 });
-    const queue: JitterFrame[] = [
-      { groupId: 0, objectId: 0, timestampUs: 0, isKey: true, payload: new Uint8Array([1]) },
-      { groupId: 0, objectId: 1, timestampUs: 20_000, isKey: true, payload: new Uint8Array([2]) },
-    ];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-
-    renderer.setTrack(source, null);
-
-    expect(renderer.snapshot.get().context.status).toBe('error');
-    expect(renderer.snapshot.get().context.error).toBeInstanceOf(Error);
-    // The rejected source must not be drained (or retained) by the tick loop.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(queue).toHaveLength(2);
-
-    renderer.destroy();
-  });
-
-  it('stops draining the jitter buffer after a decoder error', async () => {
-    const frames = await encodeTestFrames(10);
-    const audioContext = createFakeAudioContext();
-    const queue = [...frames];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    const renderer = createAudioRendererActor({ audioContext, tickIntervalMs: 5 });
-
-    // A well-formed but undecodable config: the decoder rejects either at
-    // configure or on first decode, and the pull loop must stop instead of
-    // stripping the queue one frame per tick.
-    renderer.setTrack(source, { codec: 'bogus-codec', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.status).toBe('error'), { timeout: 5000 });
-    const remaining = queue.length;
-
-    expect(remaining).toBeGreaterThan(0);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(queue).toHaveLength(remaining);
-
-    renderer.destroy();
-  });
-
-  it('decodes a live-edge join whose first frame is mid-group (isKey: false)', async () => {
-    const frames = await encodeTestFrames(3);
-
-    // A `next-object` subscribe joins live, so the first delivered frame
-    // is whatever object is newest right now — essentially never a LOC
-    // group's object 0 (`isKey: true`). The regression: decode() gated the
-    // WebCodecs chunk type on `isKey`, and WebCodecs rejects a 'delta'
-    // chunk as the first one fed to a fresh decoder.
-    frames[0] = { ...frames[0]!, groupId: 3, objectId: 7, isKey: false };
-    const audioContext = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
-
-    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
-    });
-    expect(renderer.snapshot.get().context.status).toBe('rendering');
-
-    renderer.destroy();
-  });
-
-  it('applies rate changes forward-only: already-scheduled audio keeps its clock mapping', async () => {
-    const frames = await encodeTestFrames(5);
-    const audioContext = createFakeAudioContext();
-    let playbackRate = 1;
-    const renderer = createAudioRendererActor({
-      audioContext,
-      scheduleMargin: 0.05,
-      getPlaybackRate: () => playbackRate,
-    });
-
-    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    // The decoder may split outputs, so wait on scheduled media time (the
-    // last input chunk spans 80–100ms) rather than an output count.
-    await vi.waitFor(
-      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(4.5 * FRAME_DURATION_US),
-      { timeout: 5000 }
-    );
-
-    // 30ms into playback (the timeline starts at the 50ms schedule margin).
-    audioContext.currentTime = 0.08;
-    const before = renderer.getClockTimeUs()!;
-
-    expect(before).toBeGreaterThan(0);
-    expect(before).toBeLessThan(5 * FRAME_DURATION_US);
-
-    // A rate nudge must not rescale time already scheduled at the old
-    // rate — the regression here was `clock = anchor + elapsed * newRate`,
-    // which jumped by 5% of the total elapsed interval on every nudge.
-    playbackRate = 1.5;
-    expect(renderer.getClockTimeUs()).toBe(before);
-
-    // The clock advances with the context clock through the scheduled
-    // segments regardless of the current rate setting.
-    audioContext.currentTime = 0.09;
-    const later = renderer.getClockTimeUs()!;
-
-    expect(later).toBeGreaterThan(before);
-    expect(later).toBeLessThanOrEqual(before + 10_001);
-
-    renderer.destroy();
-  });
-
-  it('holds on underrun and resumes from late-scheduled audio, not the ideal timeline', async () => {
-    const frames = await encodeTestFrames(3);
-    const audioContext = createFakeAudioContext();
-    const queue = [...frames.slice(0, 2)];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
-
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(
-      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(1.5 * FRAME_DURATION_US),
-      { timeout: 5000 }
-    );
-
-    // Context clock runs past everything scheduled: the media clock holds
-    // at the end of scheduled audio instead of drifting ahead.
-    audioContext.currentTime = 0.5;
-    const held = renderer.getClockTimeUs()!;
-
-    audioContext.currentTime = 0.6;
-    expect(renderer.getClockTimeUs()).toBe(held);
-    expect(held).toBeGreaterThanOrEqual(FRAME_DURATION_US);
-    expect(held).toBeLessThanOrEqual(2 * FRAME_DURATION_US);
-
-    // The late frame schedules at the context clock; the media clock
-    // resumes seamlessly from where it held — not from where the original
-    // anchor says it "should" be (~550ms in).
-    queue.push(frames[2]!);
-    await vi.waitFor(
-      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(2.5 * FRAME_DURATION_US),
-      { timeout: 5000 }
-    );
-    audioContext.currentTime = 0.61;
-    const resumed = renderer.getClockTimeUs()!;
-
-    expect(resumed).toBeGreaterThanOrEqual(held);
-    expect(resumed).toBeLessThan(held + FRAME_DURATION_US);
-
-    renderer.destroy();
-  });
-
-  it.each([20_000, 200_000])('preserves a %iµs gap in the incoming audio timeline', async (gapUs) => {
-    const frames = (await encodeTestFrames(8)).map((frame, index) => ({
-      ...frame,
-      timestampUs: frame.timestampUs + (index >= 2 ? gapUs : 0),
-    }));
-    const audioContext = createFakeAudioContext();
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.2 });
-
-    try {
-      renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-
-      await vi.waitFor(
-        () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(150_000 + gapUs),
-        {
-          timeout: 2000,
-        }
-      );
-      // A known media gap is scheduled silence, not a stalled clock:
-      // video can keep advancing while no audio samples are available.
-      audioContext.currentTime = 0.24 + gapUs / 2_000_000;
-      expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(30_000 + gapUs / 2);
-      expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(50_000 + gapUs / 2);
-      audioContext.currentTime = 0.3 + gapUs / 1_000_000;
-      expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(90_000 + gapUs);
-      expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(110_000 + gapUs);
-    } finally {
-      renderer.destroy();
-    }
-  });
-
-  it('does not revive a decoder whose track was cleared while it drained', async () => {
-    const frames = await encodeTestFrames(5);
-    const audioContext = createFakeAudioContext();
-    const createSource = vi.spyOn(audioContext, 'createBufferSource');
-    const flush = AudioDecoder.prototype.flush;
-    let finishDrain!: () => void;
-    const drained = new Promise<void>((resolve) => {
-      finishDrain = resolve;
-    });
-    const pendingFlush = vi.spyOn(AudioDecoder.prototype, 'flush').mockImplementation(async function (
-      this: AudioDecoder
-    ) {
-      await flush.call(this);
-      await drained;
-    });
-    const renderer = createAudioRendererActor({ audioContext });
-
-    try {
-      renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-      await vi.waitFor(() => expect(pendingFlush).toHaveBeenCalled());
-      renderer.setTrack(null, null);
-      const scheduled = createSource.mock.calls.length;
-
-      finishDrain();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(renderer.snapshot.get().context.status).toBe('idle');
-      expect(renderer.getClockTimeUs()).toBeUndefined();
-      expect(createSource).toHaveBeenCalledTimes(scheduled);
-    } finally {
-      finishDrain();
-      renderer.destroy();
-      pendingFlush.mockRestore();
-      createSource.mockRestore();
-    }
-  });
-
-  it('re-anchors instead of inserting silence on a large timestamp jump', async () => {
-    const frames = await encodeTestFrames(3);
-    // Latency catch-up: everything from the third frame on arrives from far
-    // ahead of the scheduled timeline. The whole tail moves (the encoder's
-    // flush can emit one more output than was fed) — a real skip relocates
-    // the stream, it does not interleave two timelines.
-    const JUMP_US = 5_000_000;
-
-    for (let i = 2; i < frames.length; i++) {
-      frames[i] = { ...frames[i]!, timestampUs: JUMP_US + (i - 2) * FRAME_DURATION_US };
-    }
-
-    const audioContext = createFakeAudioContext();
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
-
-    renderer.setTrack(arraySource(frames), { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(JUMP_US), {
-      timeout: 5000,
-    });
-
-    // Without re-anchoring the jump maps to ~5s of scheduled silence, so
-    // shortly into playback the clock would still sit in the pre-jump
-    // timeline; the reset schedules the jumped audio right at the context
-    // clock (+margin) and the media clock lands past the jump immediately.
-    audioContext.currentTime = 0.06;
-    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(JUMP_US);
-
-    renderer.destroy();
-  });
-
-  it('anchors at the live edge, discarding the replayed backlog unheard', async () => {
-    // The relay replayed 1s of audio before the first tick runs.
-    const frames = await encodeTestFrames(50);
-    const NEWEST_US = 49 * FRAME_DURATION_US;
-    const TARGET_S = 0.2;
-    const ANCHOR_US = NEWEST_US - TARGET_S * 1_000_000;
-    const audioContext = createFakeAudioContext();
-    const queue = [...frames];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    const renderer = createAudioRendererActor({
-      audioContext,
-      scheduleMargin: 0.05,
-      getJoinAnchorUs: () => ANCHOR_US,
-    });
-
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
-    });
-
-    // The 39 pre-anchor frames left the buffer without being decoded: none
-    // remain, and nothing like that many were scheduled.
-    expect(queue.every((frame) => frame.timestampUs >= ANCHOR_US)).toBe(true);
-    expect(renderer.snapshot.get().context.framesScheduled).toBeLessThan(15);
-    expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThan(ANCHOR_US);
-
-    // The clock reads the anchor, not 0 — and the backlog did not become
-    // ~800ms of scheduled silence in front of it, which would put the
-    // clock back at the start of the timeline this far into playback.
-    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(ANCHOR_US);
-    audioContext.currentTime = 0.06;
-    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(ANCHOR_US);
-
-    renderer.destroy();
-  });
-
-  it('leaves a buffer shallower than the target alone', async () => {
-    const frames = await encodeTestFrames(5);
-    const audioContext = createFakeAudioContext();
-    const queue = [...frames];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    // A live join with no replay: the edge is inside the target, so the
-    // anchor sits behind the buffer head and must not move playout.
-    const renderer = createAudioRendererActor({
-      audioContext,
-      scheduleMargin: 0.05,
-      getJoinAnchorUs: () => -400_000,
-    });
-
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
-    });
-
-    expect(renderer.getClockTimeUs()).toBe(0);
-
-    renderer.destroy();
-  });
-
-  it('re-anchors at the live edge after a catch-up skip, not at the group start', async () => {
-    const frames = await encodeTestFrames(30);
-    const audioContext = createFakeAudioContext();
-    // Two 300ms stretches either side of a catch-up skip: the controller
-    // drops the buffer to the newest keyframe-led group, so the surviving
-    // group still starts ~5s of media time behind its own newest frame.
-    const SKIP_US = 5_000_000;
-    const queue = frames.slice(0, 15);
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
+  it('rescues a frozen re-join placement whose next packets are past the fill horizon', async () => {
     let anchorUs: number | undefined;
-    const renderer = createAudioRendererActor({
-      audioContext,
-      scheduleMargin: 0.05,
-      getJoinAnchorUs: () => anchorUs,
-    });
+    const { fake, renderer } = await setup({ getJoinAnchorUs: () => anchorUs });
+    const source = queueSource(framesBetween(0, 80_000));
 
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(() => expect(renderer.snapshot.get().context.framesScheduled).toBeGreaterThan(0), {
-      timeout: 5000,
-    });
-    expect(renderer.getClockTimeUs()).toBe(0);
+    renderer.setTrack(source, CONFIG);
+    tick();
+    fake.report(0, 0);
 
-    // The skip lands: the surviving group runs SKIP_US … SKIP_US + 300ms.
-    const survivingGroup = frames
-      .slice(15)
-      .map((frame, i) => ({ ...frame, timestampUs: SKIP_US + i * FRAME_DURATION_US }));
-    const newestUs = survivingGroup[survivingGroup.length - 1]!.timestampUs;
+    anchorUs = 4_900_000;
+    source.queue.push(frameAt(5_000_000));
+    tick();
+    at(200_000);
+    tick();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
 
-    anchorUs = newestUs - 100_000;
-    queue.length = 0;
-    queue.push(...survivingGroup);
-    // Play out what was scheduled before the skip, so the schedule horizon
-    // reopens and the renderer pulls the jumped-to timeline.
-    audioContext.currentTime = 0.25;
-
-    // Playout resumes within the target of the edge, rather than at the
-    // group start SKIP_US — which is what the plain discontinuity
-    // re-anchor would have done.
-    await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(anchorUs!), { timeout: 5000 });
-    expect(renderer.getClockTimeUs()).toBeLessThanOrEqual(newestUs + FRAME_DURATION_US);
-
-    renderer.destroy();
+    // Packets resume 80 ms after the lone one ends: beyond the fill horizon.
+    fake.inputs[0]!.stats.playing = false;
+    source.queue.push(...framesBetween(5_100_000, 5_400_000));
+    at(400_000);
+    tick();
+    expect(fake.inputs[0]!.pushed).toContain(5_100_000);
+    expect(renderer.getClockTimeUs()).toBeCloseTo(5_020_000, 0);
   });
 
-  // A publisher that replaces its capture source re-anchors that track's
-  // timeline; landing *behind* the old one must be treated as the timeline
-  // reset it is. Butt-joining it (the backward jump slips past a
-  // forward-only check) keeps audio playing seamlessly while the master
-  // clock silently steps backwards by the jump — and the slaved video
-  // renderer then holds every frame it ever receives "early", frozen
-  // exactly the step behind for the rest of the stream.
-  it('re-anchors onto a timeline that stepped backwards instead of continuing the old one', async () => {
-    const frames = await encodeTestFrames(6);
-    const BASE_US = 10_000_000;
-    const STEP_BACK_US = 5_000_000;
-    const TARGET_US = 100_000;
-    const old = frames.slice(0, 3).map((frame, i) => ({ ...frame, timestampUs: BASE_US + i * FRAME_DURATION_US }));
-    const fresh = frames
-      .slice(3)
-      .map((frame, i) => ({ ...frame, timestampUs: BASE_US - STEP_BACK_US + i * FRAME_DURATION_US }));
-    const audioContext = createFakeAudioContext();
-    const queue = [...old];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    let edgeUs = old[old.length - 1]!.timestampUs;
-    const renderer = createAudioRendererActor({
-      audioContext,
-      scheduleMargin: 0.05,
-      getJoinAnchorUs: () => edgeUs - TARGET_US,
-    });
+  it('applies the playout rate to the input and paces the clock with it', async () => {
+    let rate = 1;
+    const { fake, renderer } = await setup({ getPlaybackRate: () => rate });
 
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(
-      () =>
-        expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(BASE_US + FRAME_DURATION_US),
-      { timeout: 5000 }
-    );
-    audioContext.currentTime = 0.06;
-    expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(BASE_US);
+    renderer.setTrack(queueSource(framesBetween(0, 2_000_000)), CONFIG);
+    tick();
+    fake.report(0, 0);
 
-    // The switched source's timeline arrives a whole step behind, delivered
-    // continuously; the subscriber's edge has already reset onto it.
-    queue.push(...fresh);
-    edgeUs = fresh[fresh.length - 1]!.timestampUs;
+    for (let us = 10_000; us <= 100_000; us += 10_000) {
+      at(us);
+      tick();
+    }
 
-    // The clock lands on the new timeline at the join anchor — with the fake
-    // context clock frozen inside the old schedule, a butt-join would keep
-    // reading the old timeline here instead.
-    await vi.waitFor(
-      () => {
-        const clock = renderer.getClockTimeUs();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(100_000, 0);
 
-        expect(clock).toBeDefined();
-        expect(clock!).toBeLessThan(BASE_US);
-        expect(clock!).toBeGreaterThanOrEqual(edgeUs - TARGET_US);
-      },
-      { timeout: 5000 }
-    );
+    rate = 1.05;
+    tick();
+    expect(fake.inputs[0]!.playbackRate).toBe(1.05);
 
-    // …and playout proceeds through the anchor gap into the new audio.
-    audioContext.currentTime = 0.2;
-    await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(fresh[0]!.timestampUs), {
-      timeout: 5000,
-    });
+    // The time before the change keeps its pace; only what follows speeds up.
+    for (let us = 110_000; us <= 200_000; us += 10_000) {
+      at(us);
+      tick();
+    }
 
-    renderer.destroy();
+    expect(renderer.getClockTimeUs()).toBeCloseTo(205_000, 0);
   });
 
-  // A discontinuity interrupts playout that already ran at depth, so the
-  // re-join lands *at the join anchor* (the target latency) rather than at
-  // arrival. Landing at arrival collapses playout to the live edge — the
-  // reported "audio jumps to real-time" — which the latency controller then
-  // spends tens of pitch-shifted seconds rebuilding at its ±5% nudge.
-  it('lands a discontinuity re-join at the join anchor instead of racing to the arrival edge', async () => {
-    const frames = await encodeTestFrames(6);
-    const JUMP_US = 5_000_000;
-    const TARGET_US = 200_000;
-    const old = frames.slice(0, 3).map((frame, i) => ({ ...frame, timestampUs: i * FRAME_DURATION_US }));
-    const fresh = frames.slice(3).map((frame, i) => ({ ...frame, timestampUs: JUMP_US + i * FRAME_DURATION_US }));
-    const audioContext = createFakeAudioContext();
-    const queue = [...old];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    let edgeUs = old[old.length - 1]!.timestampUs;
-    const renderer = createAudioRendererActor({
-      audioContext,
-      scheduleMargin: 0.05,
-      getJoinAnchorUs: () => edgeUs - TARGET_US,
-    });
+  it('clamps the playout rate to the range the core accepts, and starts a new input at it', async () => {
+    let rate = 3;
+    const { fake, renderer } = await setup({ getPlaybackRate: () => rate });
 
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(
-      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(FRAME_DURATION_US),
-      { timeout: 5000 }
-    );
+    renderer.setTrack(queueSource(framesBetween(0, 200_000)), CONFIG);
+    tick();
+    expect(fake.inputs[0]!.playbackRate).toBe(2);
 
-    queue.push(...fresh);
-    edgeUs = fresh[fresh.length - 1]!.timestampUs;
-    const anchorUs = edgeUs - TARGET_US;
+    rate = 0;
+    tick();
+    expect(fake.inputs[0]!.playbackRate).toBe(0.5);
 
-    // The clock resumes at the anchor — target depth behind the jumped-to
-    // edge — not at the buffer head the way an at-arrival landing would.
-    await vi.waitFor(
-      () => {
-        const clock = renderer.getClockTimeUs();
-
-        expect(clock).toBeDefined();
-        expect(clock!).toBeGreaterThanOrEqual(anchorUs);
-        expect(clock!).toBeLessThan(fresh[0]!.timestampUs);
-      },
-      { timeout: 5000 }
-    );
-
-    // Advancing the context clock through the anchor gap reaches the head.
-    audioContext.currentTime = 0.3;
-    await vi.waitFor(() => expect(renderer.getClockTimeUs()).toBeGreaterThanOrEqual(fresh[0]!.timestampUs), {
-      timeout: 5000,
-    });
-
-    renderer.destroy();
+    renderer.setTrack(queueSource(framesBetween(0, 200_000)), CONFIG);
+    tick();
+    expect(fake.inputs[1]!.options.playbackRate).toBe(0.5);
+    expect(renderer.snapshot.get().context.status).toBe('rendering');
   });
 
-  it('schedules only up to the horizon instead of draining a backlog in one tick', async () => {
-    const frames = await encodeTestFrames(50); // 1s of audio, all buffered up-front
-    const audioContext = createFakeAudioContext(); // context clock frozen at 0
-    const queue = [...frames];
-    const source: AudioFrameSource = { peek: () => queue[0], dequeue: () => queue.shift() };
-    const renderer = createAudioRendererActor({ audioContext, scheduleMargin: 0.05 });
+  it('caps the core jitter target at the target latency', async () => {
+    const fake = createFakePlayer();
+    const renderer = createAudioRendererActor({
+      audioContext: fakeAudioContext(),
+      createAudioPlayer: () => Promise.resolve(fake.player),
+      getTargetLatencyUs: () => 250_000,
+      tickIntervalMs: TICK_MS,
+    });
 
-    renderer.setTrack(source, { codec: 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    await vi.waitFor(
-      () => expect(renderer.snapshot.get().context.scheduledUntilUs).toBeGreaterThanOrEqual(7 * FRAME_DURATION_US),
-      { timeout: 5000 }
-    );
-    // Let a few more ticks run: with the clock frozen, scheduling must
-    // stop at the horizon (margin * 4 plus in-flight decodes), leaving
-    // the rest of the backlog in the source's jitter buffer.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(renderer.snapshot.get().context.scheduledUntilUs).toBeLessThan(20 * FRAME_DURATION_US);
-    expect(queue.length).toBeGreaterThan(30);
+    await vi.advanceTimersByTimeAsync(0);
+    renderer.setTrack(queueSource(framesBetween(0, 80_000)), CONFIG);
+    tick();
 
+    expect(fake.inputs[0]!.options.clock!.targetLatencyUs).toBe(250_000);
+  });
+
+  it('defaults to the core on the context baseContext, and fails without one', async () => {
+    // The core's first act is loading its worklet onto the context; failing
+    // that with a marker shows the default reached the core on this context.
+    const workletUnavailable = new Error('worklet unavailable');
+    const addModule = vi.fn(() => Promise.reject(workletUnavailable));
+    // SAFETY: the core touches only `audioWorklet` before the rejected load.
+    const baseContext = { audioWorklet: { addModule } } as unknown as BaseAudioContext;
+    const renderer = createAudioRendererActor({ audioContext: { ...fakeAudioContext(), baseContext } });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(addModule).toHaveBeenCalledTimes(1);
+    expect(renderer.snapshot.get().context.error).toBe(workletUnavailable);
     renderer.destroy();
+
+    const bare = createAudioRendererActor({ audioContext: fakeAudioContext() });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bare.snapshot.get().context.status).toBe('error');
+    bare.destroy();
+  });
+
+  it('fails a track with no decoder config, and a player that cannot be created', async () => {
+    const { renderer } = await setup();
+
+    renderer.setTrack(queueSource(), null);
+    expect(renderer.snapshot.get().context.status).toBe('error');
+
+    const failing = createAudioRendererActor({
+      audioContext: fakeAudioContext(),
+      createAudioPlayer: () => Promise.reject(new Error('no worklet')),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failing.snapshot.get().context.status).toBe('error');
+    failing.destroy();
+
+    const unconnectable = createFakePlayer();
+
+    unconnectable.player.output.connect = () => {
+      throw new Error('cross-context connect');
+    };
+
+    const disconnected = createAudioRendererActor({
+      audioContext: fakeAudioContext(),
+      createAudioPlayer: () => Promise.resolve(unconnectable.player),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(disconnected.snapshot.get().context.status).toBe('error');
+    expect(unconnectable.closed).toBe(true);
+    disconnected.destroy();
   });
 });

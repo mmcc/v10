@@ -41,9 +41,6 @@ beside this file. Notable corrections to the plan's assumptions:
 - `syncPreload` / `trackLoadTriggers` are not composed into the engine:
   both are `HTMLMediaElement`-bound and there is no element; the adapter
   writes `state.preload` / `state.loadActivated` directly.
-- Audio renderer uses `AudioBufferSourceNode` scheduling, not the
-  AudioWorklet ring buffer, with the clock contract already shaped for
-  the swap (TODO(audio-worklet) in `audio-renderer.ts`).
 - No text-track subscription behavior yet (`switchTextTrack` composes
   and selects, but nothing renders text).
 - No WebCodecs `canPlayTrack` probe is injected into selection —

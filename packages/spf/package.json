@@ -79,6 +79,7 @@
     "size:all": "node scripts/measure-size.js --all"
   },
   "dependencies": {
+    "@caprid/moq-media": "^0.1.0",
     "@videojs/media": "workspace:*",
     "@videojs/utils": "workspace:*",
     "signal-polyfill": "^0.2.2"
