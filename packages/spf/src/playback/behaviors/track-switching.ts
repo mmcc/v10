@@ -82,7 +82,7 @@ import {
   type VideoTrack,
 } from '../../media/types';
 import { getCdnId as defaultGetCdnId, type GetCdnId } from '../../media/utils/cdn';
-import { getCodecFamilies, getTracksByType } from '../../media/utils/tracks';
+import { getCodecFamilies, getTracksAcrossSwitchingSets, getTracksByType } from '../../media/utils/tracks';
 import type { BandwidthConfig, BandwidthState } from '../../network/bandwidth-estimator';
 import { DEFAULT_BANDWIDTH_CONFIG, getBandwidthEstimate } from '../../network/bandwidth-estimator';
 import type { SelectionRule, SelectionRuleDeps } from '../primitives/selection-rules';
@@ -407,6 +407,59 @@ function filterByUserSelection<S extends SelectionKey, U extends UserSelectionKe
   const filter = state[key]?.get();
 
   return filter ? tracks.filter((track) => matchesPartialTrack(track, filter)) : tracks;
+}
+
+/**
+ * Content-identity constraint — a _hard_ filter (constraints pre-pass), video only. A switching set is one content
+ * item's quality alternates; sibling sets are _different content_ (a MoQ publisher's screen share beside its camera,
+ * both role video). Confines the all-sets candidate pool to one active set so the ranking rules downstream never
+ * present a content change as a quality switch.
+ *
+ * The two selection slots carry different things, which is what the ordering below encodes: `selected*TrackId` names
+ * one track, so it is the _content_ channel; `user*TrackSelection` is a shape (width + height + bandwidth — the
+ * properties multi-CDN copies share), so it is the _quality_ channel and can match a sibling set's rendition by
+ * coincidence. Which set is active, in order:
+ *
+ * 1. The set holding the current selection, when it also satisfies the `user*TrackSelection` filter — an ambiguous quality
+ *    pin (a screen share whose dimensions and bitrate equal a camera rendition's) must not drag an explicit cross-set
+ *    selection back to the camera;
+ * 2. The first set containing a `user*TrackSelection` match — the durable consumer-intent slot, which survives selection
+ *    clears (constraint prunes, source hiccups), so an explicit content choice is never silently reverted to the
+ *    default, and a pin naming _only_ a sibling set still outranks a stale selection;
+ * 3. The set containing the current selection — an engine-level cross-set `selectedVideoTrackId` write moves the active
+ *    set;
+ * 4. The first (rendered-by-default) set.
+ *
+ * Single-set presentations (HLS) pass through untouched.
+ */
+function confineToActiveSwitchingSet<S extends SelectionKey, U extends UserSelectionKey, T extends SwitchableTrack>(
+  tracks: readonly T[],
+  { state, config }: SelectionRuleDeps<UserSelectionStateMap<S, U, T>, AnySlotMap, UserSelectionConfig<S, U, T>>
+): readonly T[] {
+  const sets = state.presentation.get()?.selectionSets?.find(({ type }) => type === 'video')?.switchingSets;
+  if (!sets || sets.length <= 1) return tracks;
+
+  const userKey = config.userSelectionKey;
+  const userFilter = userKey ? state[userKey]?.get() : undefined;
+  const selectedId = state[config.selectionKey].get();
+  // The set carries the presentation's track union; the filter came from the
+  // same presentation's video tracks, so the match is safe. No filter means
+  // every set satisfies it, which collapses the order to selection-then-first.
+  const satisfiesUserFilter = (set: (typeof sets)[number]) =>
+    !userFilter || set.tracks.some((track) => matchesPartialTrack(track as unknown as T, userFilter));
+  const selectedSet = selectedId
+    ? sets.find(({ tracks: setTracks }) => setTracks.some(({ id }) => id === selectedId))
+    : undefined;
+  const active =
+    (selectedSet && satisfiesUserFilter(selectedSet) ? selectedSet : undefined) ??
+    (userFilter ? sets.find(satisfiesUserFilter) : undefined) ??
+    selectedSet ??
+    sets[0];
+  if (!active) return tracks;
+
+  const activeIds = new Set(active.tracks.map(({ id }) => id));
+
+  return tracks.filter(({ id }) => activeIds.has(id));
 }
 
 /**
@@ -835,8 +888,13 @@ export type SwitchTextTrackRule = SelectionRule<
   TrackSwitchingConfig<'selectedTextTrackId', TextTrackCandidate>
 >;
 
-/** Default video pre-pass: failed CDNs, capability, codec-family stickiness. */
+/**
+ * Default video pre-pass: active switching set, failed CDNs, capability, codec-family stickiness. Keep
+ * `confineToActiveSwitchingSet` first in a replacement chain: the candidate pool spans every switching set, and without
+ * it ranking would treat distinct content items (a MoQ screen share beside its camera) as ABR alternates.
+ */
 export const DEFAULT_VIDEO_CONSTRAINTS: readonly SwitchVideoTrackRule[] = [
+  confineToActiveSwitchingSet,
   excludeFailedCdns,
   excludeUnplayableTracks,
   stickToSelectedCodecs,
@@ -902,7 +960,12 @@ export const switchVideoTrack = defineBehavior({
         ...config,
         selectionKey: VIDEO_TYPE_CONFIG.selectedKey,
         userSelectionKey: VIDEO_TYPE_CONFIG.userSelectionKey,
-        getTracks: (presentation) => getTracksByType(presentation, 'video') as readonly VideoTrackCandidate[],
+        // Candidates span every switching set (sibling sets are distinct
+        // content items — MoQ camera + screen); confineToActiveSwitchingSet
+        // narrows each evaluation to one set, so an explicit cross-set
+        // selection is reachable while ranking never crosses content.
+        getTracks: (presentation) =>
+          getTracksAcrossSwitchingSets(presentation, 'video') as readonly VideoTrackCandidate[],
         constraints: config?.[VIDEO_TYPE_CONFIG.constraintsKey] ?? DEFAULT_VIDEO_CONSTRAINTS,
         rules: config?.[VIDEO_TYPE_CONFIG.rulesKey] ?? DEFAULT_VIDEO_RULES,
         noSupportedTrackCode: SVTA_NO_SUPPORTED_VIDEO_TRACK,
