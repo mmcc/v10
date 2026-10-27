@@ -11,6 +11,8 @@ import { MediaUIElement } from '../media-ui-element';
 /**
  * `<media-connection-indicator>` — coarse connection health for the active publish session. Content (typically an icon)
  * is authored by the skin; the element reflects `data-quality` for styling.
+ *
+ * @internal
  */
 export class ConnectionIndicatorElement extends MediaUIElement<ConnectionIndicatorState, MediaPublishStatsState> {
   static readonly tagName = 'media-connection-indicator';

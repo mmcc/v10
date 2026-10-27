@@ -598,6 +598,7 @@ export interface MediaVideoDimensionsCapability {
 // Config
 // ----------------------------------------
 
+/** @internal */
 export interface MediaConfigCapability {
   config: Record<string, unknown>;
 }
@@ -614,13 +615,17 @@ export interface MediaConfigCapability {
  * - `live` — the session is established and media is being published.
  * - `stopping` — an orderly shutdown (unpublish or server GOAWAY) is draining; a new `publish()` must wait for `idle`.
  * - `error` — the session failed; `publishError` holds the cause and `publish()` may retry.
+ *
+ * @internal
  */
 export type MediaPublishSessionState = 'idle' | 'connecting' | 'live' | 'stopping' | 'error';
 
+/** @internal */
 export interface MediaPublishEvents {
   publishstatechange: EventLike;
 }
 
+/** @internal */
 export interface MediaPublishCapability {
   /** Publish endpoint URL (e.g. a MoQ relay's WebTransport URL). */
   publishEndpoint: string;
@@ -654,7 +659,11 @@ export interface MediaPublishCapability {
 // Capture (publisher-only)
 // ----------------------------------------
 
-/** Which kind of video feeds capture. Additive — both may be active at once. */
+/**
+ * Which kind of video feeds capture. Additive — both may be active at once.
+ *
+ * @internal
+ */
 export type MediaCaptureSourceKind = 'camera' | 'screen';
 
 /**
@@ -665,9 +674,12 @@ export type MediaCaptureSourceKind = 'camera' | 'screen';
  * - `active` — tracks are live and previewable.
  * - `denied` — the user (or platform policy) refused access.
  * - `ended` — the source ended outside our control (device unplugged, screen share stopped from browser UI).
+ *
+ * @internal
  */
 export type MediaCaptureState = 'idle' | 'acquiring' | 'active' | 'denied' | 'ended';
 
+/** @internal */
 export interface MediaCaptureSourceEvents {
   capturesourcechange: EventLike;
   capturestatechange: EventLike;
@@ -683,6 +695,8 @@ export interface MediaCaptureSourceEvents {
  * The intent slots are consumed by the pipeline on terminal outcomes: after a permission denial or an out-of-band end
  * (device unplugged, browser-native "Stop sharing") the slot reads `false` again while the matching state holds
  * `denied`/`ended` — so writing `true` always means "attempt acquisition now", including retries.
+ *
+ * @internal
  */
 export interface MediaCaptureSourceCapability {
   /** Camera acquisition; `true` acquires (prompting as needed), `false` releases. Fires `capturesourcechange`. */
@@ -721,6 +735,8 @@ export interface MediaCaptureSourceCapability {
 /**
  * Structural stand-in for the DOM `MediaStream` — keeps this contract DOM-free. (Not to be confused with
  * {@link MediaStreamType}, which classifies live vs on-demand playback.)
+ *
+ * @internal
  */
 export interface MediaStreamLike {
   readonly id: string;
@@ -728,7 +744,11 @@ export interface MediaStreamLike {
   getVideoTracks(): { enabled: boolean }[];
 }
 
-/** One selectable capture input device. */
+/**
+ * One selectable capture input device.
+ *
+ * @internal
+ */
 export interface MediaCaptureDeviceInfo {
   readonly deviceId: string;
   readonly kind: 'videoinput' | 'audioinput';
@@ -736,10 +756,12 @@ export interface MediaCaptureDeviceInfo {
   readonly label: string;
 }
 
+/** @internal */
 export interface MediaCaptureDevicesEvents {
   capturedeviceschange: EventLike;
 }
 
+/** @internal */
 export interface MediaCaptureDevicesCapability {
   /** Known capture input devices. Fires `capturedeviceschange`. */
   readonly captureDevices: readonly MediaCaptureDeviceInfo[];
@@ -752,10 +774,12 @@ export interface MediaCaptureDevicesCapability {
   audioInputDeviceId: string;
 }
 
+/** @internal */
 export interface MediaCaptureToggleEvents {
   capturetogglechange: EventLike;
 }
 
+/** @internal */
 export interface MediaCaptureToggleCapability {
   /** Whether outgoing video is muted. Muting disables the track (black frames) without stopping capture or encoding. */
   cameraMuted: boolean;
@@ -763,7 +787,11 @@ export interface MediaCaptureToggleCapability {
   micMuted: boolean;
 }
 
-/** Point-in-time health counters for an active publish session. */
+/**
+ * Point-in-time health counters for an active publish session.
+ *
+ * @internal
+ */
 export interface MediaPublishStats {
   /** Encoded video frames per second over the last sample window; `NaN` when unknown. */
   readonly encodedFps: number;
@@ -781,10 +809,12 @@ export interface MediaPublishStats {
   readonly subscriberCount: number;
 }
 
+/** @internal */
 export interface MediaPublishStatsEvents {
   publishstatsupdate: EventLike;
 }
 
+/** @internal */
 export interface MediaPublishStatsCapability {
   /**
    * Latest sampled stats, `null` before the first sample. Updated at a low frequency (~1 Hz); fires

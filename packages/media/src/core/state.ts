@@ -410,6 +410,7 @@ export interface MediaRemotePlaybackState {
   promptRemotePlayback(): Promise<void>;
 }
 
+/** @internal */
 export interface MediaPublishState {
   /** Current publish session lifecycle. */
   publishState: MediaPublishSessionState;
@@ -423,6 +424,7 @@ export interface MediaPublishState {
   unpublish(): void;
 }
 
+/** @internal */
 export interface MediaCaptureSourceState {
   /** Whether the camera is an active capture source. */
   cameraActive: boolean;
@@ -452,6 +454,7 @@ export interface MediaCaptureSourceState {
   toggleMic(): boolean;
 }
 
+/** @internal */
 export interface MediaCaptureDevicesState {
   /** Available cameras. Labels are empty until permission is granted. */
   cameras: MediaCaptureDeviceInfo[];
@@ -467,6 +470,7 @@ export interface MediaCaptureDevicesState {
   selectMicrophone(deviceId: string): void;
 }
 
+/** @internal */
 export interface MediaCaptureTracksState {
   /** Whether outgoing video is muted (track disabled, capture continues). */
   cameraMuted: boolean;
@@ -482,9 +486,14 @@ export interface MediaCaptureTracksState {
   toggleMicMuted(): boolean;
 }
 
-/** Coarse health bucket derived from publish stats. */
+/**
+ * Coarse health bucket derived from publish stats.
+ *
+ * @internal
+ */
 export type MediaConnectionQuality = 'unknown' | 'good' | 'fair' | 'poor';
 
+/** @internal */
 export interface MediaPublishStatsState {
   /** Latest sampled publish stats, `null` before the first sample. */
   publishStats: MediaPublishStats | null;

@@ -8,6 +8,7 @@ import { shareScreenText, stopSharingText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface ScreenShareButtonProps {
   /** Custom label for the button. */
   label?: Text | string | ((state: ScreenShareButtonState) => Text | string) | undefined;
@@ -15,6 +16,7 @@ export interface ScreenShareButtonProps {
   disabled?: boolean | undefined;
 }
 
+/** @internal */
 export interface ScreenShareButtonState extends ButtonState {
   /** Whether the screen is the active capture source. */
   sharing: boolean;
@@ -22,6 +24,7 @@ export interface ScreenShareButtonState extends ButtonState {
   availability: MediaFeatureAvailability;
 }
 
+/** @internal */
 export class ScreenShareButtonCore {
   static readonly defaultProps: NonNullableObject<ScreenShareButtonProps> = {
     label: '',
@@ -84,6 +87,7 @@ export class ScreenShareButtonCore {
   }
 }
 
+/** @internal */
 export namespace ScreenShareButtonCore {
   export type Props = ScreenShareButtonProps;
   export type State = ScreenShareButtonState;

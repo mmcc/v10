@@ -224,6 +224,7 @@ export function isMediaLiveCapable(value: unknown): value is MediaLiveCapability
   return !isUndefined(media.liveEdgeStart) && !isUndefined(media.targetLiveWindow);
 }
 
+/** @internal */
 export function isMediaPublishCapable(value: unknown): value is MediaPublishCapability {
   if (!isObject(value)) return false;
 
@@ -232,6 +233,7 @@ export function isMediaPublishCapable(value: unknown): value is MediaPublishCapa
   return !isUndefined(media.publishState) && isFunction(media.publish) && isFunction(media.unpublish);
 }
 
+/** @internal */
 export function isMediaCaptureSourceCapable(value: unknown): value is MediaCaptureSourceCapability {
   if (!isObject(value)) return false;
 
@@ -240,6 +242,7 @@ export function isMediaCaptureSourceCapable(value: unknown): value is MediaCaptu
   return !isUndefined(media.cameraState) && !isUndefined(media.screenShareState) && 'cameraActive' in media;
 }
 
+/** @internal */
 export function isMediaCaptureDevicesCapable(value: unknown): value is MediaCaptureDevicesCapability {
   if (!isObject(value)) return false;
 
@@ -252,6 +255,7 @@ export function isMediaCaptureDevicesCapable(value: unknown): value is MediaCapt
   );
 }
 
+/** @internal */
 export function isMediaCaptureToggleCapable(value: unknown): value is MediaCaptureToggleCapability {
   if (!isObject(value)) return false;
 
@@ -260,6 +264,7 @@ export function isMediaCaptureToggleCapable(value: unknown): value is MediaCaptu
   return !isUndefined(media.cameraMuted) && !isUndefined(media.micMuted);
 }
 
+/** @internal */
 export function isMediaPublishStatsCapable(value: unknown): value is MediaPublishStatsCapability {
   if (!isObject(value)) return false;
 

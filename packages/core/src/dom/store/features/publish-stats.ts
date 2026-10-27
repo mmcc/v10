@@ -12,6 +12,8 @@ const LOW_ENCODED_FPS = 15;
  *
  * `unknown` until stats exist and report a real bitrate; `poor` when frames were dropped this sample while the encoder
  * is also below {@link LOW_ENCODED_FPS}; `fair` when only one of those holds; `good` otherwise.
+ *
+ * @internal
  */
 export function deriveConnectionQuality(
   stats: MediaPublishStats | null,
@@ -28,6 +30,7 @@ export function deriveConnectionQuality(
   return 'good';
 }
 
+/** @internal */
 export const publishStatsFeature = definePlayerFeature({
   name: 'publishStats',
   state: (): MediaPublishStatsState => ({

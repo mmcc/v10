@@ -6,6 +6,7 @@ import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
 import { MediaButtonElement } from '../media-button-element';
 
+/** @internal */
 export class ScreenShareButtonElement extends MediaButtonElement<ScreenShareButtonState, MediaCaptureSourceState> {
   static readonly tagName = 'media-screen-share-button';
 

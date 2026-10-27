@@ -13,6 +13,7 @@ import { renderElement } from '../../utils/use-render';
 
 const DISPLAY_NAME = 'CapturePlaceholder';
 
+/** @internal */
 export interface CapturePlaceholderProps
   extends UIComponentProps<'div', CapturePlaceholderCore.State>, CapturePlaceholderCore.Props {}
 
@@ -25,6 +26,8 @@ export interface CapturePlaceholderProps
  *   ```tsx
  *   <CapturePlaceholder />;
  *   ```;
+ *
+ * @internal
  */
 export const CapturePlaceholder = forwardRef(function CapturePlaceholder(
   componentProps: CapturePlaceholderProps,
@@ -70,6 +73,7 @@ export const CapturePlaceholder = forwardRef(function CapturePlaceholder(
 
 CapturePlaceholder.displayName = DISPLAY_NAME;
 
+/** @internal */
 export namespace CapturePlaceholder {
   export type Props = CapturePlaceholderProps;
   export type State = CapturePlaceholderCore.State;

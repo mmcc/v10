@@ -14,6 +14,7 @@ import { useOptionalTooltipContext } from '../tooltip/context';
 
 const DISPLAY_NAME = 'PublishButton';
 
+/** @internal */
 export interface PublishButtonProps
   extends UIComponentProps<'button', PublishButtonCore.State>, PublishButtonCore.Props {}
 
@@ -31,6 +32,8 @@ export interface PublishButtonProps
  *   ```tsx
  *   <PublishButton />;
  *   ```;
+ *
+ * @internal
  */
 export const PublishButton = forwardRef<HTMLButtonElement, PublishButtonProps>(
   function PublishButton(componentProps, forwardedRef): ReactNode {
@@ -115,6 +118,7 @@ export const PublishButton = forwardRef<HTMLButtonElement, PublishButtonProps>(
 
 PublishButton.displayName = DISPLAY_NAME;
 
+/** @internal */
 export namespace PublishButton {
   export type Props = PublishButtonProps;
   export type State = PublishButtonCore.State;

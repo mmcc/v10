@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { ScreenShareButtonState } from './core';
 
+/** @internal */
 export const ScreenShareButtonDataAttrs = {
   /** Present when the screen is the active capture source. */
   sharing: 'data-sharing',

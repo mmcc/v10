@@ -9,6 +9,7 @@ import { streamDurationText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface PublishTimerProps {
   /** Custom label for accessibility. */
   label?: Text | string | ((state: PublishTimerState) => Text | string) | undefined;
@@ -19,6 +20,7 @@ export interface PublishTimerProps {
   now?: number | undefined;
 }
 
+/** @internal */
 export interface PublishTimerState extends ButtonState {
   /** Current publish session lifecycle. */
   session: MediaPublishSessionState;
@@ -29,6 +31,8 @@ export interface PublishTimerState extends ButtonState {
 /**
  * Core state machine for a stream-duration display. Elapsed time is derived from `publishStartedAt` and the `now` prop;
  * `0:00` before the session first goes live.
+ *
+ * @internal
  */
 export class PublishTimerCore {
   static readonly defaultProps: NonNullableObject<PublishTimerProps> = {
@@ -82,6 +86,7 @@ export class PublishTimerCore {
   }
 }
 
+/** @internal */
 export namespace PublishTimerCore {
   export type Props = PublishTimerProps;
   export type State = PublishTimerState;

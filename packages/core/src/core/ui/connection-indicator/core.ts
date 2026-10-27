@@ -13,16 +13,19 @@ import {
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface ConnectionIndicatorProps {
   /** Custom label for the indicator. */
   label?: Text | string | ((state: ConnectionIndicatorState) => Text | string) | undefined;
 }
 
+/** @internal */
 export interface ConnectionIndicatorState extends ButtonState {
   /** Coarse connection health derived from recent publish stats. */
   quality: MediaConnectionQuality;
 }
 
+/** @internal */
 export class ConnectionIndicatorCore {
   static readonly defaultProps: NonNullableObject<ConnectionIndicatorProps> = {
     label: '',
@@ -80,6 +83,7 @@ export class ConnectionIndicatorCore {
   }
 }
 
+/** @internal */
 export namespace ConnectionIndicatorCore {
   export type Props = ConnectionIndicatorProps;
   export type State = ConnectionIndicatorState;

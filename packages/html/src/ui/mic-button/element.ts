@@ -6,6 +6,7 @@ import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
 import { MediaButtonElement } from '../media-button-element';
 
+/** @internal */
 export class MicButtonElement extends MediaButtonElement<MicButtonState, MediaCaptureTracksState> {
   static readonly tagName = 'media-mic-button';
 

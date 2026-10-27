@@ -14,6 +14,8 @@ import { MediaUIElement } from '../media-ui-element';
  * `<media-capture-placeholder>` — placeholder shown over the preview area before capture is active. Authored children
  * are kept as-is; without them the element renders the core's translated guidance text. Visibility is a styling
  * concern: skins show/hide it via the reflected `data-capture-state` attribute.
+ *
+ * @internal
  */
 export class CapturePlaceholderElement extends MediaUIElement<CapturePlaceholderState, MediaCaptureSourceState> {
   static readonly tagName = 'media-capture-placeholder';

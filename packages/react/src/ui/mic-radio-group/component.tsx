@@ -18,30 +18,39 @@ import {
   useMicrophoneOptions,
 } from './use-microphone-options';
 
+/** @internal */
 export type MicRadioGroupItemState = MicrophoneOption & {
   /** Whether this option is currently selected. */
   checked: boolean;
 };
 
+/** @internal */
 export interface MicRadioGroupItemProps extends Omit<MenuRadioItemProps, 'ref'> {
   /** Microphone device ID represented by the item. */
   'data-device': string;
 }
 
+/** @internal */
 export interface MicRadioGroupRootProps extends MicrophoneOptionsProps {
   children?: ReactNode;
 }
 
+/** @internal */
 export interface MicRadioGroupOptionsProps extends Omit<UIComponentProps<'div', MicRadioGroupCore.State>, 'children'> {
   /** Render one consumer-owned menu radio item for every microphone. */
   renderItem: (props: MicRadioGroupItemProps, state: MicRadioGroupItemState) => ReactElement;
 }
 
+/** @internal */
 export type MicRadioGroupValueProps = UIComponentProps<'span', MicrophoneOptionsResult>;
 
 const MicRadioGroupContext = createContext<MicrophoneOptionsResult | null | undefined>(undefined);
 
-/** Owns microphone option state and shares it with an enclosing menu. Does not render a DOM element. */
+/**
+ * Owns microphone option state and shares it with an enclosing menu. Does not render a DOM element.
+ *
+ * @internal
+ */
 export function MicRadioGroupRoot({ children, ...props }: MicRadioGroupRootProps): ReactNode {
   const microphones = useMicrophoneOptions(props);
 
@@ -50,7 +59,11 @@ export function MicRadioGroupRoot({ children, ...props }: MicRadioGroupRootProps
   return <MicRadioGroupContext.Provider value={microphones}>{children}</MicRadioGroupContext.Provider>;
 }
 
-/** Displays the selected microphone label. */
+/**
+ * Displays the selected microphone label.
+ *
+ * @internal
+ */
 export const MicRadioGroupValue = forwardRef<HTMLSpanElement, MicRadioGroupValueProps>(function MicRadioGroupValue(
   { render, className, style, ...elementProps },
   forwardedRef
@@ -65,7 +78,11 @@ export const MicRadioGroupValue = forwardRef<HTMLSpanElement, MicRadioGroupValue
   );
 });
 
-/** Renders menu radio items for the available microphones. */
+/**
+ * Renders menu radio items for the available microphones.
+ *
+ * @internal
+ */
 export const MicRadioGroupOptions = forwardRef<HTMLDivElement, MicRadioGroupOptionsProps>(
   function MicRadioGroupOptions(componentProps, forwardedRef) {
     const {
@@ -140,15 +157,18 @@ function toMenuOptionState(microphones: MicrophoneOptionsResult | null): MenuOpt
   };
 }
 
+/** @internal */
 export namespace MicRadioGroupRoot {
   export type Props = MicRadioGroupRootProps;
 }
 
+/** @internal */
 export namespace MicRadioGroupValue {
   export type Props = MicRadioGroupValueProps;
   export type State = MicrophoneOptionsResult;
 }
 
+/** @internal */
 export namespace MicRadioGroupOptions {
   export type Props = MicRadioGroupOptionsProps;
   export type State = MicRadioGroupCore.State;

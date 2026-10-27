@@ -11,6 +11,7 @@ import { useComposedRefs } from '../../utils/use-composed-refs';
 import { useMediaInstance } from '../../utils/use-media-instance';
 import { useSyncProps } from '../../utils/use-sync-props';
 
+/** @internal */
 export interface MoqPublishVideoProps
   extends Omit<VideoHTMLAttributes<HTMLVideoElement>, keyof MoqPublishMediaProps>, Partial<MoqPublishMediaProps> {
   children?: ReactNode;
@@ -21,6 +22,8 @@ export interface MoqPublishVideoProps
  * preview (muted, inline, autoplaying); the publisher props (`publishEndpoint`, `publishNamespace`,
  * `cameraActive`/`screenShareActive`/`micActive`, device selections, and mute toggles) are forwarded to the underlying
  * `MoqPublishMedia` host.
+ *
+ * @internal
  */
 export const MoqPublishVideo = forwardRef<HTMLVideoElement, MoqPublishVideoProps>(function MoqPublishVideo(
   { children, ...props },
@@ -41,6 +44,7 @@ export const MoqPublishVideo = forwardRef<HTMLVideoElement, MoqPublishVideoProps
   );
 });
 
+/** @internal */
 export namespace MoqPublishVideo {
   export type Props = MoqPublishVideoProps;
 }

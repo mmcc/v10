@@ -14,6 +14,8 @@ import { MediaUIElement } from '../media-ui-element';
  * `<media-publish-badge>` — publish session status badge. Renders the core's translated label ("Live" / "Connecting…" /
  * "Offline") as default content when no custom content is authored, and reflects the session lifecycle on
  * `data-publish-state` for styling.
+ *
+ * @internal
  */
 export class PublishBadgeElement extends MediaUIElement<PublishBadgeState, MediaPublishState> {
   static readonly tagName = 'media-publish-badge';

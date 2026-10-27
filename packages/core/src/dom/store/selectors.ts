@@ -27,14 +27,24 @@ import { volumeFeature } from './features/volume';
 export const selectAudioTrack = createSelector(audioTrackFeature);
 /** Select the buffer state (buffered, seekable). */
 export const selectBuffer = createSelector(bufferFeature);
-/** Select the capture devices state (cameras, microphones, selections). */
+/**
+ * Select the capture devices state (cameras, microphones, selections).
+ *
+ * @internal
+ */
 export const selectCaptureDevices = createSelector(captureDevicesFeature);
 /**
  * Select the capture source state (camera/screen/mic intents, pipeline states, screen share availability, toggle
  * actions).
+ *
+ * @internal
  */
 export const selectCaptureSource = createSelector(captureSourceFeature);
-/** Select the capture tracks state (cameraMuted, micMuted, set/toggle actions). */
+/**
+ * Select the capture tracks state (cameraMuted, micMuted, set/toggle actions).
+ *
+ * @internal
+ */
 export const selectCaptureTracks = createSelector(captureTracksFeature);
 /** Select the controls state (controlsVisible, userActive, toggleControls, requestControlsLock). */
 export const selectControls = createSelector(controlsFeature);
@@ -55,9 +65,17 @@ export const selectPiP = createSelector(pipFeature);
 export const selectPlayback = createSelector(playbackFeature);
 /** Select the playback rate state (playbackRate, playbackRates, setPlaybackRate). */
 export const selectPlaybackRate = createSelector(playbackRateFeature);
-/** Select the publish state (publishState, publishStartedAt, publish, unpublish). */
+/**
+ * Select the publish state (publishState, publishStartedAt, publish, unpublish).
+ *
+ * @internal
+ */
 export const selectPublish = createSelector(publishFeature);
-/** Select the publish stats state (publishStats, connectionQuality). */
+/**
+ * Select the publish stats state (publishStats, connectionQuality).
+ *
+ * @internal
+ */
 export const selectPublishStats = createSelector(publishStatsFeature);
 /** Select the quality state (videoRenditionList, activeVideoRendition, selectVideoRendition). */
 export const selectQuality = createSelector(qualityFeature);

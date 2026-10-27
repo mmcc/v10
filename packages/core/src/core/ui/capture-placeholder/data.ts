@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { CapturePlaceholderState } from './core';
 
+/** @internal */
 export const CapturePlaceholderDataAttrs = {
   /** Current capture lifecycle. */
   captureState: 'data-capture-state',

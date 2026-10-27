@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { PublishButtonState } from './core';
 
+/** @internal */
 export const PublishButtonDataAttrs = {
   /** Current publish session lifecycle. */
   session: 'data-publish-state',

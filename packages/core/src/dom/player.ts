@@ -227,6 +227,8 @@ export type LiveAudioFeatures = [
 /**
  * Features for a publisher (broadcast) player. Composes the publish and capture feature slices with the controls,
  * fullscreen, and error features needed by the surrounding UI.
+ *
+ * @internal
  */
 export type PublisherFeatures = [
   PlayerFeature<MediaPublishState>,
@@ -249,4 +251,5 @@ export type LiveVideoPlayerStore = PlayerStore<LiveVideoFeatures>;
 
 export type LiveAudioPlayerStore = PlayerStore<LiveAudioFeatures>;
 
+/** @internal */
 export type PublisherStore = PlayerStore<PublisherFeatures>;

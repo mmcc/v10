@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { EnableDevicesButtonState } from './core';
 
+/** @internal */
 export const EnableDevicesButtonDataAttrs = {
   /** Current capture lifecycle. */
   captureState: 'data-capture-state',

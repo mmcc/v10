@@ -10,6 +10,7 @@ import { PlayerController } from '../../player/controller';
 import { MenuRadioGroupElement } from '../menu/radio-group';
 import { RadioOptionsController } from '../radio-options/controller';
 
+/** @internal */
 export class MicRadioGroupElement extends MenuRadioGroupElement {
   static override readonly tagName = 'media-mic-radio-group';
 
@@ -74,6 +75,7 @@ export class MicRadioGroupElement extends MenuRadioGroupElement {
   }
 }
 
+/** @internal */
 export namespace MicRadioGroupElement {
   export type State = MicRadioGroupCore.State;
 }

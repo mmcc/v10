@@ -6,6 +6,7 @@ import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
 import { MediaButtonElement } from '../media-button-element';
 
+/** @internal */
 export class CameraButtonElement extends MediaButtonElement<CameraButtonState, MediaCaptureTracksState> {
   static readonly tagName = 'media-camera-button';
 

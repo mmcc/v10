@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { MicButtonState } from './core';
 
+/** @internal */
 export const MicButtonDataAttrs = {
   /** Present when outgoing audio is muted. */
   micMuted: 'data-muted',

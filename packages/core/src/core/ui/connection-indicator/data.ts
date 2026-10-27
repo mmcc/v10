@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { ConnectionIndicatorState } from './core';
 
+/** @internal */
 export const ConnectionIndicatorDataAttrs = {
   /** Coarse connection health (`unknown`, `good`, `fair`, or `poor`). */
   quality: 'data-quality',

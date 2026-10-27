@@ -8,6 +8,7 @@ import { microphoneText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface MicRadioGroupProps {
   /** Custom label for the options group. */
   label?: Text | string | ((state: MicRadioGroupState) => Text | string) | undefined;
@@ -17,11 +18,13 @@ export interface MicRadioGroupProps {
   disabled?: boolean | undefined;
 }
 
+/** @internal */
 export interface MicRadioGroupDevice {
   value: string;
   label: Text | string;
 }
 
+/** @internal */
 export interface MicRadioGroupState extends ButtonState {
   devices: readonly MicRadioGroupDevice[];
   value: string;
@@ -36,6 +39,7 @@ function formatDeviceLabel(device: MediaCaptureDeviceInfo, index: number): Text 
   return `${resolveText(microphoneText)} ${index + 1}`;
 }
 
+/** @internal */
 export class MicRadioGroupCore {
   static readonly defaultProps: NonNullableObject<MicRadioGroupProps> = {
     label: '',
@@ -117,6 +121,7 @@ export class MicRadioGroupCore {
   }
 }
 
+/** @internal */
 export namespace MicRadioGroupCore {
   export type Props = MicRadioGroupProps;
   export type State = MicRadioGroupState;

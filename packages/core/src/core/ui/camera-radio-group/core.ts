@@ -8,6 +8,7 @@ import { cameraText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface CameraRadioGroupProps {
   /** Custom label for the options group. */
   label?: Text | string | ((state: CameraRadioGroupState) => Text | string) | undefined;
@@ -17,11 +18,13 @@ export interface CameraRadioGroupProps {
   disabled?: boolean | undefined;
 }
 
+/** @internal */
 export interface CameraRadioGroupDevice {
   value: string;
   label: Text | string;
 }
 
+/** @internal */
 export interface CameraRadioGroupState extends ButtonState {
   devices: readonly CameraRadioGroupDevice[];
   value: string;
@@ -36,6 +39,7 @@ function formatDeviceLabel(device: MediaCaptureDeviceInfo, index: number): Text 
   return `${resolveText(cameraText)} ${index + 1}`;
 }
 
+/** @internal */
 export class CameraRadioGroupCore {
   static readonly defaultProps: NonNullableObject<CameraRadioGroupProps> = {
     label: '',
@@ -117,6 +121,7 @@ export class CameraRadioGroupCore {
   }
 }
 
+/** @internal */
 export namespace CameraRadioGroupCore {
   export type Props = CameraRadioGroupProps;
   export type State = CameraRadioGroupState;

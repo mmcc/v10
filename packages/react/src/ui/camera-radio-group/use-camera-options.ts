@@ -8,14 +8,17 @@ import { useCallback, useState } from 'react';
 import { useTranslator } from '../../i18n/context';
 import { usePlayer } from '../../player/context';
 
+/** @internal */
 export interface CameraOptionsProps extends CameraRadioGroupCore.Props {}
 
+/** @internal */
 export interface CameraOption {
   value: string;
   label: string;
   disabled: boolean;
 }
 
+/** @internal */
 export interface CameraOptionsResult {
   /** Translated accessible name for the options group. */
   label: string;
@@ -32,6 +35,7 @@ export interface CameraOptionsResult {
  * feature is not configured.
  *
  * @param props - Optional `label`, `formatDevice`, and `disabled` overrides.
+ * @internal
  */
 export function useCameraOptions(props?: CameraOptionsProps): CameraOptionsResult | null {
   'use no memo';
@@ -68,6 +72,7 @@ export function useCameraOptions(props?: CameraOptionsProps): CameraOptionsResul
   };
 }
 
+/** @internal */
 export namespace useCameraOptions {
   export type Props = CameraOptionsProps;
   export type Result = CameraOptionsResult;

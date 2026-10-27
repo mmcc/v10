@@ -12,6 +12,8 @@ import { MediaUIElement } from '../media-ui-element';
  * `<media-publish-timer>` — elapsed time since the publish session went live. `PublishTimerCore` is tick-less: this
  * element owns a one-second interval that runs only while the session is `live`, passing a fresh `now` to the core on
  * every render.
+ *
+ * @internal
  */
 export class PublishTimerElement extends MediaUIElement<PublishTimerState, MediaPublishState> {
   static readonly tagName = 'media-publish-timer';

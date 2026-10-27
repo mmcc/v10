@@ -4,101 +4,121 @@ import type { Text } from '../text';
 
 const prefix = 'publish.';
 
+/** @internal */
 export const goLiveText = {
   key: `${prefix}goLive`,
   text: 'Go live',
 } as const satisfies Text;
 
+/** @internal */
 export const stopStreamText = {
   key: `${prefix}stopStream`,
   text: 'Stop stream',
 } as const satisfies Text;
 
+/** @internal */
 export const connectingText = {
   key: `${prefix}connecting`,
   text: 'Connecting…',
 } as const satisfies Text;
 
+/** @internal */
 export const stoppingText = {
   key: `${prefix}stopping`,
   text: 'Stopping…',
 } as const satisfies Text;
 
+/** @internal */
 export const offlineText = {
   key: `${prefix}offline`,
   text: 'Offline',
 } as const satisfies Text;
 
+/** @internal */
 export const streamDurationText = {
   key: `${prefix}streamDuration`,
   text: 'Stream duration',
 } as const satisfies Text;
 
+/** @internal */
 export const cameraText = {
   key: `${prefix}camera`,
   text: 'Camera',
 } as const satisfies Text;
 
+/** @internal */
 export const microphoneText = {
   key: `${prefix}microphone`,
   text: 'Microphone',
 } as const satisfies Text;
 
+/** @internal */
 export const cameraOnText = {
   key: `${prefix}cameraOn`,
   text: 'Turn camera on',
 } as const satisfies Text;
 
+/** @internal */
 export const cameraOffText = {
   key: `${prefix}cameraOff`,
   text: 'Turn camera off',
 } as const satisfies Text;
 
+/** @internal */
 export const micMuteText = {
   key: `${prefix}micMute`,
   text: 'Mute microphone',
 } as const satisfies Text;
 
+/** @internal */
 export const micUnmuteText = {
   key: `${prefix}micUnmute`,
   text: 'Unmute microphone',
 } as const satisfies Text;
 
+/** @internal */
 export const shareScreenText = {
   key: `${prefix}shareScreen`,
   text: 'Share screen',
 } as const satisfies Text;
 
+/** @internal */
 export const stopSharingText = {
   key: `${prefix}stopSharing`,
   text: 'Stop sharing',
 } as const satisfies Text;
 
+/** @internal */
 export const enableDevicesText = {
   key: `${prefix}enableDevices`,
   text: 'Enable camera and microphone',
 } as const satisfies Text;
 
+/** @internal */
 export const permissionDeniedText = {
   key: `${prefix}permissionDenied`,
   text: 'Camera and microphone access is blocked. Update your browser permissions to continue.',
 } as const satisfies Text;
 
+/** @internal */
 export const connectionUnknownText = {
   key: `${prefix}connectionUnknown`,
   text: 'Connection quality: unknown',
 } as const satisfies Text;
 
+/** @internal */
 export const connectionGoodText = {
   key: `${prefix}connectionGood`,
   text: 'Connection quality: good',
 } as const satisfies Text;
 
+/** @internal */
 export const connectionFairText = {
   key: `${prefix}connectionFair`,
   text: 'Connection quality: fair',
 } as const satisfies Text;
 
+/** @internal */
 export const connectionPoorText = {
   key: `${prefix}connectionPoor`,
   text: 'Connection quality: poor',
