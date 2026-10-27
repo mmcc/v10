@@ -1,3 +1,4 @@
+import { createAudioPlayer as createCoreAudioPlayer } from '@caprid/moq-media';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import type { JitterFrame } from '../../track-subscriber';
@@ -9,6 +10,12 @@ import {
   type AudioPlayerInputOptions,
   createAudioRendererActor,
 } from '../audio-renderer';
+
+vi.mock('@caprid/moq-media', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@caprid/moq-media')>();
+
+  return { ...original, createAudioPlayer: vi.fn(original.createAudioPlayer) };
+});
 
 const FRAME_US = 20_000;
 const JITTER_TARGET_US = 60_000;
@@ -572,6 +579,9 @@ describe('createAudioRendererActor', () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(addModule).toHaveBeenCalledTimes(1);
+    // WebCodecs decoding: the core's WebAssembly libopus ignores a multistream
+    // OpusHead's channel mapping.
+    expect(createCoreAudioPlayer).toHaveBeenCalledWith({ context: baseContext, lossConcealment: false });
     expect(renderer.snapshot.get().context.error).toBe(workletUnavailable);
     renderer.destroy();
 
