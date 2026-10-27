@@ -108,7 +108,10 @@ export interface CreateTrackSubscriberOptions {
    * {@link MEDIA_SUBSCRIBER_PRIORITY}.
    */
   parameters?: MessageParameters;
-  /** Auth-expiry seam: return refreshed parameters to retry the subscribe with. */
+  /**
+   * Auth-expiry seam: return refreshed parameters to retry the subscribe with. Only auth rides it — the retry keeps the
+   * original `subscriberPriority` and `locationFilter` whatever this returns.
+   */
   refreshAuth?(): Promise<MessageParameters>;
   /**
    * Data-starvation watchdog: a live MSF media track delivers continuously, so a subscription this long without a
