@@ -46,9 +46,13 @@ const LOC_TIMESTAMP = 0x10;
 /**
  * The vi64 varint of draft-15+ (§8.1) — leading ones on the first byte give the encoded length minus one, so an L-byte
  * encoding of up to 8 bytes carries 7L value bits, and the 9-byte form (first byte 0xFF) a full 64. NOT the QUIC RFC
- * 9000 varint. Encoding stops at 8 bytes: their 56 bits already hold every integer a JS number represents exactly.
+ * 9000 varint. Encoding stops at 8 bytes: their 56 bits hold every safe integer (up to `Number.MAX_SAFE_INTEGER`), and
+ * anything else is rejected rather than mis-encoded — a double can hold some larger integers exactly, such as 2^56.
  */
 function varintByteLength(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new RangeError(`varint: ${value} is not a safe unsigned integer`);
+
   for (let length = 1; length < 8; length++) {
     if (value < 2 ** (7 * length)) return length;
   }
