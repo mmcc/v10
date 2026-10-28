@@ -1,8 +1,12 @@
+import { createMoqtSession } from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { signal } from '../../../core/signals/primitives';
-import { createMoqtSession } from '../../../network/moqt/session';
-import { createTransportPair, type TransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
+import {
+  createTransportPair,
+  type TransportPair,
+  withServerRequestIds,
+} from '../../../network/tests/helpers/transport-pair';
 import type { ConnectPublishTransport } from '../../session/publish-session';
 import {
   type OpenPublishSessionContext,
@@ -23,7 +27,7 @@ const disposals: (() => void)[] = [];
 
 function makeAcceptingPeer(pair: TransportPair) {
   const closes: unknown[] = [];
-  const peer = createMoqtSession(pair.server, {
+  const peer = createMoqtSession(withServerRequestIds(pair.server), {
     callbacks: {
       onIncomingPublish: (_publish, respond) => respond.accept(),
       onClosed: (info) => closes.push(info),

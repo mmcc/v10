@@ -69,7 +69,9 @@ export function createSubscriber(hub: RelayHub, disposals: (() => void)[]) {
   disposals.push(() => void audioContext.close().catch(() => undefined));
   void audioContext.resume().catch(() => undefined);
   player.context.renderSurface.set(canvas);
-  player.context.audioContext.set(audioContext);
+  // The renderer's worklet core needs `baseContext`, which the adapter's render context supplies; driving the engine
+  // directly has to supply it too.
+  player.context.audioContext.set(Object.assign(audioContext, { baseContext: audioContext }));
   player.state.presentation.set({ url: 'moqt://relay.test/live#msf:live--catalog' });
   player.state.loadActivated.set(true);
 

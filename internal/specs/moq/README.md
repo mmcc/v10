@@ -4,11 +4,11 @@ Verbatim IETF Internet-Draft texts for the protocols the MoQ stack in `packages/
 
 For a complete catalog example and the current player's media requirements, see [Publish a stream for the MoQ player](../../../packages/spf/docs/moq-publishing.md).
 
-The version the code actually speaks is declared in code: the transport comes from the `@caprid/moq-core` dependency of `packages/spf` (its `MOQT_PROTOCOL_IDS` lists the versions the player offers, most preferred first; `moqt-20` is the fallback), and the header comments of `packages/spf/src/media/moq/loc.ts` and `parse-catalog.ts` for LOC and MSF. When the vendored text is newer than the code pin, the gap is tracked by a migration plan under `.agents/plans/`.
+The version the code actually speaks is declared in code: the transport comes from the `@caprid/moq-core` dependency of `packages/spf` (its `MOQT_PROTOCOL_IDS` lists the versions the player and the publisher offer, most preferred first; `moqt-20` is the fallback), and the header comments of `packages/spf/src/media/moq/loc.ts` and `parse-catalog.ts` for LOC and MSF. When the vendored text is newer than the code pin, the gap is tracked by a migration plan under `.agents/plans/`.
 
 | Draft | Revision | Published | Implemented in |
 | --- | --- | --- | --- |
-| Media over QUIC Transport | `draft-ietf-moq-transport-22` | 2026-10-01 | `@caprid/moq-core`, consumed by `packages/spf/src/playback/actors/moq-session.ts` |
+| Media over QUIC Transport | `draft-ietf-moq-transport-22` | 2026-10-01 | `@caprid/moq-core`, consumed by `packages/spf/src/playback/actors/moq-session.ts` and `packages/spf/src/publish/session/publish-session.ts` |
 | Low Overhead Media Container (LOC) | `draft-ietf-moq-loc-04` | 2026-07-20 | `packages/spf/src/media/moq/loc.ts` |
 | MOQT Streaming Format (MSF) | `draft-ietf-moq-msf-01` | 2026-06-02 | `packages/spf/src/media/moq/parse-catalog.ts`, `parse-source.ts` |
 

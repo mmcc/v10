@@ -1,9 +1,9 @@
+import { type MoqtObject } from '@caprid/moq-core';
 import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { toLocFrame } from '../../../media/moq/loc';
 import { packageLocFrame } from '../../../media/moq/loc-packaging';
-import { StreamReader } from '../../../network/moqt/bytes';
-import { type MoqtObject, readSubgroupHeader, readSubgroupObjects } from '../../../network/moqt/object-stream';
+import { StreamReader, readSubgroupHeader, readSubgroupObjects } from '../../../network/tests/helpers/moqt-wire';
 import { createTrackPublisherActor, type TrackPublisherActor } from '../track-publisher';
 
 // =============================================================================
@@ -11,6 +11,8 @@ import { createTrackPublisherActor, type TrackPublisherActor } from '../track-pu
 // =============================================================================
 
 interface FakeUniStream {
+  /** The subscription alias the stream was opened for. */
+  trackAlias?: number;
   chunks: Uint8Array[];
   closed: boolean;
   aborted: boolean;
@@ -27,8 +29,8 @@ function makeStreamFactory() {
     releaseAll() {
       for (const release of releases.splice(0)) release();
     },
-    openUniStream: async (): Promise<WritableStream<Uint8Array>> => {
-      const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+    openUniStream: async (trackAlias: number): Promise<WritableStream<Uint8Array>> => {
+      const record: FakeUniStream = { trackAlias, chunks: [], closed: false, aborted: false };
 
       streams.push(record);
       return new WritableStream<Uint8Array>({
@@ -229,8 +231,8 @@ describe('createTrackPublisherActor', () => {
     // groups reset by the drop policy) while in-memory transports, whose
     // close() settles instantly, showed nothing.
     const streams: FakeUniStream[] = [];
-    const openUniStream = async (): Promise<WritableStream<Uint8Array>> => {
-      const record: FakeUniStream = { chunks: [], closed: false, aborted: false };
+    const openUniStream = async (trackAlias: number): Promise<WritableStream<Uint8Array>> => {
+      const record: FakeUniStream = { trackAlias, chunks: [], closed: false, aborted: false };
 
       streams.push(record);
       return new WritableStream<Uint8Array>({
@@ -338,33 +340,23 @@ describe('createTrackPublisherActor', () => {
     ]);
   });
 
-  it('counts the data streams opened under each subscription alias, pruning superseded ones', async () => {
+  it('opens each group stream for the subscription bound when the group started', async () => {
     const factory = makeStreamFactory();
     const publisher = createTrackPublisherActor({ openUniStream: factory.openUniStream, groupPerFrame: true });
     const frame = (timestampUs: number) =>
       ({ type: 'frame', payload: new Uint8Array([1]), properties: [], keyframe: true, timestampUs }) as const;
 
-    // Unbound frames open nothing and count for no one.
+    // Unbound frames open nothing.
     publisher.send(frame(0));
     publisher.send({ type: 'bind', trackAlias: 3 });
     publisher.send(frame(1));
+    await vi.waitFor(() => expect(counters(publisher).publishedGroups).toBe(1));
+
+    publisher.send({ type: 'bind', trackAlias: 5 });
     publisher.send(frame(2));
     await vi.waitFor(() => expect(counters(publisher).publishedGroups).toBe(2));
 
-    // A Forward State toggle unbinds and rebinds the same alias: its
-    // count must survive, or PUBLISH_DONE would under-report.
-    publisher.send({ type: 'unbind' });
-    publisher.send({ type: 'bind', trackAlias: 3 });
-    publisher.send(frame(3));
-    await vi.waitFor(() => expect(counters(publisher).publishedGroups).toBe(3));
-    expect(publisher.streamCount(3)).toBe(3);
-
-    // A new alias supersedes the old subscription, whose count is pruned.
-    publisher.send({ type: 'bind', trackAlias: 5 });
-    publisher.send(frame(4));
-    await vi.waitFor(() => expect(counters(publisher).publishedGroups).toBe(4));
-
-    expect([publisher.streamCount(3), publisher.streamCount(5), publisher.streamCount(7)]).toEqual([0, 1, 0]);
+    expect(factory.streams.map((stream) => stream.trackAlias)).toEqual([3, 5]);
     publisher.destroy();
   });
 

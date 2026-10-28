@@ -1,9 +1,12 @@
+import { type MoqtTransport, createMoqtSession } from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import type { MoqtTransport } from '../../../../network/moqt/session';
-import { createMoqtSession } from '../../../../network/moqt/session';
-import { solicitNamespace } from '../../../../network/moqt/tests/helpers/raw-peer';
-import { createTransportPair, type TransportPair } from '../../../../network/moqt/tests/helpers/transport-pair';
+import { solicitNamespace } from '../../../../network/tests/helpers/raw-peer';
+import {
+  createTransportPair,
+  type TransportPair,
+  withServerRequestIds,
+} from '../../../../network/tests/helpers/transport-pair';
 import type { ConnectPublishTransport } from '../../../session/publish-session';
 import { MoqPublishMediaMixin, type MoqPublishMediaOptions } from '../adapter';
 
@@ -40,7 +43,7 @@ function makePublishableMedia(connectTransport: ConnectPublishTransport = pendin
 
 /** A subscribe-side peer completing SETUP, so sessions can come up. */
 function makePeer(pair: TransportPair) {
-  const peer = createMoqtSession(pair.server, {});
+  const peer = createMoqtSession(withServerRequestIds(pair.server), {});
 
   disposals.push(() => peer.destroy());
   return peer;
