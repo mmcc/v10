@@ -6,7 +6,7 @@ import {
   type MediaStreamType,
   MediaStreamTypes,
 } from '@videojs/media';
-import { HTMLVideoAdapter } from '@videojs/media/dom';
+import { getMediaEngineName, HTMLVideoAdapter } from '@videojs/media/dom';
 import { type NativeHlsConfig, NativeHlsAdapter, type NativeHlsSource } from '@videojs/native-hls-video';
 import { deepEqual } from '@videojs/utils/object';
 import Hls, { type HlsConfig as HlsJsConfig } from 'hls.js';
@@ -19,15 +19,19 @@ export type { MediaResolution };
 
 export { Hls };
 
-export type PlaybackType = (typeof PlaybackTypes)[keyof typeof PlaybackTypes];
-export type SourceType = (typeof ContentTypes)[keyof typeof ContentTypes];
+/** How hls.js plays a source: through Media Source Extensions, or the browser's native HLS support. */
+export type PlaybackType = 'mse' | 'native' | (string & {});
+/** A source's MIME type, such as `application/vnd.apple.mpegurl` for HLS or `video/mp4`. */
+export type SourceType = 'application/vnd.apple.mpegurl' | 'video/mp4' | (string & {});
 export type StreamType = MediaStreamType;
 
+/** @internal */
 export const PlaybackTypes = {
   MSE: 'mse',
   NATIVE: 'native',
 };
 
+/** @internal */
 export const ContentTypes = {
   M3U8: 'application/vnd.apple.mpegurl',
   MP4: 'video/mp4',
@@ -48,6 +52,7 @@ const HLS_CONTENT_TYPES: ReadonlySet<string> = new Set([
 
 const MP4_CONTENT_TYPES: ReadonlySet<string> = new Set([ContentTypes.MP4]);
 
+/** @internal */
 export const StreamTypes = MediaStreamTypes;
 
 export interface HlsJsAdapterProps {
@@ -221,6 +226,14 @@ export class HlsJsAdapter extends HTMLVideoAdapter implements HlsJsAdapterProps 
    */
   get engine() {
     return this.#delegate?.engine ?? null;
+  }
+
+  /**
+   * Engine this media is playing through, reported to analytics such as Mux Data: `hlsjs` via MSE, `browser` for native
+   * HLS, or `undefined` until a source loads. Read from the instance because the engine is picked per source.
+   */
+  get engineName(): string | undefined {
+    return getMediaEngineName(this.#delegate);
   }
 
   get error() {

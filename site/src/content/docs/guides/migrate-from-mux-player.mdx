@@ -26,7 +26,7 @@ Make a migration checklist before changing your embed:
 
 - **List the Mux Player attributes or React props you set.** Compare them with the mapping tables below.
 - **Grep your codebase for `mux-player` selectors.** After the swap, CSS rules and `querySelector` calls that reach into the element stop matching, with no error. Look for patterns such as `mux-player::part(…)`, `mux-player [role="slider"]`, and `player.shadowRoot`. Restyle the UI with the skin's custom properties or rebuild it with Video.js components.
-- **Find your event listeners and imperative calls** (`play()`, `currentTime`, `addChapters`). Media APIs move to the media element; the rest is mapped under [Drive playback](#drive-playback).
+- **Find your event listeners and imperative calls** (`play()`, `currentTime`, `addChapters`). Media APIs move to the media component; the rest is mapped under [Drive playback](#drive-playback).
 - **Note your theme and CSS variables.** Compare your Mux Player theme with the two Video.js skins, and map its CSS variables.
 - **Check [Known gaps](#known-gaps)** for features your app needs.
 - **Check your catalog for MPEG-TS, raw ADTS AAC, AES-128, low-latency HLS, or DVR streams.** Check whether the SPF engine supports these requirements. If you use DRM, verify playback with whichever engine you choose. See [Which Mux media should you use?](#which-mux-media-should-you-use).
@@ -505,7 +505,7 @@ Choose the smallest customization that meets your existing UI requirements: a pa
 
 ### Level 1: pick a skin
 
-Video.js has two packaged skins. The Default skin groups settings in a menu. The Minimal skin has a compact layout like a classic player control bar. Both bring controls, tooltips, captions, keyboard shortcuts, touch gestures, and a settings menu that appears when there's something to put in it. See <DocsLink slug="guides/skins">Skins</DocsLink>.
+Video.js has four packaged skins. The Default skin groups settings in a menu. The Neutral skin has a compact layout like a classic player control bar. The Compat skin has plain, unbranded surfaces with large play and seek buttons in the center. The Scaffold skin has Compat's controls with minimal styling, as a starting point for your own design. All four bring controls, tooltips, captions, keyboard shortcuts, touch gestures, and a settings menu that appears when there's something to put in it. See <DocsLink slug="guides/skins" anchor="choose-a-skin">Choose a skin</DocsLink>.
 
 ### Level 2: restyle it
 
@@ -596,9 +596,9 @@ To remove a control, remove it and its tooltip wrapper from the local controls l
 For UI state rather than media state, use <DocsLink slug="reference/api/player-controller">`PlayerController`</DocsLink> inside a custom element. Give it a selector for the feature you care about and it keeps your element in sync:
 
 ```js
-import { PlayerController, playerContext, ReactiveElement, selectTime } from '@videojs/html';
+import { PlayerController, playerContext, selectTime, UIElement } from '@videojs/html';
 
-class MyElapsed extends ReactiveElement {
+class MyElapsed extends UIElement {
   #time = new PlayerController(this, playerContext, selectTime);
 
   update(changed) {
@@ -925,8 +925,8 @@ The SPF flavor supports FairPlay, Widevine, and PlayReady through its EME licens
 | Mux Player | Video.js v10 |
 |---|---|
 | `media.nativeEl` | `ref.current` from a `ref` on the media component |
-| the Video.js media object | `useMedia()` inside the player |
-| the hls.js instance | the media object's `.engine`, reached through `useMedia`, on the hls.js-backed flavor |
+| the Video.js media object | `mediaRef.current` from a `mediaRef` on the media component, or `useMedia()` inside the player |
+| the hls.js instance | the media object's `.engine` on the hls.js-backed flavor |
 | `prefer-playback` | `source.preferPlayback`, or pick <DocsLink slug="reference/components/native-hls-video">native HLS</DocsLink> outright |
 </FrameworkCase>
 
@@ -937,7 +937,7 @@ Reading `.engine` couples your app to hls.js and the `/hls-js` flavor. Prefer Vi
 </Aside>
 
 <FrameworkCase frameworks={["react"]}>
-The media component's React ref is the native `HTMLVideoElement`; it has no `.target` or `.host`. Call `useMedia()` inside the player to get the Video.js media object:
+The media component's React ref is the native `HTMLVideoElement`; it has no `.target` or `.host`. Pass a `mediaRef` to the media component, or call `useMedia()` inside the player, to get the Video.js media object:
 
 ```tsx
 import { useMedia } from '@videojs/react';
@@ -960,7 +960,7 @@ Video.js has no Program Date Time (PDT) helpers such as `getStartDate()` or `cur
 
 Check these limitations against your required features:
 
-- The two packaged skins do not reproduce Mux Player's themes, and there is no runtime theme switch. Plan skin customization when preserving a theme such as `classic`.
+- The packaged skins do not reproduce Mux Player's themes, and there is no runtime theme switch. Plan skin customization when preserving a theme such as `classic`.
 - Lazy loading (`loading="viewport|page"`) has no equivalent.
 - The controls auto-hide delay isn't configurable ([#1728](https://github.com/videojs/v10/issues/1728)). For always-visible controls, set `visibility="always"` on the controls component in a custom layout or installed skin source.
 - Player preferences such as volume, captions language, speed, and quality are not persisted automatically ([#944](https://github.com/videojs/v10/issues/944)). Mux users can set `source.playback.defaultSubtitlesLang` so the HLS playlist sets the default subtitle language. For application-managed persistence, follow <DocsLink slug="guides/user-preferences">Remember user preferences</DocsLink>.

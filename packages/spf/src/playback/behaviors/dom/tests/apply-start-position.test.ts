@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vite-plus/test';
 
-import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
+import type { ContextSignals, StateSignals } from '../../../../core/composition/define-behavior';
 import { signal } from '../../../../core/signals/primitives';
 import type { MaybeResolvedPresentation, Presentation } from '../../../../media/types';
 import { applyStartPosition, type StartPositionContext, type StartPositionState } from '../apply-start-position';
@@ -52,24 +52,6 @@ function setupApplyStartPosition(initialState: StartPositionState = {}, initialC
 }
 
 describe('applyStartPosition', () => {
-  it('seeds state.currentTime immediately so loaders anchor at the start position', async () => {
-    const video = makeVideo();
-    const { state, reactor } = setupApplyStartPosition(
-      { presentation: makeResolvedPresentation(), startPosition: 42 },
-      { mediaElement: video }
-    );
-
-    // Seed lands before any metadata — this is what points the segment
-    // loaders' first load window at P instead of 0.
-    await vi.waitFor(() => expect(state.currentTime.get()).toBe(42));
-    // The element can't seek yet (no metadata) and the command is not yet
-    // consumed — it must survive until the element can actually honor it.
-    expect(video.currentTime).toBe(0);
-    expect(state.startPosition.get()).toBe(42);
-
-    reactor.destroy();
-  });
-
   it('seeks the element and consumes the command once metadata arrives', async () => {
     const video = makeVideo();
     const { state, reactor } = setupApplyStartPosition(
@@ -78,6 +60,9 @@ describe('applyStartPosition', () => {
     );
 
     await vi.waitFor(() => expect(state.currentTime.get()).toBe(42));
+
+    expect(video.currentTime).toBe(0);
+    expect(state.startPosition.get()).toBe(42);
 
     reachMetadata(video);
 

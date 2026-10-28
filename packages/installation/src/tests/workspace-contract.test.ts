@@ -98,9 +98,13 @@ describe('installation workspace contract', () => {
 
   it('keeps AI Quickstart scoped to packages represented by installation instructions', () => {
     const required = new Set([
+      // Core is never installed directly; its README routes readers to the framework packages.
+      '@videojs/core',
       '@videojs/html',
       '@videojs/react',
       '@videojs/cdn',
+      // `video.js` routes npm installs to the framework packages, so its README carries the same AI Quickstart.
+      'video.js',
       ...adapterPackages,
       ...extensionPackages,
     ]);

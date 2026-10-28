@@ -24,7 +24,7 @@ export default styles({
       utilities: [],
       variants: {
         default: 'media-max-lg:hidden',
-        minimal: 'media-max-xs:hidden',
+        neutral: 'media-max-xs:hidden',
       },
     },
     root: {
@@ -48,8 +48,8 @@ export default styles({
           'media-lg:pointer-fine:not-data-visible:blur-media-hidden',
           'media-lg:not-data-visible:duration-media-controls',
         ],
-        minimal: [
-          'absolute inset-x-0.5 bottom-0.5 z-30 flex items-center rtl:flex-row-reverse gap-x-2 rounded-media-controls bg-transparent p-1 media-opaque:bg-media-background',
+        neutral: [
+          'absolute inset-x-0.5 bottom-0.5 z-30 flex items-center rtl:flex-row-reverse gap-x-2 rounded-media-controls bg-transparent p-1 media-high-contrast:bg-media-background',
           'transition-[filter,opacity,translate]',
           'not-data-visible:pointer-events-none not-data-visible:opacity-0',
           'not-data-visible:duration-media-controls',
@@ -62,9 +62,17 @@ export default styles({
     },
     backdrop: {
       utilities: [
-        'pointer-events-none absolute inset-0 z-10 rounded-[inherit] bg-(image:--media-controls-gradient)',
+        'pointer-events-none absolute inset-0 z-10 rounded-[inherit]',
+        'bg-(image:--media-controls-gradient) bg-bottom bg-no-repeat bg-size-[100%_var(--media-controls-gradient-height)]',
         'transition-opacity duration-media-controls ease-out not-data-visible:opacity-0',
       ],
+      variants: {
+        // Below lg the secondary group floats at the top, so it needs a scrim of its own.
+        default: [
+          'media-max-lg:before:absolute media-max-lg:before:inset-x-0 media-max-lg:before:top-0',
+          'media-max-lg:before:h-(--media-controls-gradient-height) media-max-lg:before:bg-(image:--media-controls-top-gradient)',
+        ],
+      },
     },
     primary: {
       utilities: [

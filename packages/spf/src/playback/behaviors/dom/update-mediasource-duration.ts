@@ -37,7 +37,7 @@
  * Downstream of `calculatePresentationDuration` (which writes `presentation.duration`); concurrent with `endOfStream`
  * (which may later write `mediaSource.duration` — the "exactly once" contract keeps us out of that path).
  */
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
 import { computed, type ReadonlySignal } from '../../../core/signals/primitives';
@@ -144,7 +144,8 @@ function updateMediaSourceDurationSetup({
             const maxBufferedEnd = getMaxBufferedEnd(mediaSource.sourceBuffers);
             const duration = maxBufferedEnd > presentation.duration! ? maxBufferedEnd : presentation.duration!;
 
-            mediaSource.duration = duration;
+            // A concurrent append may have established duration while we awaited idle buffers.
+            if (Number.isNaN(mediaSource.duration)) mediaSource.duration = duration;
           };
 
           writeWhenReady();

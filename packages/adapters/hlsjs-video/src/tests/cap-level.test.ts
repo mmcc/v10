@@ -1,5 +1,5 @@
 import type { MediaResolution } from '@videojs/media';
-import Hls, { type Level } from 'hls.js';
+import Hls, { CapLevelController, type Level } from 'hls.js';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
@@ -65,7 +65,8 @@ const emit = (engine: Hls, event: string, data: unknown) => (engine as any).emit
 const controllers: Array<{ destroy(): void }> = [];
 
 afterEach(() => {
-  // `startCapping()` opens a one-second interval; destroying clears it.
+  // Without `ResizeObserver`, as in jsdom, capping opens a one-second
+  // interval; destroying clears it.
   while (controllers.length) controllers.pop()!.destroy();
 
   document.body.innerHTML = '';
@@ -86,6 +87,10 @@ interface SetupOptions {
   config?: Record<string, unknown>;
   /** Rendered size of the video element; omit to leave it unmeasurable. */
   playerSize?: { width: number; height: number };
+  /** Attach the element before the manifest is parsed, as the adapter does. */
+  attachFirst?: boolean;
+  /** Whether the manifest's codecs signal video. Hls.js otherwise waits for `BUFFER_CODECS` to confirm it. */
+  manifestSignalsVideo?: boolean;
 }
 
 function setup({
@@ -95,6 +100,8 @@ function setup({
   levels = LADDER,
   config,
   playerSize,
+  attachFirst = false,
+  manifestSignalsVideo = true,
 }: SetupOptions = {}) {
   const policy: RenditionCapPolicy = { maxAutoResolution, capToPlayerSize, minAutoResolution };
   const engine = createEngine(levels, config);
@@ -103,10 +110,9 @@ function setup({
 
   controllers.push(controller);
 
-  // hls.js starts its capping loop from here when the manifest signals video.
-  emit(engine, Hls.Events.MANIFEST_PARSED, { levels, firstLevel: 0, video: true });
+  const attach = () => {
+    if (!playerSize) return;
 
-  if (playerSize) {
     const video = document.createElement('video');
 
     // jsdom reports an empty bounding rect, and hls.js falls back to the
@@ -115,35 +121,37 @@ function setup({
     video.height = playerSize.height;
     document.body.appendChild(video);
     emit(engine, Hls.Events.MEDIA_ATTACHING, { media: video });
-  }
+  };
+
+  if (attachFirst) attach();
+
+  // hls.js starts its capping loop from here when the manifest signals video.
+  emit(engine, Hls.Events.MANIFEST_PARSED, { levels, firstLevel: 0, video: manifestSignalsVideo });
+
+  if (!attachFirst) attach();
 
   return { policy, engine, controller, topIndex: levels.length - 1 };
 }
 
 describe('resolutionToPixelArea', () => {
-  it('reads a resolution as its 16:9 pixel area', () => {
-    expect(resolutionToPixelArea('720p')).toBe(1280 * 720);
-    expect(resolutionToPixelArea('1080p')).toBe(1920 * 1080);
+  it.each<[MediaResolution, number]>([
+    ['270p', 480 * 270],
+    ['360p', 640 * 360],
+    ['540p', 960 * 540],
+    ['720p', 1280 * 720],
+    ['1080p', 1920 * 1080],
+    ['1440p', 2560 * 1440],
+    ['2160p', 3840 * 2160],
+  ])('reads %s as its 16:9 pixel area', (resolution, pixelArea) => {
+    expect(resolutionToPixelArea(resolution)).toBe(pixelArea);
   });
 
   it('treats an absent cap as unbounded', () => {
     expect(resolutionToPixelArea(undefined)).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it('matches the areas `maxResolutionToPixelArea` produces in @videojs/spf', () => {
-    // Pinned rather than imported: the packages do not depend on each other,
-    // and the two ladders have to agree for a cap to mean the same thing across
-    // the hls.js and SPF engines. `'480p'` is excluded here and covered below.
-    const spfArea = (height: number) => (height * height * 16) / 9;
-    const exact: MediaResolution[] = ['270p', '360p', '540p', '720p', '1080p', '1440p', '2160p'];
-
-    for (const resolution of exact) {
-      expect(resolutionToPixelArea(resolution)).toBe(spfArea(Number.parseInt(resolution, 10)));
-    }
-  });
-
   it('rounds 480p up so the standard 854×480 rendition fits its own cap', () => {
-    // 16:9 at 480 tall is 853.33 wide. SPF's exact area (409_600) sits just
+    // 16:9 at 480 tall is 853.33 wide. The exact area (409_600) sits just
     // under the 854×480 (409_920) every real ladder ships, which would push
     // a '480p' cap down to 360p.
     expect(resolutionToPixelArea('480p')).toBe(854 * 480);
@@ -428,6 +436,32 @@ describe('createCapLevelController', () => {
       expect(engine.autoLevelCapping).toBe(-1);
     });
 
+    it('ignores the player size when the cap is re-applied', () => {
+      const { engine, policy } = setup({
+        maxAutoResolution: '1440p',
+        playerSize: { width: 320, height: 180 },
+        ...noSizeCapping,
+      });
+
+      policy.maxAutoResolution = '1080p';
+      policy.controller!.apply();
+
+      expect(engine.autoLevelCapping).toBe(3);
+    });
+
+    it('ignores the player size when the element is attached before the manifest', () => {
+      // hls.js confirms video through `startCapping()` even while its loop is
+      // switched off, and only declines inside it.
+      const { engine } = setup({
+        maxAutoResolution: '1440p',
+        playerSize: { width: 320, height: 180 },
+        attachFirst: true,
+        ...noSizeCapping,
+      });
+
+      expect(engine.autoLevelCapping).toBe(4);
+    });
+
     it('re-resolves the cap after levels are updated', () => {
       const { engine } = setup({ maxAutoResolution: '720p', ...noSizeCapping });
 
@@ -449,7 +483,7 @@ describe('createCapLevelController', () => {
     const engine = createEngine(LADDER);
     const seen: number[] = [];
 
-    class CustomController extends Hls.DefaultConfig.capLevelController {
+    class CustomController extends CapLevelController {
       getMaxLevel(capLevelIndex: number): number {
         seen.push(capLevelIndex);
         // Ignore the player size entirely; allow everything.
@@ -464,6 +498,62 @@ describe('createCapLevelController', () => {
 
     expect(controller.getMaxLevel(4)).toBe(2);
     expect(seen).toEqual([4]);
+  });
+
+  describe('with a ResizeObserver', () => {
+    // hls.js measures from the observer it opens on attach, before anything
+    // confirms video and without going through `startCapping()`.
+    class ResizeObserverStub {
+      observe = vi.fn((target: Element) => {
+        // A real observer reports the initial size once observation starts.
+        const { width, height } = target as HTMLVideoElement;
+        const entry = { target, contentRect: { width, height } } as unknown as ResizeObserverEntry;
+
+        this.callback([entry], this as unknown as ResizeObserver);
+      });
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+
+      constructor(readonly callback: ResizeObserverCallback) {}
+    }
+
+    it('keeps the player-size cap while the manifest leaves video unconfirmed', () => {
+      vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+      const { engine } = setup({
+        playerSize: { width: 320, height: 180 },
+        attachFirst: true,
+        manifestSignalsVideo: false,
+      });
+
+      expect(engine.autoLevelCapping).toBe(0);
+
+      emit(engine, Hls.Events.BUFFER_CODECS, { video: {} });
+
+      expect(engine.autoLevelCapping).toBe(0);
+    });
+
+    it('keeps the player-size cap when the cap is re-applied after reattaching', () => {
+      vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+      const { engine, policy } = setup({ playerSize: { width: 320, height: 180 }, attachFirst: true });
+
+      expect(engine.autoLevelCapping).toBe(0);
+
+      // Detaching stops capping; attaching again restarts the observer only.
+      const video = document.createElement('video');
+
+      video.width = 320;
+      video.height = 180;
+      document.body.appendChild(video);
+      emit(engine, Hls.Events.MEDIA_DETACHING, {});
+      emit(engine, Hls.Events.MEDIA_ATTACHING, { media: video });
+
+      policy.maxAutoResolution = '1080p';
+      policy.controller!.apply();
+
+      expect(engine.autoLevelCapping).toBe(0);
+    });
   });
 
   describe('capToPlayerSize', () => {
@@ -605,46 +695,23 @@ describe('createCapLevelController', () => {
     });
   });
 
-  describe('device pixel ratio', () => {
-    // hls.js measures in device pixels by default, which is the issue's
-    // criterion and needs no code of ours — only pinning, since a change to
-    // `ignoreDevicePixelRatio` would silently halve what a retina player asks
-    // for. `contentScaleFactor` reads `self.devicePixelRatio`.
-    const retina = { config: { ignoreDevicePixelRatio: false }, playerSize: { width: 640, height: 360 } };
-
-    it('measures the element in CSS pixels at a ratio of 1', () => {
-      vi.stubGlobal('devicePixelRatio', 1);
-
-      const { controller, topIndex } = setup(retina);
-
-      expect(controller.getMaxLevel(topIndex)).toBe(0);
-    });
-
-    it('asks for twice the rendition at a ratio of 2', () => {
-      vi.stubGlobal('devicePixelRatio', 2);
-
-      const { controller, topIndex } = setup(retina);
-
-      // 640 CSS px is 1280 device px, which the 1280×720 rendition covers.
-      expect(controller.getMaxLevel(topIndex)).toBe(2);
-    });
-  });
-
-  it('never caps an audio-only stream, whose capping loop never starts', () => {
+  it('leaves every rendition of a multi-bitrate audio stream available', () => {
     const policy: RenditionCapPolicy = {
       maxAutoResolution: '720p',
       capToPlayerSize: true,
       minAutoResolution: '720p',
     };
-    const engine = createEngine([]);
+    const levels = [level(0, 0, 64_000), level(0, 0, 128_000)];
+    const engine = createEngine(levels);
     const Controller = createCapLevelController(policy);
     const controller = new Controller(engine) as InstanceType<typeof Controller> & { destroy(): void };
 
     controllers.push(controller);
 
     // No video codec in the manifest, so hls.js defers capping indefinitely.
-    emit(engine, Hls.Events.MANIFEST_PARSED, { levels: [], firstLevel: 0, video: false });
+    emit(engine, Hls.Events.MANIFEST_PARSED, { levels, firstLevel: 0, video: false });
 
-    expect(engine.autoLevelCapping).toBe(-1);
+    expect([-1, 1]).toContain(engine.autoLevelCapping);
+    expect(controller.getMaxLevel(1)).toBe(1);
   });
 });

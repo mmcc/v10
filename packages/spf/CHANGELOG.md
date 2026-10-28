@@ -1,5 +1,86 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/spf@10.1.0...@videojs/spf@10.2.0) (2026-10-22)
+
+
+### Features
+
+* **spf:** compose the HLS engines from features ([#9395](https://github.com/videojs/video.js/issues/9395)) ([76620b1](https://github.com/videojs/video.js/commit/76620b1da9e8ace8a8fd6d223f8a0bc2bc7c5bae))
+
+
+### Bug Fixes
+
+* **spf:** block segment loading under DRM regardless of composition order ([#9394](https://github.com/videojs/video.js/issues/9394)) ([3f69079](https://github.com/videojs/video.js/commit/3f69079be001eed6ea7ab7e1dd8a2183b4264444))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.2.0
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/spf@10.0.1...@videojs/spf@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **packages:** support hls json chapters in hls.js and native hls ([#2993](https://github.com/videojs/video.js/issues/2993)) ([511e8a6](https://github.com/videojs/video.js/commit/511e8a69db8fb111d2d41f9e55910a243b5ef6ed))
+* **spf:** send credentials with hls requests for crossorigin="use-credentials" ([#2870](https://github.com/videojs/video.js/issues/2870)) ([897901b](https://github.com/videojs/video.js/commit/897901b88359dca0dc3e59fcecd766cb59f8fe24))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.1.0
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/spf@10.0.0...@videojs/spf@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/spf:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.1
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/spf@10.0.0-rc.5...@videojs/spf@10.0.0) (2026-10-01)
+
+
+### Features
+
+* **packages:** release Video.js 10.0.0 as stable ([#3058](https://github.com/videojs/v10/issues/3058)) ([37477fc](https://github.com/videojs/v10/commit/37477fc187f36fc2ab3cbc0db7c1b2d3fc6bcca9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/spf@10.0.0-rc.4...@videojs/spf@10.0.0-rc.5) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/spf:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/media bumped to 10.0.0-rc.5
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/spf@10.0.0-rc.3...@videojs/spf@10.0.0-rc.4) (2026-09-26)
 
 

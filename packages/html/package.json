@@ -1,6 +1,6 @@
 {
   "name": "@videojs/html",
-  "version": "10.0.0-rc.4",
+  "version": "10.2.0",
   "description": "Video.js 10 for HTML, Vue, and Svelte: player custom elements and skins for video and audio",
   "keywords": [
     "audio",
@@ -22,7 +22,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/videojs/v10",
+    "url": "https://github.com/videojs/video.js",
     "directory": "packages/html"
   },
   "files": [
@@ -148,6 +148,11 @@
       "development": "./dist/dev/i18n/locales/*.js",
       "default": "./dist/default/i18n/locales/*.js"
     },
+    "./i18n/text/*": {
+      "types": "./dist/dev/i18n/text/*.d.ts",
+      "development": "./dist/dev/i18n/text/*.js",
+      "default": "./dist/default/i18n/text/*.js"
+    },
     "./*.css": "./dist/default/define/*.css",
     "./*": {
       "types": "./dist/dev/define/*.d.ts",
@@ -159,8 +164,7 @@
     "access": "public"
   },
   "scripts": {
-    "build:watch": "vp pack --watch ./src --no-clean",
-    "dev": "pnpm run build:watch",
+    "dev": "vp pack --watch ./src --no-clean",
     "test": "vp test run",
     "clean": "rimraf --glob dist docs types '*.tsbuildinfo'",
     "prepack": "node --import tsx ../../site/scripts/copy-package-docs.ts html"
@@ -175,7 +179,6 @@
     "@videojs/utils": "workspace:*"
   },
   "devDependencies": {
-    "@testing-library/dom": "^10.4.1",
     "@videojs/cloudflare-video": "workspace:*",
     "@videojs/dash-video": "workspace:*",
     "@videojs/google-cast": "workspace:*",
@@ -184,8 +187,10 @@
     "@videojs/mux-audio": "workspace:*",
     "@videojs/mux-data": "workspace:*",
     "@videojs/mux-video": "workspace:*",
+    "@videojs/playerjs-video": "workspace:*",
     "@videojs/shaka-video": "workspace:*",
     "@videojs/skins": "workspace:*",
+    "@videojs/soundcloud-audio": "workspace:*",
     "@videojs/spotify-audio": "workspace:*",
     "@videojs/tiktok-video": "workspace:*",
     "@videojs/twitch-video": "workspace:*",
@@ -193,7 +198,6 @@
     "@videojs/wistia-video": "workspace:*",
     "@videojs/youtube-video": "workspace:*",
     "happy-dom": "^20.11.1",
-    "typescript": "^6.0.2",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
@@ -204,7 +208,9 @@
     "@videojs/mux-audio": "workspace:*",
     "@videojs/mux-data": "workspace:*",
     "@videojs/mux-video": "workspace:*",
+    "@videojs/playerjs-video": "workspace:*",
     "@videojs/shaka-video": "workspace:*",
+    "@videojs/soundcloud-audio": "workspace:*",
     "@videojs/spotify-audio": "workspace:*",
     "@videojs/tiktok-video": "workspace:*",
     "@videojs/twitch-video": "workspace:*",
@@ -234,7 +240,13 @@
     "@videojs/mux-video": {
       "optional": true
     },
+    "@videojs/playerjs-video": {
+      "optional": true
+    },
     "@videojs/shaka-video": {
+      "optional": true
+    },
+    "@videojs/soundcloud-audio": {
       "optional": true
     },
     "@videojs/spotify-audio": {

@@ -1,5 +1,44 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/utils@10.1.0...@videojs/utils@10.2.0) (2026-10-22)
+
+
+### Miscellaneous Chores
+
+* **@videojs/utils:** Synchronize videojs versions
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/utils@10.0.1...@videojs/utils@10.1.0) (2026-10-12)
+
+
+### Miscellaneous Chores
+
+* **@videojs/utils:** Synchronize videojs versions
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0...@videojs/utils@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/utils:** Synchronize videojs versions
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-rc.5...@videojs/utils@10.0.0) (2026-10-01)
+
+
+### Features
+
+* **packages:** release Video.js 10.0.0 as stable ([#3058](https://github.com/videojs/v10/issues/3058)) ([37477fc](https://github.com/videojs/v10/commit/37477fc187f36fc2ab3cbc0db7c1b2d3fc6bcca9))
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-rc.4...@videojs/utils@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **media:** tidy text track state ([#3057](https://github.com/videojs/v10/issues/3057))
+
+### Code Refactoring
+
+* **media:** tidy text track state ([#3057](https://github.com/videojs/v10/issues/3057)) ([614b77d](https://github.com/videojs/v10/commit/614b77dce7d9a3ed60baa1b0e2af854c8c8d865b))
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/utils@10.0.0-rc.3...@videojs/utils@10.0.0-rc.4) (2026-09-26)
 
 

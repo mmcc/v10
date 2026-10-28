@@ -1,6 +1,7 @@
 import { type DrmSystemsConfig, type MediaStreamType, MediaStreamTypes } from '@videojs/media';
 import { HTMLVideoAdapter } from '@videojs/media/dom';
 
+import { NativeHlsChaptersMixin } from './chapters';
 import { NativeHlsDrmMixin } from './drm';
 import { NativeHlsErrorsMixin } from './errors';
 import { NativeHlsLiveMixin } from './live';
@@ -9,6 +10,7 @@ import { NativeHlsStreamTypeMixin } from './stream-type';
 export type PreloadType = '' | 'none' | 'metadata' | 'auto';
 export type StreamType = MediaStreamType;
 
+/** @internal */
 export const StreamTypes = MediaStreamTypes;
 
 export interface NativeHlsAdapterProps {
@@ -63,6 +65,9 @@ class NativeHlsAdapterCore extends HTMLVideoAdapter implements Omit<NativeHlsAda
     preload: 'metadata',
     streamType: MediaStreamTypes.UNKNOWN,
   };
+
+  /** Engine this media plays through, reported to analytics such as Mux Data. The browser plays HLS itself. */
+  static readonly engineName: string = 'browser';
 
   #src = NativeHlsAdapterCore.defaultProps.src;
   #source: NativeHlsSource | null = NativeHlsAdapterCore.defaultProps.source;
@@ -151,6 +156,6 @@ class NativeHlsAdapterCore extends HTMLVideoAdapter implements Omit<NativeHlsAda
   }
 }
 
-export class NativeHlsAdapter extends NativeHlsLiveMixin(
-  NativeHlsStreamTypeMixin(NativeHlsDrmMixin(NativeHlsErrorsMixin(NativeHlsAdapterCore)))
+export class NativeHlsAdapter extends NativeHlsChaptersMixin(
+  NativeHlsLiveMixin(NativeHlsStreamTypeMixin(NativeHlsDrmMixin(NativeHlsErrorsMixin(NativeHlsAdapterCore))))
 ) {}

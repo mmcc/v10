@@ -460,7 +460,6 @@ describe('MoqMediaMixin', () => {
     await vi.waitFor(() => expect(createMoqTransport).toHaveBeenCalledTimes(1));
     // moqt: → https: with the fragment stripped (moq-transport §3.1.4).
     expect(createMoqTransport.mock.calls[0]?.[0]).toBe('https://relay.test/live');
-    // The adapter's own `onSignalsReady` survived the config spread.
     expect(media.engine.state.presentation.get()?.url).toBe('moqt://relay.test/live#msf:live--catalog');
 
     media.destroy();

@@ -12,7 +12,7 @@
  * subscriber therefore exposes _cumulative_ totals, and each run feeds the delta since the totals it last consumed as
  * one aggregate sample (the duration-weighted EWMA handles aggregates), losing no bytes to batching.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import { effect } from '../../core/signals/effect';
 import { peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
 import {

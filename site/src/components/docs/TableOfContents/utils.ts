@@ -25,10 +25,15 @@ export function calculateActiveHeadingOffset(scrollPaddingTop: string, scrollMar
   return (hasScrollPadding ? scrollPadding : 0) + (hasScrollMargin ? scrollMargin : 0);
 }
 
+const DEFAULT_RAIL_GEOMETRY: RailGeometry = { stripeHeight: 1, gap: 4 };
+
 /** Keep the full heading map visible by reducing gaps first, then stripe height. */
-export function calculateRailGeometry(headingCount: number, availableHeight: number): RailGeometry {
-  const stripeHeight = 1;
-  const gap = 4;
+export function calculateRailGeometry(
+  headingCount: number,
+  availableHeight: number,
+  preferred: RailGeometry = DEFAULT_RAIL_GEOMETRY
+): RailGeometry {
+  const { stripeHeight, gap } = preferred;
 
   if (headingCount <= 1) {
     return { stripeHeight, gap };
@@ -103,15 +108,15 @@ export function filterHeadingsForToc(headings: MarkdownHeading[]): MarkdownHeadi
 }
 
 /** Keep client-rendered conditional headings in the TOC only while their target exists on the page. */
-export function filterRenderedHeadings(
-  headings: MarkdownHeading[],
-  getElementById: (id: string) => HTMLElement | null = (id) => document.getElementById(id),
-  isVisible: (element: HTMLElement) => boolean = (element) => element.getClientRects().length > 0
-): MarkdownHeading[] {
+export function filterRenderedHeadings(headings: MarkdownHeading[]): MarkdownHeading[] {
   return headings.filter((heading) => {
-    const element = getElementById(heading.slug);
+    const element = document.getElementById(heading.slug);
 
-    return element !== null && !element.hasAttribute('data-conditional-heading-placeholder') && isVisible(element);
+    return (
+      element !== null &&
+      !element.hasAttribute('data-conditional-heading-placeholder') &&
+      element.getClientRects().length > 0
+    );
   });
 }
 

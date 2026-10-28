@@ -1,10 +1,4 @@
-import type {
-  ButtonState,
-  InferComponentState,
-  InferMediaState,
-  MediaButtonComponent,
-  StateAttrMap,
-} from '@videojs/core';
+import type { ButtonState, MediaButtonComponent, StateAttrMap } from '@videojs/core';
 import {
   applyElementProps,
   applyStateDataAttrs,
@@ -26,19 +20,24 @@ import { AriaKeyShortcutsController } from './hotkey/aria-key-shortcuts-controll
 import { UIElement } from './ui-element';
 
 type LabelParams = Record<string, string | number>;
-type LabelParamsCore<Core extends MediaButtonComponent> = Core & {
-  getLabelParams?: (state: InferComponentState<Core>) => LabelParams | undefined;
+
+/** The core a media button element drives: it reads `MediaState` and computes `ComponentState`. */
+type MediaButtonCore<ComponentState extends ButtonState, MediaState> = MediaButtonComponent<object, ComponentState> & {
+  setMedia(media: MediaState): void;
+  getLabelParams?: (state: ComponentState) => LabelParams | undefined;
+  /** Shorter text for the tooltip than the accessible name, when the two differ. */
+  getTooltipLabel?: (state: ComponentState) => Text | string;
 };
 
-function getLabelParams<Core extends MediaButtonComponent>(
-  core: Core,
-  state: InferComponentState<Core>
-): LabelParams | undefined {
-  return (core as LabelParamsCore<Core>).getLabelParams?.(state);
-}
-
-/** Abstract base for HTML custom elements that render a media-control button. */
-export abstract class MediaButtonElement<Core extends MediaButtonComponent> extends UIElement {
+/**
+ * Abstract base for HTML custom elements that render a media-control button. `ComponentState` is the state the button
+ * reflects to data attributes, and `MediaState` is the player state it reads and acts on. Pass both: a subclass that
+ * omits them still compiles, but types `activate(state)` and `mediaState` as the `ButtonState` and `object` defaults.
+ */
+export abstract class MediaButtonElement<
+  ComponentState extends ButtonState = ButtonState,
+  MediaState extends object = object,
+> extends UIElement {
   static override properties: PropertyDeclarationMap = {
     label: { type: String },
     disabled: { type: Boolean },
@@ -47,15 +46,11 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
   disabled = false;
   label: Text | string = '';
 
-  protected abstract readonly core: Core;
-  protected abstract readonly stateAttrMap: StateAttrMap<InferComponentState<Core>>;
-  protected abstract readonly mediaState: PlayerController<any, InferMediaState<Core> | undefined>;
+  protected abstract readonly core: MediaButtonCore<ComponentState, MediaState>;
+  protected abstract readonly stateAttrMap: StateAttrMap<ComponentState>;
+  protected abstract readonly mediaState: PlayerController<any, MediaState | undefined>;
 
-  protected abstract activate(
-    state: InferMediaState<Core>,
-    event: UIEvent,
-    source: ButtonActivationSource
-  ): void | Promise<void>;
+  protected abstract activate(state: MediaState, event: UIEvent, source: ButtonActivationSource): void | Promise<void>;
 
   protected getIsButtonDisabled(): boolean {
     return this.disabled || !this.mediaState.value;
@@ -133,9 +128,11 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
     if (!media) return undefined;
 
     this.core.setMedia(media);
-    const state = this.core.getState() as InferComponentState<Core>;
+    const state = this.core.getState();
 
-    return translateText(this.core.getLabel(state), this.#i18n.value, getLabelParams(this.core, state));
+    if (this.core.getTooltipLabel) return translateText(this.core.getTooltipLabel(state), this.#i18n.value);
+
+    return translateText(this.core.getLabel(state), this.#i18n.value, this.core.getLabelParams?.(state));
   }
 
   protected override willUpdate(changed: PropertyValues): void {
@@ -153,11 +150,11 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
     if (!media) return;
 
     this.core.setMedia(media);
-    const state = this.core.getState() as InferComponentState<Core>;
+    const state = this.core.getState();
     const attrs = (this.core.getAttrs?.(state) ?? {}) as Record<string, unknown>;
 
     if (isText(attrs['aria-label'])) {
-      attrs['aria-label'] = translateText(attrs['aria-label'], this.#i18n.value, getLabelParams(this.core, state));
+      attrs['aria-label'] = translateText(attrs['aria-label'], this.#i18n.value, this.core.getLabelParams?.(state));
     }
 
     applyElementProps(this, {
@@ -167,9 +164,17 @@ export abstract class MediaButtonElement<Core extends MediaButtonComponent> exte
       // just the data one: `data-hidden` is a styling hook a skin may or may not
       // act on, where `hidden` removes the control the way the React components
       // do by rendering nothing.
-      ...(isHideable(state) && { hidden: state.hidden ? '' : undefined }),
+      ...(isHideable(state) && this.reflectsHidden() && { hidden: state.hidden ? '' : undefined }),
     });
     applyStateDataAttrs(this, state, this.stateAttrMap);
+  }
+
+  /**
+   * Whether this button writes its core's `hidden` state to the `hidden` attribute. A subclass returns `false` while
+   * another owner, such as a linked menu, manages its visibility.
+   */
+  protected reflectsHidden(): boolean {
+    return true;
   }
 
   #syncHotkeyShortcut(): void {

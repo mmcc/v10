@@ -1,9 +1,12 @@
+/** @internal */
 export type PositionSide = 'top' | 'bottom' | 'left' | 'right';
 
+/** @internal */
 export interface PositionSideOptions {
   side: PositionSide;
 }
 
+/** @internal */
 export interface PositionSideOffsets {
   sideOffset: number;
   boundaryOffset?: number;
@@ -38,7 +41,11 @@ function getSideAvailable(
   }
 }
 
-/** Resolve the preferred side against a positioning boundary. */
+/**
+ * Resolve the preferred side against a positioning boundary.
+ *
+ * @internal
+ */
 export function getPositionedSide(
   triggerRect: DOMRect,
   positionedRect: DOMRect,
@@ -57,6 +64,7 @@ export function getPositionedSide(
   return oppositeSpace > preferredSpace ? opposite : preferred;
 }
 
+/** @internal */
 export function tryShowPopover(el: HTMLElement | null): void {
   try {
     el?.showPopover?.();
@@ -65,10 +73,35 @@ export function tryShowPopover(el: HTMLElement | null): void {
   }
 }
 
+/** @internal */
 export function tryHidePopover(el: HTMLElement | null): void {
   try {
     el?.hidePopover?.();
   } catch {
     // Element may not support popover API or may already be hidden
+  }
+}
+
+/**
+ * Hides every open popover inside `root`, including those in its own and nested shadow roots.
+ *
+ * @internal
+ */
+export function hideOpenPopovers(root: Element | ShadowRoot): void {
+  if (root instanceof Element && root.shadowRoot) hideOpenPopovers(root.shadowRoot);
+
+  for (const el of root.querySelectorAll<HTMLElement>('*')) {
+    if (isOpenPopover(el)) tryHidePopover(el);
+
+    if (el.shadowRoot) hideOpenPopovers(el.shadowRoot);
+  }
+}
+
+function isOpenPopover(el: Element): boolean {
+  try {
+    return el.matches(':popover-open');
+  } catch {
+    // `:popover-open` is unsupported, so no popover can be open
+    return false;
   }
 }

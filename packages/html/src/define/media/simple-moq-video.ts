@@ -1,7 +1,11 @@
 import { SimpleMoqVideo } from '../../media/simple-moq-video';
 import { safeDefine } from '../../registration/safe-define';
 
-/** SPF-backed MoQ media element registered as `<simple-moq-video>`. */
+/**
+ * SPF-backed MoQ media element registered as `<simple-moq-video>`.
+ *
+ * @internal
+ */
 export class SimpleMoqVideoElement extends SimpleMoqVideo {
   static readonly tagName = 'simple-moq-video';
 }

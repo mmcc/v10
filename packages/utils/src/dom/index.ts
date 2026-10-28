@@ -64,6 +64,7 @@ export {
 export { isMacOS } from './platform';
 export {
   getPositionedSide,
+  hideOpenPopovers,
   type PositionSide,
   type PositionSideOffsets,
   type PositionSideOptions,
@@ -112,7 +113,7 @@ export {
 } from './text-track';
 export { serializeTimeRanges } from './time-ranges';
 export { containsComposed } from './tree';
-export type { CustomElement, CustomElementCallbacks, EventListenerFor, EventType, QueriedElement } from './types';
+export type { CustomElement, CustomElementCallbacks } from './types';
 export { type WalkAncestorsOptions, walkAncestors } from './walk-ancestors';
 export {
   isWebKitAirPlayCapable,

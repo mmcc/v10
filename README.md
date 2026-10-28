@@ -7,9 +7,7 @@
 
 Modern, modular, and composable media player framework for Web and React.
 
-🚧 Release candidate - close to stable. Adoption in real projects encouraged. 🚧
-
-Video.js v10 is close to stable. Try it out in real projects and share your feedback 🙏.
+Video.js v10 is stable. Build with it and share your feedback 🙏.
 
 - Read our [design documents][rfcs].
 - Read the [v10 discussion topic][v10-discussion].
@@ -18,7 +16,7 @@ Video.js v10 is close to stable. Try it out in real projects and share your feed
 ## AI Quickstart
 
 Using an AI coding agent? Install the [Video.js skill](https://github.com/videojs/skills) so it reads
-the docs that match this package version before writing code.
+the docs that match your installed version before writing code.
 
 Then print the version-matched installation choices for your framework. The command returns instructions without
 modifying your project:
@@ -26,15 +24,6 @@ modifying your project:
 ```sh
 npx @videojs/cli agents init
 ```
-
-## Timeline
-
-- **Technical Preview (Complete):** Initial showcase for Demuxed.
-- **Alpha (Complete):** [See milestone](https://github.com/videojs/v10/milestone/3)
-- **Beta (Complete):** [See milestone](https://github.com/videojs/v10/milestone/1)
-- **Release Candidate (Complete):** Close to stable. Adoption in real projects encouraged.
-- **GA (Fall 2026):** [See milestone](https://github.com/videojs/v10/milestone/6) ← WIP
-- **Video.js (End of 2026):** Video.js core/contrib parity and supported plugins migrated.
 
 ## Documentation
 
@@ -67,6 +56,10 @@ Please see our [contributing guide](./CONTRIBUTING.md) for getting set up locall
 Please note that this project is released with a [Contributor Code of Conduct][coc]. By
 participating in this project you agree to abide by its terms.
 
+## CI Sponsor
+<img width="368" height="126" alt="CI Sponsor Blacksmith.sh" src="https://github.com/user-attachments/assets/1c20a1bd-1c18-4701-9a77-50f02a86fb4b" />
+
+
 [rfcs]: ./rfc
 [v10-discussion]: https://github.com/videojs/video.js/discussions/9035
 [heff-presentation]: https://players.brightcove.net/3737230800001/eyILA5XG7K_default/index.html?videoId=6379311036112
@@ -77,6 +70,6 @@ participating in this project you agree to abide by its terms.
 [package-badge]: https://img.shields.io/npm/v/@videojs/core?label=@videojs/core
 [discord]: https://discord.gg/JBqHh485uF
 [discord-badge]: https://img.shields.io/discord/507627062434070529?color=%235865F2&label=%20&logo=discord&logoColor=white
-[gh-discussions]: https://github.com/videojs/v10/discussions
-[preview]: https://pkg.pr.new/~/videojs/v10
-[preview-badge]: https://pkg.pr.new/badge/videojs/v10
+[gh-discussions]: https://github.com/videojs/video.js/discussions
+[preview]: https://pkg.pr.new/~/videojs/video.js
+[preview-badge]: https://pkg.pr.new/badge/videojs/video.js

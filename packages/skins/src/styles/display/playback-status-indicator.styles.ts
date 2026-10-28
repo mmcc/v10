@@ -7,7 +7,7 @@ const icon = [
 
 const iconVariants = {
   default: ['size-media-icon-lg'],
-  minimal: ['size-media-icon-xl'],
+  neutral: ['size-media-icon-xl'],
 } as const;
 
 export default styles({
@@ -21,7 +21,10 @@ export default styles({
         'media-transitioning:scale-media-hidden-playback media-transitioning:opacity-0',
         'data-ending-style:duration-media-fast data-ending-style:ease-in',
       ],
-      variants: { default: 'rounded-media-pill bg-media-backdrop/35 backdrop-filter-media-indicator' },
+      variants: {
+        default: 'rounded-media-pill bg-media-backdrop/35 backdrop-filter-media-indicator',
+        neutral: 'filter-media-feedback',
+      },
     },
     playIcon: {
       utilities: [
@@ -30,7 +33,7 @@ export default styles({
       ],
       variants: {
         default: [...iconVariants.default, 'group-data-[status=play]/playback-status:translate-x-px'],
-        minimal: iconVariants.minimal,
+        neutral: iconVariants.neutral,
       },
     },
     pauseIcon: {

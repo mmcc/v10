@@ -8,6 +8,7 @@ import Copy from '@/assets/icons/copy.svg?react';
 import Markdown from '@/assets/icons/markdown.svg?react';
 import ClaudeLogo from '@/assets/logos/brands/claude.svg?react';
 import OpenAiLogo from '@/assets/logos/brands/openai.svg?react';
+import { ANALYTICS_EVENTS, trackEvent } from '@/utils/analytics-events';
 import { getInstallationRouteSegment } from '@/utils/installation/routes';
 import useIsHydrated from '@/utils/useIsHydrated';
 
@@ -28,10 +29,10 @@ type CopyState =
  * installation guide's twin carries the picks the page shows, including the Shadcn framework before its URL is
  * normalized.
  */
-export async function markdownUrl(
-  location: Pick<Location, 'origin' | 'pathname' | 'search'> = window.location,
-  registryFramework = globalThis.document?.documentElement.dataset.registryFramework
-): Promise<string> {
+async function markdownUrl(): Promise<string> {
+  const location = window.location;
+  const registryFramework = globalThis.document?.documentElement.dataset.registryFramework;
+
   // Strip trailing slashes so `/guide/` becomes `/guide.md`, not `/guide/.md`. Astro forbids trailing slashes but
   // infrastructure may add them back.
   const pathname = location.pathname.replace(/\/+$/, '');
@@ -52,7 +53,7 @@ export async function markdownUrl(
 }
 
 /** Remove private installation input before embedding a documentation URL in a third-party assistant link. */
-export async function publicMarkdownUrl(url: string): Promise<string> {
+async function publicMarkdownUrl(url: string): Promise<string> {
   if (url === '#') return url;
 
   const { PRIVATE_INSTALLATION_QUERY_PARAMETERS } = await import('@videojs/installation');
@@ -70,7 +71,7 @@ function assistantPrompt(url: string): string {
 const segmentClass = clsx(
   'inline-flex h-8 items-center border border-line bg-surface text-p3 whitespace-nowrap shadow-xs select-none',
   'intent:border-line-strong intent:text-faded-black dark:intent:text-manila-light text-muted',
-  'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-gold focus-visible:relative focus-visible:z-10'
+  'focus-visible:relative focus-visible:z-10'
 );
 
 const itemClass = clsx(
@@ -121,6 +122,7 @@ export default function CopyMarkdownButton({ className, style }: CopyMarkdownBut
       }
 
       setState({ status: 'success' });
+      trackEvent(ANALYTICS_EVENTS.agentHandoff, { method: 'copy-markdown' });
       setTimeout(() => {
         setState({ status: 'idle' });
       }, 2000);
@@ -155,6 +157,7 @@ export default function CopyMarkdownButton({ className, style }: CopyMarkdownBut
           disabled ? 'cursor-wait' : 'cursor-pointer'
         )}
         aria-label={ariaLabel}
+        data-ph-capture-attribute-cta="copy-markdown"
       >
         {state.status === 'success' ? (
           <Check className="text-accent size-4" aria-hidden="true" />
@@ -182,6 +185,7 @@ export default function CopyMarkdownButton({ className, style }: CopyMarkdownBut
         <Menu.Trigger
           disabled={!isHydrated}
           aria-label="More ways to use this page"
+          data-ph-capture-attribute-cta="markdown-menu"
           className={clsx(
             segmentClass,
             '-ml-px w-8 justify-center rounded-r-lg corner-squircle data-[popup-open]:text-faded-black dark:data-[popup-open]:text-manila-light',
@@ -199,18 +203,32 @@ export default function CopyMarkdownButton({ className, style }: CopyMarkdownBut
                 'motion-reduce:transition-none'
               )}
             >
-              <Menu.Item className={itemClass} render={<a href={mdUrl} target="_blank" rel="noopener noreferrer" />}>
+              <Menu.Item
+                className={itemClass}
+                onClick={() => trackEvent(ANALYTICS_EVENTS.agentHandoff, { method: 'view-markdown' })}
+                render={
+                  <a
+                    href={mdUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-ph-capture-attribute-cta="view-markdown"
+                  />
+                }
+              >
                 <Markdown className="size-4 shrink-0" aria-hidden="true" />
                 View as Markdown
               </Menu.Item>
               <Menu.Separator className="bg-line my-1 h-px" />
               <Menu.Item
                 className={itemClass}
+                onClick={() => trackEvent(ANALYTICS_EVENTS.agentHandoff, { method: 'open-in-chatgpt' })}
                 render={
                   <a
                     href={`https://chatgpt.com/?hints=search&prompt=${prompt}`}
                     target="_blank"
                     rel="noopener noreferrer"
+                    data-ph-capture-attribute-cta="open-in-chatgpt"
+                    data-ph-capture-attribute-destination="external"
                   />
                 }
               >
@@ -219,7 +237,16 @@ export default function CopyMarkdownButton({ className, style }: CopyMarkdownBut
               </Menu.Item>
               <Menu.Item
                 className={itemClass}
-                render={<a href={`https://claude.ai/new?q=${prompt}`} target="_blank" rel="noopener noreferrer" />}
+                onClick={() => trackEvent(ANALYTICS_EVENTS.agentHandoff, { method: 'open-in-claude' })}
+                render={
+                  <a
+                    href={`https://claude.ai/new?q=${prompt}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-ph-capture-attribute-cta="open-in-claude"
+                    data-ph-capture-attribute-destination="external"
+                  />
+                }
               >
                 <ClaudeLogo className="size-4 shrink-0" aria-hidden="true" />
                 Open in Claude

@@ -9,10 +9,14 @@ export interface BufferingIndicatorProps {
 }
 
 export interface BufferingIndicatorState {
-  /** Whether the indicator should be visible. True after the delay elapses while media is waiting and not paused. */
+  /**
+   * Whether the indicator should be visible. True after the delay elapses while media is waiting and not paused, or
+   * while it's trying to autoplay.
+   */
   visible: boolean;
 }
 
+/** @internal */
 export class BufferingIndicatorCore {
   static readonly defaultProps: NonNullableObject<BufferingIndicatorProps> = {
     delay: 500,
@@ -32,7 +36,7 @@ export class BufferingIndicatorCore {
   }
 
   update(media: MediaPlaybackState): void {
-    const buffering = media.waiting && !media.paused;
+    const buffering = (media.waiting && !media.paused) || media.autoplaying;
 
     if (buffering && !this.state.current.visible && !this.#timer) {
       this.#timer = setTimeout(() => {
@@ -53,6 +57,7 @@ export class BufferingIndicatorCore {
   }
 }
 
+/** @internal */
 export namespace BufferingIndicatorCore {
   export type Props = BufferingIndicatorProps;
   export type State = BufferingIndicatorState;

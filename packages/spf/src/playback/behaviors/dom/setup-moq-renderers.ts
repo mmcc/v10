@@ -28,7 +28,7 @@
  * its self-clock onto it. The controller in `sync-latency` steers latency at coarse scale once playout is running;
  * where the clocks _are_ lives here, because the renderers own them.
  */
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import type { Reactor } from '../../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../../core/reactors/create-machine-reactor';
 import { computed, peek, type ReadonlySignal, type Signal } from '../../../core/signals/primitives';

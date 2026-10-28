@@ -16,12 +16,15 @@ import {
   selectVolume,
 } from '../store/selectors';
 
+/** @internal */
 export type CoordinatorEvent = GestureActivateEvent | HotkeyActivateEvent;
 
+/** @internal */
 export interface MediaSnapshotStore {
   readonly state: object;
 }
 
+/** @internal */
 export function toInputActionEvent(event: CoordinatorEvent): InputActionEvent {
   return {
     action: event.action,
@@ -32,16 +35,19 @@ export function toInputActionEvent(event: CoordinatorEvent): InputActionEvent {
   };
 }
 
+/** @internal */
 export function getMediaSnapshot(store: MediaSnapshotStore | undefined): MediaSnapshot {
   if (!store) return {};
 
   const state = store.state;
   const time = selectTime(state);
+  const playback = selectPlayback(state);
 
   const textTrack = selectTextTrack(state);
 
   return {
-    paused: selectPlayback(state)?.paused,
+    // A pending autoplay counts as playing, as it does for the play button and the toggle.
+    paused: playback && playback.paused && !playback.autoplaying,
     volume: selectVolume(state)?.volume,
     muted: selectVolume(state)?.muted,
     playbackRate: selectPlaybackRate(state)?.playbackRate,
@@ -55,6 +61,7 @@ export function getMediaSnapshot(store: MediaSnapshotStore | undefined): MediaSn
   };
 }
 
+/** @internal */
 export function subscribeToInputActions(
   container: HTMLElement,
   callback: (event: InputActionEvent) => void
@@ -71,6 +78,7 @@ export function subscribeToInputActions(
 
 const indicatorVisibilityCoordinators = new WeakMap<HTMLElement, IndicatorVisibilityCoordinator>();
 
+/** @internal */
 export function getIndicatorVisibilityCoordinator(container: HTMLElement): IndicatorVisibilityCoordinator {
   let coordinator = indicatorVisibilityCoordinators.get(container);
 
