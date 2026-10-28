@@ -57,8 +57,9 @@ const cdnPresets = [
 // `simple-moq-video` is deliberately kept off the CDN: the MoQ engine has no error slot yet, so the element cannot
 // report a failed transport, an unsupported codec, or a bad catalog. Publishing it would ship a player that fails
 // silently. Remove it from this list, and from `CDN_EXCLUDED_MEDIA` in the installation workspace contract test, once
-// the engine surfaces errors.
-const cdnMediaExclusions = new Set(['media/simple-moq-video']);
+// the engine surfaces errors. `moq-publish-video` is a publisher, not playback media, so the installation builder has
+// nothing to offer it for.
+const cdnMediaExclusions = new Set(['media/simple-moq-video', 'media/moq-publish-video']);
 const cdnHtmlDefinitionEntries = cdnHtmlEntries(resolve(htmlDistDir, 'define')).filter(
   ({ name }) => !cdnMediaExclusions.has(name)
 );

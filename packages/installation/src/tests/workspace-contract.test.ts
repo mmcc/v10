@@ -37,7 +37,7 @@ const extensionPackages = new Set(
 );
 
 /** Definitions the CDN build leaves out; mirrors `cdnMediaExclusions` in `packages/cdn/vite.config.ts`. */
-const CDN_EXCLUDED_MEDIA = new Set(['simple-moq-video']);
+const CDN_EXCLUDED_MEDIA = new Set(['simple-moq-video', 'moq-publish-video']);
 
 describe('installation workspace contract', () => {
   it('keeps CDN media support aligned with the definitions its build republishes', () => {
