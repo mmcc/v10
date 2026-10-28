@@ -11,8 +11,9 @@ WebCodecs encode → Media over QUIC (MOQT) publish to a relay. Implemented
 as its own composed engine, `createMoqPublishEngine`, in a new
 `publish/` SPF layer (peer of `playback/`), publishing one LOC-packaged
 video rendition plus one Opus audio track plus an MSF catalog track over
-moq-transport draft-19 — the same dialect, wire layer, and media modules
-the MoQ playback engine consumes from the other side.
+moq-transport draft-22 (falling back to moqt-20) through `@caprid/moq-core`
+— the same package and media modules the MoQ playback engine consumes from
+the other side.
 
 **Classification note.** The
 [Media-src / Player / Borderline axis](./clusters.md#media-src-vs-player-vs-borderline)
@@ -49,7 +50,7 @@ none is separately composable today.
 |---|---|---|
 | Capture | Device enumeration (`devicechange`-reactive, label refresh on grant); capture-source acquisition (`getUserMedia` camera, `getDisplayMedia` + microphone-merge screen share, re-acquire on selection-identity change, stale-async guards); preview mirroring via `srcObject` (forced muted + playsInline); mute toggles via `track.enabled` (capture keeps running) | **Implemented** |
 | Encode | `isConfigSupported` probing over a candidate ladder (default `avc1.42E01F` in `avc` bitstream format with a `vp8` fallback; Opus with a 48 kHz fallback; `config.video.codec` prepends rather than replaces); `selectEncoderConfig` strategy resolves support → active encodings; per-kind WebCodecs encoder actors, each stamping one epoch of the kind's `TrackTimeline` — a rebuilt actor (capture-source switch, encoding change) continues the track's published clock domain plus the real monotonic acquisition gap instead of opening a fresh wallclock anchor; frame pumping with a timestamp-driven forced-keyframe cadence so **GoP = MoQ group** (`groupDurationSec`, default 2 s); LOC packaging of every chunk (Timestamp / Timescale / Config-on-keyframes) | **Implemented** |
-| Transport | Publish session speaking draft-19 with **announce-and-serve ingest** (see the decision below): SETUP exchange; inbound SUBSCRIBE_NAMESPACE solicitations answered with REQUEST_OK and held as the announce carrier; the namespace announced as a NAMESPACE entry on every covering solicitation (`'live'` = announced); inbound SUBSCRIBEs answered with SUBSCRIBE_OK carrying alias = the request ID and a microsecond TIMESCALE track property; REQUEST_UPDATE routing; GOAWAY → `draining`; track end = PUBLISH_DONE (TRACK_ENDED, exact Stream Count) then FIN on each subscription stream; close retracts the announce (NAMESPACE_DONE) and sends **no GOAWAY**; one `TrackPublisherActor` per track writing subgroup streams **only while bound to a live subscription** (video: new group per keyframe, joins at the next keyframe on bind; audio + catalog: group-per-frame; catalog replays its latest frame on every bind); MSF catalog derivation re-sent on any input-identity change | **Implemented** |
+| Transport | `@caprid/moq-core` publish session speaking draft-22 (moqt-20 fallback) with **announce-and-serve ingest** (see the decision below): SETUP exchange; inbound SUBSCRIBE_NAMESPACE solicitations answered with REQUEST_OK and held as the announce carrier; the namespace announced as a NAMESPACE entry on every covering solicitation (`'live'` = announced); inbound SUBSCRIBEs answered with SUBSCRIBE_OK carrying alias = the request ID and a microsecond TIMESCALE track property; REQUEST_UPDATE routing; GOAWAY → `draining`; track end = PUBLISH_DONE (TRACK_ENDED, exact Stream Count) then FIN on each subscription stream; close retracts the announce (NAMESPACE_DONE) and sends **no GOAWAY**; one `TrackPublisherActor` per track writing subgroup streams **only while bound to a live subscription** (video: new group per keyframe, joins at the next keyframe on bind; audio + catalog: group-per-frame; catalog replays its latest frame on every bind); MSF catalog derivation re-sent on any input-identity change | **Implemented** |
 | Observability | ~1 Hz `publishStats` sampling from the encoder actor counters (`encodedFps`, bitrates, `droppedFrames`, `bytesSent`) | **Implemented** — `droppedGroups` is counted on the track publishers but not yet folded into `publishStats`; `subscriberCount` is tracked on the session actor but surfaces as `NaN` |
 
 ### Ingest model: announce-and-serve (2026-08-07)
@@ -214,8 +215,8 @@ publisher initiates no requests, so there is no response to bound.
 
 **Constraints (v1, by design):**
 
-- **At most one live subscription per track — newest wins.** Draft-19
-  permits concurrent same-track subscriptions (e.g. disjoint filters),
+- **At most one live subscription per track — newest wins.** The
+  transport draft permits concurrent same-track subscriptions (e.g. disjoint filters),
   but serving them means writing every group once per alias; the known
   peers (moq-lite-rs relays) hold one upstream subscription per track
   and fan out on their side, and the sweep doubles as the resubscribe
