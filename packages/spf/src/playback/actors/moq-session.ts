@@ -1,7 +1,7 @@
 /**
  * Actor owning the WebTransport connection + MOQT session for one MoQ source.
  *
- * Wraps the callback-shaped `network/moqt` session driver in a reactive snapshot: behaviors read
+ * Wraps the callback-shaped `@caprid/moq-core` session driver in a reactive snapshot: behaviors read
  * `snapshot.context.status` for the connection lifecycle (`'connecting' → 'ready'`, terminal `'closed'`/`'failed'`) and
  * `snapshot.context.session` for the live `MoqtSession` once ready. A reducer-shaped `TransitionActor` fits — the
  * interesting state is all context; the finite `value` is just the universal active/destroyed lifecycle marker.
@@ -22,10 +22,18 @@
  * `MoqAuthProvider.refreshToken`) for a future relay generation that accepts AUTHORIZATION_TOKEN request parameters, at
  * which point a token could ride a request instead of only the connect URL.
  */
+import {
+  createMoqtSession,
+  type Goaway,
+  type MessageParameters,
+  MOQT_PROTOCOL_ID,
+  MOQT_PROTOCOL_IDS,
+  type MoqtSession,
+  type MoqtTransport,
+} from '@caprid/moq-core';
+
 import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
 import type { MoqSource } from '../../media/moq/parse-source';
-import { type MessageParameters, MOQT_PROTOCOL_ID } from '../../network/moqt/control-messages';
-import { createMoqtSession, type Goaway, type MoqtSession, type MoqtTransport } from '../../network/moqt/session';
 import {
   DEFAULT_RECONNECT_BACKOFF_CONFIG,
   type RetryBackoffConfig,
@@ -55,7 +63,11 @@ type SessionMessage =
   | { type: 'closed' }
   | { type: 'failed'; error: unknown };
 
-/** Transport factory seam. A browser passes the `WebTransport`-backed default; tests inject an in-memory fake. */
+/**
+ * Transport factory seam. A browser passes the `WebTransport`-backed default; tests inject an in-memory fake.
+ * `protocols` lists the MOQT versions on offer, most preferred first. The returned transport must report the one the
+ * peer selected as `protocol` — the session picks its codec from it, and reads a missing value as `moqt-22`.
+ */
 export type CreateMoqTransport = (
   connectUrl: string,
   protocols: string[]
@@ -117,12 +129,16 @@ function createWebTransport(
   connectUrl: string,
   protocols: string[]
 ): { transport: MoqtTransport; ready: Promise<void> } {
-  const transport = new WebTransport(connectUrl, { protocols });
+  // The session reads the negotiated version from `transport.protocol` (the
+  // `WT-Protocol` response). A browser without that attribute cannot say
+  // which version the relay picked, so it offers only the default one.
+  const offered = 'protocol' in WebTransport.prototype ? protocols : [MOQT_PROTOCOL_ID];
+  const transport: WebTransport & MoqtTransport = new WebTransport(connectUrl, { protocols: offered });
 
   return { transport, ready: transport.ready.then(() => undefined) };
 }
 
-// Fatal, unlike `network/moqt/bytes`' shared `utf8Decode` — that decoder is
+// Fatal, unlike `@caprid/moq-core`'s shared `utf8Decode` — that decoder is
 // non-fatal because other wire code legitimately tolerates lossy text, and
 // must stay that way. A token is different: silently substituting U+FFFD
 // for invalid bytes sends a corrupted credential to the relay, which
@@ -293,7 +309,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
         }
       }
 
-      const created = createTransport(composePlaybackConnectUrl(source.connectUrl, authToken), [MOQT_PROTOCOL_ID]);
+      const created = createTransport(composePlaybackConnectUrl(source.connectUrl, authToken), [...MOQT_PROTOCOL_IDS]);
 
       transport = created.transport;
       pendingTransport = transport;
@@ -398,7 +414,7 @@ export function createMoqSessionActor(options: CreateMoqSessionActorOptions): Mo
   // parameter list) and hard-closes the session (`5 "invalid value"`)
   // when one appears — the same defect fixed on the publish side in
   // `publish-session.ts`. Re-attach via this seam
-  // (encodeAuthTokenUseValue, §10.2.2) once relays accept it.
+  // (AUTHORIZATION TOKEN Parameter, moqt-22 §9.20.2) once relays accept it.
   const tokenParameters = (): MessageParameters => ({});
 
   return {

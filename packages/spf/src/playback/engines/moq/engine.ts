@@ -4,9 +4,8 @@ import type { QualityConfig } from '../../../media/abr/quality-selection';
 import type { AudioTrack, MaybeResolvedPresentation, TextTrack, VideoTrack } from '../../../media/types';
 import type { BandwidthConfig, BandwidthState } from '../../../network/bandwidth-estimator';
 import type { RetryBackoffConfig } from '../../../network/retry-backoff';
-import type { AudioContextLike, AudioRendererActor } from '../../actors/dom/audio-renderer';
+import type { AudioContextLike, AudioRendererActor, CreateAudioPlayer } from '../../actors/dom/audio-renderer';
 import type { VideoRendererActor } from '../../actors/dom/video-renderer';
-import type { CreateAudioPlayer } from '../../actors/dom/worklet-audio-renderer';
 import type { CreateMoqTransport, MoqAuthProvider, MoqSessionActor } from '../../actors/moq-session';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
 import { type AdaptiveLatencyConfig, adaptLatencyTarget } from '../../behaviors/adapt-latency-target';
@@ -150,8 +149,8 @@ export interface MoqEngineConfig {
   /** Latency tuning: the controller (`syncLatency`) plus the renderers' join-at-edge anchor. */
   latency?: Partial<LatencyControlConfig>;
   /**
-   * Render audio through the shared AudioWorklet player core (`@mux/moq-media`'s `createAudioPlayer`) instead of
-   * scheduled `AudioBufferSourceNode`s. Opt-in: the core cannot apply `playoutRate` nudges yet (mmcc/v10#66).
+   * Audio player core factory override (tests, or a context the default cannot host). Defaults to `@caprid/moq-media`'s
+   * `createAudioPlayer` on the render context's `baseContext`.
    */
   createAudioPlayer?: CreateAudioPlayer;
   /**

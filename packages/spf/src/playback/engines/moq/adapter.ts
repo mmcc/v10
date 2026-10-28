@@ -315,7 +315,7 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
 
       gain.connect(audioContext.destination);
       gain.gain.value = this.#muted ? 0 : this.#volume;
-      // The worklet renderer's core constructs an `AudioWorkletNode`, which
+      // The renderer's player core constructs an `AudioWorkletNode`, which
       // only a real context can host; an injected fake has none to offer.
       const baseContext =
         audioContext.baseContext ??
@@ -335,9 +335,6 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
           return audioContext.outputLatency;
         },
         baseContext,
-        createBuffer: (numberOfChannels, length, sampleRate) =>
-          audioContext.createBuffer(numberOfChannels, length, sampleRate),
-        createBufferSource: () => audioContext.createBufferSource(),
       };
     }
 
@@ -449,10 +446,9 @@ export function MoqMediaMixin<Base extends Constructor<object>>(
       this.#gain = undefined;
       this.#renderContext = undefined;
       // Close the context only after the composition has torn the renderers
-      // down: an in-flight renderer tick still calls `createBuffer` /
-      // `createBufferSource`, which throw `InvalidStateError` on a closed
-      // context. Both arms close so a failed teardown still releases the
-      // audio device.
+      // down: the renderer's player core still builds and drives nodes on
+      // it, which throws `InvalidStateError` on a closed context. Both arms
+      // close so a failed teardown still releases the audio device.
       const closeAudio = () => {
         audioContext?.close().catch(() => {});
       };

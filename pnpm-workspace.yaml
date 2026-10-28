@@ -76,3 +76,4 @@ minimumReleaseAgeExclude:
   - '@oxfmt/*'
   - vitest
   - '@vitest/*'
+  - '@caprid/*'
