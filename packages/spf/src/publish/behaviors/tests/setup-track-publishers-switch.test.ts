@@ -1,9 +1,9 @@
+import { createMoqtSession } from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { signal } from '../../../core/signals/primitives';
-import { createMoqtSession } from '../../../network/moqt/session';
-import { rawSubscribe, solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
-import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
+import { rawSubscribe, solicitNamespace } from '../../../network/tests/helpers/raw-peer';
+import { createTransportPair, withServerRequestIds } from '../../../network/tests/helpers/transport-pair';
 import { createPublishSessionActor, type PublishSessionActor } from '../../session/publish-session';
 import {
   type SetupTrackPublishersContext,
@@ -28,7 +28,7 @@ const disposals: (() => void)[] = [];
 
 function makeSessionActor() {
   const pair = createTransportPair();
-  const peer = createMoqtSession(pair.server, {});
+  const peer = createMoqtSession(withServerRequestIds(pair.server), {});
 
   disposals.push(() => peer.destroy());
   const actor: PublishSessionActor = createPublishSessionActor({

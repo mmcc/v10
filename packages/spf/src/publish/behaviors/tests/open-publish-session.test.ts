@@ -1,11 +1,14 @@
+import { PUBLISH_DONE_STATUS, createMoqtSession } from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createComposition } from '../../../core/composition/create-composition';
 import { signal } from '../../../core/signals/primitives';
-import { PUBLISH_DONE_STATUS } from '../../../network/moqt/control-messages';
-import { createMoqtSession } from '../../../network/moqt/session';
-import { type RawRequest, rawSubscribe, solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
-import { createTransportPair, type TransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
+import { type RawRequest, rawSubscribe, solicitNamespace } from '../../../network/tests/helpers/raw-peer';
+import {
+  createTransportPair,
+  type TransportPair,
+  withServerRequestIds,
+} from '../../../network/tests/helpers/transport-pair';
 import type { ConnectPublishTransport } from '../../session/publish-session';
 import {
   type OpenPublishSessionContext,
@@ -20,7 +23,7 @@ const disposals: (() => void)[] = [];
 
 function makePeer(pair: TransportPair) {
   const closes: unknown[] = [];
-  const peer = createMoqtSession(pair.server, {
+  const peer = createMoqtSession(withServerRequestIds(pair.server), {
     callbacks: {
       onClosed: (info) => closes.push(info),
     },

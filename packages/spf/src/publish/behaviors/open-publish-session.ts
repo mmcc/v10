@@ -14,11 +14,12 @@
  * Sole writer of `state.sessionStatus` and `context.publishSessionActor`; co-writer of `state.publishError`
  * (transport/protocol failures only).
  */
+import { isMoqtProtocolError } from '@caprid/moq-core';
+
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { peek, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
-import { isMoqtProtocolError } from '../../network/moqt/errors';
 import type {
   ConnectPublishTransport,
   PublishEndpoint,

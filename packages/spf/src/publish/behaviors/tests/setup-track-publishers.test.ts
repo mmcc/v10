@@ -1,13 +1,17 @@
+import {
+  createMoqtSession,
+  type MoqtObject,
+  REQUEST_ERROR_CODE,
+  type SubscribeOk,
+  TRACK_PROPERTY,
+} from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { signal } from '../../../core/signals/primitives';
 import { MSF_CATALOG_VERSION } from '../../../media/moq/build-catalog';
-import { parseLocProperties } from '../../../media/moq/loc';
-import { REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
-import type { MoqtObject } from '../../../network/moqt/object-stream';
-import { createMoqtSession } from '../../../network/moqt/session';
-import { solicitNamespace } from '../../../network/moqt/tests/helpers/raw-peer';
-import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
+import { MICROSECONDS_PER_SECOND, parseLocProperties } from '../../../media/moq/loc';
+import { solicitNamespace } from '../../../network/tests/helpers/raw-peer';
+import { createTransportPair, withServerRequestIds } from '../../../network/tests/helpers/transport-pair';
 import { createPublishSessionActor, type PublishSessionActor } from '../../session/publish-session';
 import {
   type SetupTrackPublishersConfig,
@@ -25,7 +29,7 @@ const disposals: (() => void)[] = [];
 
 function makeSessionActor() {
   const pair = createTransportPair();
-  const peer = createMoqtSession(pair.server, {});
+  const peer = createMoqtSession(withServerRequestIds(pair.server), {});
 
   disposals.push(() => peer.destroy());
   const actor: PublishSessionActor = createPublishSessionActor({
@@ -133,17 +137,21 @@ describe('setupTrackPublishers', () => {
     });
 
     // Registration is local under announce-and-serve — the observable
-    // proof is that the peer's SUBSCRIBEs are answered.
-    const aliases: number[] = [];
+    // proof is that the peer's SUBSCRIBEs are answered, each declaring the
+    // microsecond timescale LOC packaging stamps objects in.
+    const answers: SubscribeOk[] = [];
 
     for (const trackName of ['catalog', 'video', 'audio'] as const) {
-      peer.subscribe({ trackNamespace: ENDPOINT.namespace, trackName }, { onOk: (ok) => aliases.push(ok.trackAlias) });
+      peer.subscribe({ trackNamespace: ENDPOINT.namespace, trackName }, { onOk: (ok) => answers.push(ok) });
     }
 
     await vi.waitFor(() => {
-      expect(aliases).toHaveLength(3);
+      expect(answers).toHaveLength(3);
       expect(actor.snapshot.get().context.subscriberCount).toBe(3);
     });
+    expect(answers.map((ok) => ok.trackProperties)).toEqual(
+      Array(3).fill([{ type: TRACK_PROPERTY.TIMESCALE, value: MICROSECONDS_PER_SECOND }])
+    );
   });
 
   it('skips the video publisher for an audio-only encoding', async () => {
@@ -333,7 +341,7 @@ describe('setupTrackPublishers', () => {
     expect(onSubgroupReset).not.toHaveBeenCalled();
   });
 
-  it("closes a track's open group before its PUBLISH_DONE (§10.12)", async () => {
+  it("closes a track's open group before its PUBLISH_DONE (§9.9)", async () => {
     const { actor, peer, server } = makeSessionActor();
     const { state, context } = setupBehavior();
     const events: string[] = [];

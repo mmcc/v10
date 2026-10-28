@@ -1,13 +1,11 @@
+import { utf8Decode, type MoqtObject, createMoqtSession } from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { effect } from '../../../../core/signals/effect';
 import { toLocFrame } from '../../../../media/moq/loc';
 import { applyMoqCatalogUpdate } from '../../../../media/moq/parse-catalog';
-import { utf8Decode } from '../../../../network/moqt/bytes';
-import type { MoqtObject } from '../../../../network/moqt/object-stream';
-import { createMoqtSession } from '../../../../network/moqt/session';
-import { solicitNamespace } from '../../../../network/moqt/tests/helpers/raw-peer';
-import { createTransportPair } from '../../../../network/moqt/tests/helpers/transport-pair';
+import { solicitNamespace } from '../../../../network/tests/helpers/raw-peer';
+import { createTransportPair, withServerRequestIds } from '../../../../network/tests/helpers/transport-pair';
 import { MoqPublishMediaMixin } from '../adapter';
 
 /**
@@ -66,7 +64,7 @@ describe('MoqPublishMediaMixin transport (M3)', () => {
 
     const pair = createTransportPair();
     const proactivePublishes: string[] = [];
-    const subscriber = createMoqtSession(pair.server, {
+    const subscriber = createMoqtSession(withServerRequestIds(pair.server), {
       unknownAliasTimeoutMs: 2000,
       callbacks: {
         // Regression tripwire: moq-relay 0.14.7 removed PUBLISH ingest —

@@ -233,9 +233,9 @@ const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineCon
 /**
  * Create a MoQ publish engine.
  *
- * The composition: capture (`getUserMedia`/`getDisplayMedia`) → WebCodecs encode → MOQT publish over an in-repo publish
- * session speaking the same moqt-20 dialect as the playback stack, publishing LOC-packaged tracks plus an MSF catalog
- * track.
+ * The composition: capture (`getUserMedia`/`getDisplayMedia`) → WebCodecs encode → MOQT publish over
+ * `@caprid/moq-core`'s publish session (moqt-22, falling back to moqt-20, like the playback stack), publishing
+ * LOC-packaged tracks plus an MSF catalog track.
  *
  * M1 composed the capture stage — device enumeration, capture-source acquisition, preview mirroring, and mute toggles.
  * M2 added the encode stage: encoder-support probing, the encoder actor pair, the frame-pumping loops, and
