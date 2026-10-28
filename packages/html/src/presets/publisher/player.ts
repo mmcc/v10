@@ -9,6 +9,7 @@ const { PlayerElement, PlayerController: VideoPublisherController } = createPlay
 /** Player controller bound to the video publisher store. */
 export const PlayerController = VideoPublisherController;
 
+/** @internal */
 export class VideoPublisherElement extends PlayerElement {
   static readonly tagName = 'video-publisher';
 }

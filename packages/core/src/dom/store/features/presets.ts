@@ -99,6 +99,8 @@ export const liveAudioFeatures: LiveAudioFeatures = [
 /**
  * Features for a publisher (broadcast) player. Composes the publish and capture feature slices with
  * {@link controlsFeature}, {@link fullscreenFeature}, and {@link errorFeature} for the surrounding UI.
+ *
+ * @internal
  */
 export const publisherFeatures: PublisherFeatures = [
   publishFeature,

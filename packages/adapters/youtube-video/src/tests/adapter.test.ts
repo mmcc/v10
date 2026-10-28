@@ -1,13 +1,7 @@
 import { MediaError } from '@videojs/media';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import { buildYouTubeIframeSrc, parseYouTubeSource, parseYouTubeVideoId, YouTubeAdapter } from '..';
-
-vi.mock(import('@videojs/utils/dom'), async (importOriginal) => {
-  const mod = await importOriginal();
-
-  return { ...mod, loadScript: vi.fn(async () => {}) };
-});
+import { buildYouTubeIframeSrc, YouTubeAdapter } from '..';
 
 interface StateChangeEvent {
   data: number;
@@ -20,22 +14,30 @@ interface MockPlayerEvents {
 
 class MockPlayer {
   static instances: MockPlayer[] = [];
-  target: unknown;
+  target: HTMLIFrameElement;
   events: MockPlayerEvents | undefined;
   listeners = new Map<string, Set<(event: StateChangeEvent) => void>>();
 
   playVideo = vi.fn();
   pauseVideo = vi.fn();
   seekTo = vi.fn();
-  mute = vi.fn();
-  unMute = vi.fn();
+  mute = vi.fn(() => {
+    this.isMuted.mockReturnValue(true);
+  });
+  unMute = vi.fn(() => {
+    this.isMuted.mockReturnValue(false);
+  });
   isMuted = vi.fn(() => false);
-  setVolume = vi.fn();
+  setVolume = vi.fn((volume: number) => {
+    this.getVolume.mockReturnValue(volume);
+  });
   getVolume = vi.fn(() => 100);
   getDuration = vi.fn(() => 60);
   getCurrentTime = vi.fn(() => 0);
   getPlaybackRate = vi.fn(() => 1);
-  setPlaybackRate = vi.fn();
+  setPlaybackRate = vi.fn((rate: number) => {
+    this.getPlaybackRate.mockReturnValue(rate);
+  });
   getVideoLoadedFraction = vi.fn(() => 0);
   getPlayerState = vi.fn(() => -1);
   loadVideoById = vi.fn();
@@ -43,11 +45,11 @@ class MockPlayer {
   loadPlaylist = vi.fn();
   cuePlaylist = vi.fn();
   stopVideo = vi.fn();
-  getOption = vi.fn(() => []);
+  getOption = vi.fn((_module: string, _option: string): unknown => undefined);
   setOption = vi.fn();
   destroy = vi.fn();
 
-  constructor(target: unknown, options?: { events?: MockPlayerEvents }) {
+  constructor(target: HTMLIFrameElement, options?: { events?: MockPlayerEvents }) {
     this.target = target;
     this.events = options?.events;
     MockPlayer.instances.push(this);
@@ -107,10 +109,12 @@ async function flushDeferredEmbed(): Promise<void> {
 }
 
 async function waitForEngine(media: YouTubeAdapter): Promise<MockPlayer> {
-  await vi.waitFor(() => {
-    if (!media.engine) throw new Error('player not created yet');
+  return vi.waitFor(() => {
+    const player = media.engine;
+    if (!(player instanceof MockPlayer)) throw new Error('player not created yet');
+
+    return player;
   });
-  return media.engine as unknown as MockPlayer;
 }
 
 async function attachAndLoad(media: YouTubeAdapter): Promise<{ iframe: HTMLIFrameElement; player: MockPlayer }> {
@@ -126,86 +130,6 @@ async function attachAndLoad(media: YouTubeAdapter): Promise<{ iframe: HTMLIFram
   player.ready();
   return { iframe, player };
 }
-
-describe('parseYouTubeVideoId', () => {
-  it('extracts id from a raw 11-character id', () => {
-    expect(parseYouTubeVideoId('aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-  });
-
-  it('extracts id from watch URL', () => {
-    expect(parseYouTubeVideoId('https://www.youtube.com/watch?v=aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-  });
-
-  it('extracts id from youtu.be short link', () => {
-    expect(parseYouTubeVideoId('https://youtu.be/aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-  });
-
-  it('extracts id from embed, shorts, and live URLs', () => {
-    expect(parseYouTubeVideoId('https://www.youtube.com/embed/aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-    expect(parseYouTubeVideoId('https://www.youtube.com/shorts/aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-    expect(parseYouTubeVideoId('https://www.youtube.com/live/aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-  });
-
-  it('extracts id from nocookie host', () => {
-    expect(parseYouTubeVideoId('https://www.youtube-nocookie.com/watch?v=aqz-KE-bpKQ')).toBe('aqz-KE-bpKQ');
-  });
-
-  it('returns null for empty input', () => {
-    expect(parseYouTubeVideoId('')).toBe(null);
-  });
-
-  it('returns null for non-YouTube URLs', () => {
-    expect(parseYouTubeVideoId('https://example.com/video.mp4')).toBe(null);
-  });
-});
-
-describe('parseYouTubeSource', () => {
-  it('detects playlists', () => {
-    expect(parseYouTubeSource('https://www.youtube.com/playlist?list=PLv3TTBr1W_9tppikBxAE_G6qjWdBljBHJ')).toEqual({
-      id: null,
-      kind: 'playlist',
-      listId: 'PLv3TTBr1W_9tppikBxAE_G6qjWdBljBHJ',
-      startTime: null,
-      noCookie: false,
-    });
-  });
-
-  it('detects playlists in videoseries embed URLs', () => {
-    expect(parseYouTubeSource('https://www.youtube.com/embed/videoseries?list=PLv3TTBr1W_9tppikBxAE')).toEqual({
-      id: null,
-      kind: 'playlist',
-      listId: 'PLv3TTBr1W_9tppikBxAE',
-      startTime: null,
-      noCookie: false,
-    });
-  });
-
-  it('returns null for a videoseries embed URL without a list param', () => {
-    expect(parseYouTubeSource('https://www.youtube.com/embed/videoseries')).toBe(null);
-  });
-
-  it('keeps the video id when a watch URL also has a list param', () => {
-    const parsed = parseYouTubeSource('https://www.youtube.com/watch?v=aqz-KE-bpKQ&list=PLv3TTBr1W_9tppikBxAE');
-
-    expect(parsed?.kind).toBe('video');
-    expect(parsed?.id).toBe('aqz-KE-bpKQ');
-    expect(parsed?.listId).toBe('PLv3TTBr1W_9tppikBxAE');
-  });
-
-  it('parses start times in t param formats', () => {
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=171')?.startTime).toBe(171);
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=171s')?.startTime).toBe(171);
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=2m51s')?.startTime).toBe(171);
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=2m')?.startTime).toBe(120);
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=1h30m15s')?.startTime).toBe(5415);
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=1h')?.startTime).toBe(3600);
-    expect(parseYouTubeSource('https://youtu.be/aqz-KE-bpKQ?t=1h5s')?.startTime).toBe(3605);
-  });
-
-  it('detects the nocookie host', () => {
-    expect(parseYouTubeSource('https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ')?.noCookie).toBe(true);
-  });
-});
 
 describe('buildYouTubeIframeSrc', () => {
   it('builds embed URL with default playsinline, hidden controls, and jsapi enabled', () => {
@@ -308,6 +232,12 @@ describe('buildYouTubeIframeSrc', () => {
   it('uses the nocookie embed base for nocookie sources', () => {
     expect(buildYouTubeIframeSrc('https://www.youtube-nocookie.com/watch?v=aqz-KE-bpKQ')).toContain(
       'https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ'
+    );
+  });
+
+  it('embeds youtube/<id> shorthands from the nocookie host', () => {
+    expect(buildYouTubeIframeSrc('youtube/aqz-KE-bpKQ')).toContain(
+      'https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ?'
     );
   });
 
@@ -580,6 +510,179 @@ describe('YouTubeAdapter', () => {
     player.emit('onStateChange', STATE.CUED);
     expect(loadCompleteSpy).toHaveBeenCalledTimes(1);
     media.detach();
+  });
+
+  it.each(['queued writes', 'applied settings', 'clear and refill', 'writes during replacement'])(
+    'applies a changed caption policy after replacement readiness (%s)',
+    async (scenario) => {
+      const media = new YouTubeAdapter();
+      const src = 'aqz-KE-bpKQ';
+
+      media.source = scenario === 'clear and refill' ? { src, engine: { youtube: { cc_load_policy: 1 } } } : { src };
+      const { iframe, player } = await attachAndLoad(media);
+
+      document.body.append(iframe);
+      // The iframe API removes the embed when its player is destroyed.
+      player.destroy.mockImplementation(() => iframe.remove());
+
+      try {
+        media.volume = 0.5;
+        media.muted = true;
+        media.playbackRate = 1.5;
+
+        if (scenario === 'applied settings' || scenario === 'clear and refill') await flushDeferredEmbed();
+
+        if (scenario === 'clear and refill') {
+          media.source = null;
+          media.src = 'dQw4w9WgXcQ';
+        } else {
+          if (scenario === 'queued writes') media.currentTime = 30;
+
+          media.source = { src, engine: { youtube: { cc_load_policy: 1 } } };
+        }
+
+        if (scenario === 'writes during replacement') {
+          media.volume = 0.7;
+          media.muted = false;
+          media.playbackRate = 2;
+        }
+
+        expect(iframe.isConnected).toBe(true);
+        const replacement = await waitForEngine(media);
+        const loadcomplete = vi.fn();
+
+        media.addEventListener('loadcomplete', loadcomplete);
+        const pending = media.play();
+
+        if (scenario !== 'clear and refill') {
+          player.ready();
+          player.emit('onStateChange', STATE.PLAYING);
+          await flushDeferredEmbed();
+
+          expect(media.readyState).toBe(0);
+          expect(media.paused).toBe(true);
+          expect(loadcomplete).not.toHaveBeenCalled();
+          expect(replacement.playVideo).not.toHaveBeenCalled();
+          expect(replacement.setVolume).not.toHaveBeenCalled();
+        }
+
+        replacement.ready();
+        await pending;
+
+        expect(new URL(iframe.src).searchParams.get('cc_load_policy')).toBe(
+          scenario === 'clear and refill' ? null : '1'
+        );
+        expect(replacement).not.toBe(player);
+        expect(media.readyState).toBe(1);
+        expect(loadcomplete).toHaveBeenCalledTimes(1);
+        expect(replacement.playVideo).toHaveBeenCalledTimes(1);
+        expect(replacement.getVolume()).toBe(scenario === 'writes during replacement' ? 70 : 50);
+        expect(replacement.isMuted()).toBe(scenario !== 'writes during replacement');
+        expect(replacement.getPlaybackRate()).toBe(scenario === 'writes during replacement' ? 2 : 1.5);
+        expect(media.volume).toBe(scenario === 'writes during replacement' ? 0.7 : 0.5);
+        expect(media.muted).toBe(scenario !== 'writes during replacement');
+        expect(media.playbackRate).toBe(scenario === 'writes during replacement' ? 2 : 1.5);
+
+        if (scenario === 'queued writes') expect(replacement.seekTo).toHaveBeenCalledWith(30, true);
+      } finally {
+        media.destroy();
+        iframe.remove();
+      }
+    }
+  );
+
+  it.each(['pending play', 'default mute'])('recreates before readiness without losing the %s', async (scenario) => {
+    const media = new YouTubeAdapter();
+    const src = 'aqz-KE-bpKQ';
+    const iframe = createIframe();
+
+    media.defaultMuted = scenario === 'default mute';
+    media.src = src;
+    document.body.append(iframe);
+    media.attach(iframe);
+    const player = await waitForEngine(media);
+
+    // The iframe API removes the embed when its player is destroyed.
+    player.destroy.mockImplementation(() => iframe.remove());
+
+    try {
+      const pending = media.play();
+
+      media.source = { src, engine: { youtube: { cc_load_policy: 1 } } };
+      const replacement = await vi.waitFor(() => {
+        const engine = media.engine;
+        if (!(engine instanceof MockPlayer) || engine === player) throw new Error('replacement not created yet');
+
+        return engine;
+      });
+
+      replacement.ready();
+      await pending;
+
+      expect(replacement.playVideo).toHaveBeenCalledTimes(1);
+      expect(new URL(iframe.src).searchParams.get('mute')).toBe(scenario === 'default mute' ? '1' : '0');
+      expect(replacement.unMute).not.toHaveBeenCalled();
+    } finally {
+      media.destroy();
+      iframe.remove();
+    }
+  });
+
+  it('builds the embed muted from the muted property, as React sets it', async () => {
+    const media = new YouTubeAdapter();
+    const iframe = createIframe();
+
+    media.muted = true;
+    media.src = 'aqz-KE-bpKQ';
+    document.body.append(iframe);
+    media.attach(iframe);
+
+    try {
+      await waitForEngine(media);
+
+      expect(new URL(iframe.src).searchParams.get('mute')).toBe('1');
+    } finally {
+      media.destroy();
+      iframe.remove();
+    }
+  });
+
+  it('keeps settings written before readiness across recreation', async () => {
+    const media = new YouTubeAdapter();
+    const src = 'aqz-KE-bpKQ';
+    const iframe = createIframe();
+
+    media.defaultMuted = true;
+    media.src = src;
+    document.body.append(iframe);
+    media.attach(iframe);
+    const player = await waitForEngine(media);
+
+    // The iframe API removes the embed when its player is destroyed.
+    player.destroy.mockImplementation(() => iframe.remove());
+
+    try {
+      media.volume = 0.5;
+      media.source = { src, engine: { youtube: { cc_load_policy: 1 } } };
+      const replacement = await vi.waitFor(() => {
+        const engine = media.engine;
+        if (!(engine instanceof MockPlayer) || engine === player) throw new Error('replacement not created yet');
+
+        return engine;
+      });
+      const reportedVolumes: number[] = [];
+
+      media.addEventListener('volumechange', () => reportedVolumes.push(media.volume));
+      replacement.ready();
+      await media.play();
+
+      expect(reportedVolumes).toEqual([0.5]);
+      expect(replacement.getVolume()).toBe(50);
+      expect(replacement.unMute).not.toHaveBeenCalled();
+    } finally {
+      media.destroy();
+      iframe.remove();
+    }
   });
 
   it('defers the load when src changes before the player is ready', async () => {
@@ -906,6 +1009,24 @@ describe('YouTubeAdapter', () => {
     expect(media.engine).toBe(null);
   });
 
+  it('returns the iframe to its host position after the player removes it on detach', async () => {
+    const media = new YouTubeAdapter();
+    const { iframe, player } = await attachAndLoad(media);
+    const container = document.createElement('div');
+    const sibling = document.createElement('span');
+
+    container.append(iframe, sibling);
+    // The iframe API removes the embed when its player is destroyed.
+    player.destroy.mockImplementation(() => iframe.remove());
+
+    media.detach();
+
+    expect(player.destroy).toHaveBeenCalled();
+    expect(iframe.nextSibling).toBe(sibling);
+    // A framework unmounting the host can still remove the iframe it rendered.
+    expect(() => container.removeChild(iframe)).not.toThrow();
+  });
+
   it('unblocks pending play() when detached before load completes', async () => {
     const media = new YouTubeAdapter();
 
@@ -1017,21 +1138,6 @@ describe('YouTubeAdapter source', () => {
     media.src = 'dQw4w9WgXcQ';
 
     expect(media.source).toEqual({ engine: { youtube: { cc_load_policy: 1 } }, src: 'dQw4w9WgXcQ' });
-  });
-
-  it('reloads when only YouTube player parameters change', async () => {
-    const media = new YouTubeAdapter();
-
-    media.src = 'aqz-KE-bpKQ';
-    const { player } = await attachAndLoad(media);
-
-    player.cueVideoById.mockClear();
-
-    media.source = { src: 'aqz-KE-bpKQ', engine: { youtube: { cc_load_policy: 1 } } };
-    await Promise.resolve();
-
-    expect(player.cueVideoById).toHaveBeenCalledWith({ videoId: 'aqz-KE-bpKQ' });
-    media.detach();
   });
 
   it('serializes YouTube player parameters onto the initial iframe src', () => {
@@ -1152,5 +1258,240 @@ describe('YouTubeAdapter source', () => {
 
     await expect(pending).resolves.toBeUndefined();
     media.detach();
+  });
+});
+
+describe('YouTubeAdapter textTracks', () => {
+  const EN = { languageCode: 'en', displayName: 'English' };
+  const ES = { languageCode: 'es', displayName: 'Spanish' };
+  const FR = { languageCode: 'fr', displayName: 'French' };
+
+  interface CaptionReport {
+    tracklist?: { languageCode: string; displayName: string }[];
+    track?: { languageCode?: string };
+  }
+
+  /** Answer the captions module's options the way the iframe API caches them, then announce the module change. */
+  function reportCaptions(player: MockPlayer, { tracklist = [], track = {} }: CaptionReport): void {
+    player.getOption.mockImplementation((module, option) => {
+      if (module !== 'captions') return undefined;
+
+      return option === 'tracklist' ? tracklist : option === 'track' ? track : undefined;
+    });
+    player.emit('onApiChange');
+  }
+
+  /** Track list events are queued like native ones. */
+  async function flushTrackEvents(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve));
+  }
+
+  function snapshot(media: YouTubeAdapter) {
+    return Array.from(media.textTracks, ({ kind, label, language, mode }) => ({ kind, label, language, mode }));
+  }
+
+  it('surfaces caption tracks on the list read before the player existed', async () => {
+    const media = new YouTubeAdapter();
+    const textTracks = media.textTracks;
+    const addtrack = vi.fn();
+
+    textTracks.addEventListener('addtrack', addtrack);
+
+    const { player } = await attachAndLoad(media);
+
+    reportCaptions(player, { tracklist: [EN, ES] });
+    await flushTrackEvents();
+
+    expect(media.textTracks).toBe(textTracks);
+    expect(addtrack).toHaveBeenCalledTimes(2);
+    expect(snapshot(media)).toEqual([
+      { kind: 'subtitles', label: 'English', language: 'en', mode: 'disabled' },
+      { kind: 'subtitles', label: 'Spanish', language: 'es', mode: 'disabled' },
+    ]);
+    media.detach();
+  });
+
+  it('surfaces caption tracks on the list read after the player is ready', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+    const addtrack = vi.fn();
+
+    media.textTracks.addEventListener('addtrack', addtrack);
+    reportCaptions(player, { tracklist: [EN] });
+    await flushTrackEvents();
+
+    expect(addtrack).toHaveBeenCalledTimes(1);
+    expect(snapshot(media).map(({ language }) => language)).toEqual(['en']);
+    media.detach();
+  });
+
+  it('surfaces tracks the captions module reports after the first playing transition', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+
+    player.emit('onStateChange', STATE.PLAYING);
+    expect(media.textTracks).toHaveLength(0);
+
+    reportCaptions(player, { tracklist: [EN] });
+    reportCaptions(player, { tracklist: [EN, ES] });
+
+    expect(snapshot(media).map(({ language }) => language)).toEqual(['en', 'es']);
+    media.detach();
+  });
+
+  it('shows the track YouTube renders on load without echoing it back', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+    const change = vi.fn();
+
+    media.textTracks.addEventListener('change', change);
+    reportCaptions(player, { tracklist: [EN, ES], track: ES });
+    await flushTrackEvents();
+
+    expect(snapshot(media).map(({ mode }) => mode)).toEqual(['disabled', 'showing']);
+    expect(change).toHaveBeenCalledTimes(1);
+    expect(player.setOption).not.toHaveBeenCalled();
+    media.detach();
+  });
+
+  it('surfaces the track YouTube renders even when the track list omits it', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+
+    reportCaptions(player, { tracklist: [EN], track: FR });
+
+    expect(snapshot(media)).toEqual([
+      { kind: 'subtitles', label: 'English', language: 'en', mode: 'disabled' },
+      { kind: 'subtitles', label: 'French', language: 'fr', mode: 'showing' },
+    ]);
+    media.detach();
+  });
+
+  it('turns off the captions YouTube shows when the showing track is disabled', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+
+    reportCaptions(player, { tracklist: [EN, ES], track: ES });
+    await flushTrackEvents();
+
+    media.textTracks[1]!.mode = 'disabled';
+    await flushTrackEvents();
+
+    expect(player.setOption).toHaveBeenCalledTimes(1);
+    expect(player.setOption).toHaveBeenCalledWith('captions', 'track', {});
+    media.detach();
+  });
+
+  it('selects one language for a switch made within a tick', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+
+    reportCaptions(player, { tracklist: [EN, ES], track: ES });
+    await flushTrackEvents();
+
+    media.textTracks[1]!.mode = 'disabled';
+    media.textTracks[0]!.mode = 'showing';
+    await flushTrackEvents();
+
+    expect(player.setOption).toHaveBeenCalledTimes(1);
+    expect(player.setOption).toHaveBeenCalledWith('captions', 'track', { languageCode: 'en' });
+    media.detach();
+  });
+
+  it('keeps a selection over the stale track YouTube keeps reporting', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+
+    reportCaptions(player, { tracklist: [EN, ES], track: ES });
+    await flushTrackEvents();
+
+    media.textTracks[1]!.mode = 'disabled';
+    await flushTrackEvents();
+
+    // The embed's cached `track` still names the language that was turned off.
+    reportCaptions(player, { tracklist: [EN, ES], track: ES });
+    player.emit('onStateChange', STATE.PLAYING);
+    await flushTrackEvents();
+
+    expect(snapshot(media).map(({ mode }) => mode)).toEqual(['disabled', 'disabled']);
+    expect(player.setOption).toHaveBeenCalledTimes(1);
+    media.detach();
+  });
+
+  it('leaves modes alone while the captions module is not loaded', async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+
+    reportCaptions(player, { tracklist: [EN], track: EN });
+    player.getOption.mockReturnValue(undefined);
+    player.emit('onStateChange', STATE.BUFFERING);
+
+    expect(snapshot(media).map(({ mode }) => mode)).toEqual(['showing']);
+    media.detach();
+  });
+
+  it("drops the previous video's tracks when the source changes", async () => {
+    const media = new YouTubeAdapter();
+    const { player } = await attachAndLoad(media);
+    const removetrack = vi.fn();
+
+    reportCaptions(player, { tracklist: [EN, ES], track: ES });
+    await flushTrackEvents();
+    media.textTracks[1]!.mode = 'disabled';
+    await flushTrackEvents();
+
+    media.textTracks.addEventListener('removetrack', removetrack);
+    media.src = 'dQw4w9WgXcQ';
+    await flushTrackEvents();
+
+    expect(media.textTracks).toHaveLength(0);
+    expect(media.textTracks[0]).toBeUndefined();
+    expect(removetrack).toHaveBeenCalledTimes(2);
+
+    // The new video's report is YouTube's own state again, not stale after the earlier selection.
+    reportCaptions(player, { tracklist: [FR], track: FR });
+    await flushTrackEvents();
+
+    expect(snapshot(media)).toEqual([{ kind: 'subtitles', label: 'French', language: 'fr', mode: 'showing' }]);
+    expect(player.setOption).toHaveBeenCalledTimes(1);
+    media.detach();
+  });
+
+  it('keeps one track list across embed recreation, dropping the old tracks', async () => {
+    const media = new YouTubeAdapter();
+    const src = 'aqz-KE-bpKQ';
+
+    media.source = { src };
+    const { iframe, player } = await attachAndLoad(media);
+    const textTracks = media.textTracks;
+
+    document.body.append(iframe);
+    // The iframe API removes the embed when its player is destroyed.
+    player.destroy.mockImplementation(() => iframe.remove());
+
+    try {
+      reportCaptions(player, { tracklist: [EN] });
+
+      media.source = { src, engine: { youtube: { cc_load_policy: 1 } } };
+      const replacement = await vi.waitFor(() => {
+        const engine = media.engine;
+        if (!(engine instanceof MockPlayer) || engine === player) throw new Error('replacement not created yet');
+
+        return engine;
+      });
+
+      expect(media.textTracks).toHaveLength(0);
+
+      replacement.ready();
+      reportCaptions(replacement, { tracklist: [ES], track: ES });
+      // A report from the destroyed player belongs to the old embed.
+      reportCaptions(player, { tracklist: [FR], track: FR });
+
+      expect(media.textTracks).toBe(textTracks);
+      expect(snapshot(media)).toEqual([{ kind: 'subtitles', label: 'Spanish', language: 'es', mode: 'showing' }]);
+    } finally {
+      media.destroy();
+      iframe.remove();
+    }
   });
 });

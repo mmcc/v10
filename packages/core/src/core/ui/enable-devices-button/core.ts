@@ -9,6 +9,7 @@ import type { ButtonState } from '../types';
 import { aggregateCaptureState } from '../utils/aggregate-capture-state';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface EnableDevicesButtonProps {
   /** Custom label for the button. */
   label?: Text | string | ((state: EnableDevicesButtonState) => Text | string) | undefined;
@@ -16,6 +17,7 @@ export interface EnableDevicesButtonProps {
   disabled?: boolean | undefined;
 }
 
+/** @internal */
 export interface EnableDevicesButtonState extends ButtonState {
   /** Current capture lifecycle. */
   captureState: MediaCaptureState;
@@ -26,6 +28,8 @@ export interface EnableDevicesButtonState extends ButtonState {
 /**
  * Core state machine for an "Enable camera and microphone" button. Activating it selects the camera capture source,
  * which prompts for device permission as needed.
+ *
+ * @internal
  */
 export class EnableDevicesButtonCore {
   static readonly defaultProps: NonNullableObject<EnableDevicesButtonProps> = {
@@ -98,6 +102,7 @@ export class EnableDevicesButtonCore {
   }
 }
 
+/** @internal */
 export namespace EnableDevicesButtonCore {
   export type Props = EnableDevicesButtonProps;
   export type State = EnableDevicesButtonState;

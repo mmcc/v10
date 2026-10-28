@@ -316,7 +316,11 @@ export function createSandboxConfig(skinsSource?: SkinsSource) {
         hasWorkspace ||
           existsSync(resolve(__dirname, 'app/_generated/registry/react-tailwind-default/components/videojs'))
       ),
-      __SANDBOX_BRANCH__: JSON.stringify(describeGit('rev-parse', '--abbrev-ref', 'HEAD')),
+      // Vercel checks out the deployed commit detached, so `rev-parse --abbrev-ref HEAD` answers `master` there; its own
+      // variable names the real branch. Local runs and git-less checkouts keep the git answer and its `unknown` fallback.
+      __SANDBOX_BRANCH__: JSON.stringify(
+        process.env.VERCEL_GIT_COMMIT_REF || describeGit('rev-parse', '--abbrev-ref', 'HEAD')
+      ),
       __SANDBOX_COMMIT__: JSON.stringify(describeGit('rev-parse', '--short', 'HEAD')),
     },
     test: {
@@ -344,19 +348,43 @@ export function createSandboxConfig(skinsSource?: SkinsSource) {
           replacement: resolve(__dirname, 'app/_generated/registry/react-tailwind-default'),
         },
         {
-          find: '@registry-react-tailwind-minimal',
-          replacement: resolve(__dirname, 'app/_generated/registry/react-tailwind-minimal'),
+          find: '@registry-react-tailwind-neutral',
+          replacement: resolve(__dirname, 'app/_generated/registry/react-tailwind-neutral'),
+        },
+        {
+          find: '@registry-react-tailwind-compat',
+          replacement: resolve(__dirname, 'app/_generated/registry/react-tailwind-compat'),
+        },
+        {
+          find: '@registry-react-tailwind-scaffold',
+          replacement: resolve(__dirname, 'app/_generated/registry/react-tailwind-scaffold'),
         },
         {
           find: '@registry-react-css-default',
           replacement: resolve(__dirname, 'app/_generated/registry/react-css-default'),
         },
         {
-          find: '@registry-react-css-minimal',
-          replacement: resolve(__dirname, 'app/_generated/registry/react-css-minimal'),
+          find: '@registry-react-css-neutral',
+          replacement: resolve(__dirname, 'app/_generated/registry/react-css-neutral'),
+        },
+        {
+          find: '@registry-react-css-compat',
+          replacement: resolve(__dirname, 'app/_generated/registry/react-css-compat'),
+        },
+        {
+          find: '@registry-react-css-scaffold',
+          replacement: resolve(__dirname, 'app/_generated/registry/react-css-scaffold'),
         },
         { find: '@registry-html-default', replacement: resolve(__dirname, 'app/_generated/registry/html-default') },
-        { find: '@registry-html-minimal', replacement: resolve(__dirname, 'app/_generated/registry/html-minimal') },
+        { find: '@registry-html-neutral', replacement: resolve(__dirname, 'app/_generated/registry/html-neutral') },
+        {
+          find: '@registry-html-compat',
+          replacement: resolve(__dirname, 'app/_generated/registry/html-compat'),
+        },
+        {
+          find: '@registry-html-scaffold',
+          replacement: resolve(__dirname, 'app/_generated/registry/html-scaffold'),
+        },
         { find: '@app', replacement: resolve(__dirname, 'app') },
         { find: '@videojs/cdn/i18n', replacement: cdnI18nRegistry },
         ...(existsSync(cdnSandboxMainTemplate)

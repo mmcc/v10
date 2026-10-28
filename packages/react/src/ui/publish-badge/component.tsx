@@ -13,6 +13,7 @@ import { renderElement } from '../../utils/use-render';
 
 const DISPLAY_NAME = 'PublishBadge';
 
+/** @internal */
 export interface PublishBadgeProps extends UIComponentProps<'div', PublishBadgeCore.State>, PublishBadgeCore.Props {}
 
 /**
@@ -23,6 +24,8 @@ export interface PublishBadgeProps extends UIComponentProps<'div', PublishBadgeC
  *   ```tsx
  *   <PublishBadge />;
  *   ```;
+ *
+ * @internal
  */
 export const PublishBadge = forwardRef(function PublishBadge(
   componentProps: PublishBadgeProps,
@@ -66,6 +69,7 @@ export const PublishBadge = forwardRef(function PublishBadge(
 
 PublishBadge.displayName = DISPLAY_NAME;
 
+/** @internal */
 export namespace PublishBadge {
   export type Props = PublishBadgeProps;
   export type State = PublishBadgeCore.State;

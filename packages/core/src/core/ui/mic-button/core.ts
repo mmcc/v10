@@ -8,6 +8,7 @@ import { micMuteText, micUnmuteText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface MicButtonProps {
   /** Custom label for the button. */
   label?: Text | string | ((state: MicButtonState) => Text | string) | undefined;
@@ -15,8 +16,10 @@ export interface MicButtonProps {
   disabled?: boolean | undefined;
 }
 
+/** @internal */
 export interface MicButtonState extends Pick<MediaCaptureTracksState, 'micMuted'>, ButtonState {}
 
+/** @internal */
 export class MicButtonCore {
   static readonly defaultProps: NonNullableObject<MicButtonProps> = {
     label: '',
@@ -73,6 +76,7 @@ export class MicButtonCore {
   }
 }
 
+/** @internal */
 export namespace MicButtonCore {
   export type Props = MicButtonProps;
   export type State = MicButtonState;

@@ -19,7 +19,7 @@ Video.js 10 is set up a monorepo using [`pnpm` workspaces](https://pnpm.io/works
 
 You’ll need the following installed:
 
-- [Node.js](https://nodejs.org/en/download) (≥ 22.19.0)
+- [Node.js](https://nodejs.org/en/download) (≥ 22.22.0)
 - [Git](https://git-scm.com/downloads)
 - [PNPM](https://pnpm.io/installation) (≥ 12.3.4)
 - [mise](https://mise.jdx.dev), or [NVM](https://github.com/nvm-sh/nvm)
@@ -36,10 +36,10 @@ You’ll need the following installed:
 2. Clone your fork locally and set up upstream tracking:
 
 ```sh
-git clone https://github.com/{your-github-username}/v10.git
-cd v10
+git clone https://github.com/{your-github-username}/video.js.git
+cd video.js
 
-git remote add upstream git@github.com:videojs/v10.git
+git remote add upstream git@github.com:videojs/video.js.git
 git fetch upstream
 git branch --set-upstream-to=upstream/main main
 ```
@@ -97,6 +97,8 @@ pnpm dev
 ```
 
 This will run the entire workspace in developer mode, meaning all applications (examples and website) will also be started on their respective ports.
+
+`pnpm dev` and `pnpm dev:packages` prepare package outputs, then watch development JavaScript and CSS only to reduce memory use. Restart either task or run `pnpm build:packages` to refresh type declarations and production outputs. Use Ctrl+C to stop the servers and watchers; interactive watcher shortcuts are disabled.
 
 ```sh
 pnpm dev:site       # just the documentation site
@@ -226,6 +228,45 @@ Use this to try a change in a real project before it is released. Previews are v
 
 Because a preview is an installable artifact carrying the Video.js name, it is only published for code someone with repository access pushed or vouched for. Pull requests from a branch in this repo publish automatically; **pull requests from a fork publish only once a maintainer approves them**. The approval has to be written against the pull request's latest commit, so any new commit needs a fresh approval before it is published.
 
+### 🚀 Releases
+
+This section is for maintainers. Releases run from [`.github/workflows/cd.yml`](./.github/workflows/cd.yml) in the `production` environment:
+
+1. [release-please][release-please] keeps a release PR open on `main`, built from conventional commits. Merging it tags the release.
+2. The same run builds the packages, CDN bundles, and site, then publishes every public package under `packages/` to npm. Stable versions go to `latest`; prereleases go to `next`.
+3. It attaches the CDN archive to the `@videojs/cdn` GitHub release and updates the `site/v10` branch.
+
+#### npm trusted publishing
+
+The publish step authenticates with [npm trusted publishing][npm-trusted-publishing] (OIDC); there is no npm token. Every public package needs a GitHub Actions trusted publisher for repository `videojs/video.js`, workflow `cd.yml`, environment `production`, with publish permission. If the Publish step logs `ERR_PNPM_AUTH_TOKEN_EXCHANGE ... (status code 404)` and then fails with `404 Not Found`, that package's trusted publisher is missing, expired, or doesn't match.
+
+Each public package's **Publishing access** should be "Require two-factor authentication and disallow tokens", which npm [recommends][npm-trusted-publishing-access] alongside trusted publishing: OIDC publishes keep working, and long-lived tokens can't publish. Set it once a new package has its trusted publisher, either under the package's **Settings** on npmjs.com or with `npm access set mfa=publish <package>`. npm asks for 2FA on each change.
+
+To add or repair trusted publishers, log in with an npm account that has 2FA and write access to the packages, then run:
+
+```sh
+npm login
+pnpm release:trust --dry-run   # show each package's current trusted publisher
+pnpm release:trust             # add missing ones and replace mismatched ones
+```
+
+npm asks for 2FA to read trusted publishers as well as change them, so `--dry-run` prompts too. When npm's website offers "skip two-factor authentication for the next 5 minutes", tick it to get through the batch. Pass package names to limit the run, and add `--force` to replace configurations that look correct but are still rejected. The script only replaces trusted publishers for `cd.yml`; publishers for other workflows, such as the Video.js 8 release, are left alone.
+
+> [!IMPORTANT]
+> npm can't attach a trusted publisher to a package that doesn't exist yet. When you add a new public package, run `pnpm release:trust` before merging the release PR that first includes it. The script publishes a deprecated `0.0.0-placeholder` version to claim the name, and the release then publishes the real version over `latest`.
+>
+> The release PR's **npm trusted publishing** status fails while any public package isn't on npm, and its workflow summary lists the command to run. Once you've run it, re-run the failed `trusted-publishing` job in the Release PR workflow. The check can't read trusted publisher settings (that needs npm 2FA), so it doesn't catch expired or mismatched ones; `pnpm release:trust --dry-run` does.
+
+#### Recovering a failed publish
+
+If publishing fails after release-please has tagged the release, fix the cause, then run the Deployment workflow from `main` with the released version:
+
+```sh
+gh workflow run cd.yml --ref main -f recover_version=<version>
+```
+
+`pnpm publish` skips versions already on npm, so a partial publish resumes where it stopped. Recovery only accepts the current release, and it refuses to run once `packages/` or `site/` have changed on `main` since the tag. In that case, ship the fix in the next release instead.
+
 ### ✅ Workspace Consistency
 
 Before opening a PR, run the workspace consistency check to catch common mistakes (CI coverage, scope mismatches, broken define imports, etc.):
@@ -255,6 +296,9 @@ pnpm up <package>@<version> -r
 
 [pnpm-filtering]: https://pnpm.io/filtering
 [pkg-pr-new]: https://github.com/stackblitz-labs/pkg.pr.new
+[release-please]: https://github.com/googleapis/release-please
+[npm-trusted-publishing]: https://docs.npmjs.com/trusted-publishers
+[npm-trusted-publishing-access]: https://docs.npmjs.com/trusted-publishers#recommended-restrict-token-access-when-using-trusted-publishers
 
 ## Using AI
 
@@ -327,7 +371,7 @@ By submitting a pull request, you agree that your contribution is provided under
 
 ### Step 1: Verify
 
-Whether you're adding something new, making something better, or fixing a bug, you'll first want to search the [GitHub issues](https://github.com/videojs/v10/issues) to make sure you're aware of any previous discussion or work. If an unclaimed issue exists, claim it via a comment. If no issue exists for your change, [submit a new issue][vjs-issue-choose].
+Whether you're adding something new, making something better, or fixing a bug, you'll first want to search the [GitHub issues](https://github.com/videojs/video.js/issues) to make sure you're aware of any previous discussion or work. If an unclaimed issue exists, claim it via a comment. If no issue exists for your change, [submit a new issue][vjs-issue-choose].
 
 ### Step 2: Update remote
 
@@ -440,8 +484,8 @@ To discuss larger ideas or prototypes, or to help out with ongoing discussions, 
 - [Discord][vjs-discord]
 - [GitHub Discussions][vjs-gh-discussions]
 
-[vjs-gh]: https://github.com/videojs/v10
-[vjs-issue-choose]: https://github.com/videojs/v10/issues/new/choose
-[vjs-gh-discussions]: https://github.com/videojs/v10/discussions
+[vjs-gh]: https://github.com/videojs/video.js
+[vjs-issue-choose]: https://github.com/videojs/video.js/issues/new/choose
+[vjs-gh-discussions]: https://github.com/videojs/video.js/discussions
 [vjs-discord]: https://discord.gg/JBqHh485uF
 [conventional-commit-style]: https://www.conventionalcommits.org/en/v1.0.0/#summary

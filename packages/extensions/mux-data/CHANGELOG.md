@@ -1,5 +1,89 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/mux-data@10.1.0...@videojs/mux-data@10.2.0) (2026-10-22)
+
+
+### Bug Fixes
+
+* **mux-data:** report video.js as the default player software ([#9568](https://github.com/videojs/video.js/issues/9568)) ([9e90d26](https://github.com/videojs/video.js/commit/9e90d2667a046faed303e7397097118fe93a10c9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.2.0
+    * @videojs/media bumped to 10.2.0
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/mux-data@10.0.1...@videojs/mux-data@10.1.0) (2026-10-12)
+
+
+### Bug Fixes
+
+* **hlsjs-video:** bump hls.js ([#3171](https://github.com/videojs/video.js/issues/3171)) ([fe34200](https://github.com/videojs/video.js/commit/fe342001739bf47d4d135871d4aab0a9fc425c24))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.1.0
+    * @videojs/media bumped to 10.1.0
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/mux-data@10.0.0...@videojs/mux-data@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/mux-data:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.1
+    * @videojs/media bumped to 10.0.1
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/mux-data@10.0.0-rc.5...@videojs/mux-data@10.0.0) (2026-10-01)
+
+
+### Miscellaneous Chores
+
+* **@videojs/mux-data:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0
+    * @videojs/media bumped to 10.0.0
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/mux-data@10.0.0-rc.4...@videojs/mux-data@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880))
+
+### Code Refactoring
+
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880)) ([9b6675e](https://github.com/videojs/v10/commit/9b6675e3cfe50e3b54f4d4d07a563a4fdc712291))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/core bumped to 10.0.0-rc.5
+    * @videojs/media bumped to 10.0.0-rc.5
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/mux-data@10.0.0-rc.3...@videojs/mux-data@10.0.0-rc.4) (2026-09-26)
 
 

@@ -1,13 +1,39 @@
 import { useStore } from '@nanostores/react';
 import { getInstallationPreset, type Renderer, type Skin, type UseCase } from '@videojs/installation';
 import { Container } from '@videojs/react';
-import { Audio, AudioPlayer, AudioSkin, MinimalAudioSkin } from '@videojs/react/audio';
+import {
+  Audio,
+  AudioPlayer,
+  AudioSkin,
+  CompatAudioSkin,
+  ScaffoldAudioSkin,
+  NeutralAudioSkin,
+} from '@videojs/react/audio';
 import { BackgroundVideo, BackgroundVideoPlayer, BackgroundVideoSkin } from '@videojs/react/background';
-import { LiveAudioPlayer, LiveAudioSkin, MinimalLiveAudioSkin } from '@videojs/react/live-audio';
-import { LiveVideoPlayer, LiveVideoSkin, MinimalLiveVideoSkin } from '@videojs/react/live-video';
+import {
+  CompatLiveAudioSkin,
+  ScaffoldLiveAudioSkin,
+  LiveAudioPlayer,
+  LiveAudioSkin,
+  NeutralLiveAudioSkin,
+} from '@videojs/react/live-audio';
+import {
+  CompatLiveVideoSkin,
+  ScaffoldLiveVideoSkin,
+  LiveVideoPlayer,
+  LiveVideoSkin,
+  NeutralLiveVideoSkin,
+} from '@videojs/react/live-video';
 import { HlsAudio } from '@videojs/react/media/hls-audio';
 import { HlsJsVideo } from '@videojs/react/media/hlsjs-video';
-import { MinimalVideoSkin, Video, VideoPlayer, VideoSkin } from '@videojs/react/video';
+import {
+  CompatVideoSkin,
+  ScaffoldVideoSkin,
+  NeutralVideoSkin,
+  Video,
+  VideoPlayer,
+  VideoSkin,
+} from '@videojs/react/video';
 import type { ReactNode } from 'react';
 
 import ArrowRight from '@/assets/icons/arrow-right.svg?react';
@@ -24,13 +50,21 @@ import useIsHydrated from '@/utils/useIsHydrated';
 import { useSelection } from './useSelection';
 
 import '@videojs/react/video/skin.css';
-import '@videojs/react/video/minimal-skin.css';
+import '@videojs/react/video/neutral-skin.css';
+import '@videojs/react/video/compat-skin.css';
+import '@videojs/react/video/scaffold-skin.css';
 import '@videojs/react/audio/skin.css';
-import '@videojs/react/audio/minimal-skin.css';
+import '@videojs/react/audio/neutral-skin.css';
+import '@videojs/react/audio/compat-skin.css';
+import '@videojs/react/audio/scaffold-skin.css';
 import '@videojs/react/live-video/skin.css';
-import '@videojs/react/live-video/minimal-skin.css';
+import '@videojs/react/live-video/neutral-skin.css';
+import '@videojs/react/live-video/compat-skin.css';
+import '@videojs/react/live-video/scaffold-skin.css';
 import '@videojs/react/live-audio/skin.css';
-import '@videojs/react/live-audio/minimal-skin.css';
+import '@videojs/react/live-audio/neutral-skin.css';
+import '@videojs/react/live-audio/compat-skin.css';
+import '@videojs/react/live-audio/scaffold-skin.css';
 import '@videojs/react/background/skin.css';
 import { withSelectionMarker } from './withSelectionMarker';
 
@@ -38,10 +72,30 @@ const FILE_RENDERERS: Renderer[] = ['html5-video', 'html5-audio'];
 const HLS_RENDERERS: Renderer[] = ['hls', 'mux-video', 'mux-audio'];
 
 const SKIN_PAGES = {
-  'default-video': { video: 'video-skin', 'minimal-video': 'video-minimal-skin' },
-  'default-audio': { audio: 'audio-skin', 'minimal-audio': 'audio-minimal-skin' },
-  'live-video': { video: 'live-video-skin', 'minimal-video': 'live-video-minimal-skin' },
-  'live-audio': { audio: 'live-audio-skin', 'minimal-audio': 'live-audio-minimal-skin' },
+  'default-video': {
+    video: 'video-skin',
+    'neutral-video': 'video-neutral-skin',
+    'compat-video': 'video-compat-skin',
+    'scaffold-video': 'video-scaffold-skin',
+  },
+  'default-audio': {
+    audio: 'audio-skin',
+    'neutral-audio': 'audio-neutral-skin',
+    'compat-audio': 'audio-compat-skin',
+    'scaffold-audio': 'audio-scaffold-skin',
+  },
+  'live-video': {
+    video: 'live-video-skin',
+    'neutral-video': 'live-video-neutral-skin',
+    'compat-video': 'live-video-compat-skin',
+    'scaffold-video': 'live-video-scaffold-skin',
+  },
+  'live-audio': {
+    audio: 'live-audio-skin',
+    'neutral-audio': 'live-audio-neutral-skin',
+    'compat-audio': 'live-audio-compat-skin',
+    'scaffold-audio': 'live-audio-scaffold-skin',
+  },
   'background-video': { video: 'background-video-skin' },
 } satisfies Record<UseCase, Partial<Record<Skin, string>>>;
 
@@ -101,7 +155,9 @@ function VideoPreview({ skin: $skin, source, live }: { skin: Skin; source: Sourc
     );
   const Player = live ? LiveVideoPlayer : VideoPlayer;
   const FullSkin = live ? LiveVideoSkin : VideoSkin;
-  const MinimalSkin = live ? MinimalLiveVideoSkin : MinimalVideoSkin;
+  const NeutralSkin = live ? NeutralLiveVideoSkin : NeutralVideoSkin;
+  const CompatSkin = live ? CompatLiveVideoSkin : CompatVideoSkin;
+  const ScaffoldSkin = live ? ScaffoldLiveVideoSkin : ScaffoldVideoSkin;
 
   return (
     <Player poster={poster}>
@@ -109,8 +165,12 @@ function VideoPreview({ skin: $skin, source, live }: { skin: Skin; source: Sourc
         <Container className="bg-faded-black aspect-video w-full overflow-hidden rounded-2xl [&_video]:size-full">
           {media}
         </Container>
-      ) : $skin.startsWith('minimal') ? (
-        <MinimalSkin className="aspect-video w-full">{media}</MinimalSkin>
+      ) : $skin.startsWith('neutral') ? (
+        <NeutralSkin className="aspect-video w-full">{media}</NeutralSkin>
+      ) : $skin.startsWith('scaffold') ? (
+        <ScaffoldSkin className="aspect-video w-full">{media}</ScaffoldSkin>
+      ) : $skin.startsWith('compat') ? (
+        <CompatSkin className="aspect-video w-full">{media}</CompatSkin>
       ) : (
         <FullSkin className="aspect-video w-full">{media}</FullSkin>
       )}
@@ -127,15 +187,21 @@ function AudioPreview({ skin: $skin, source, live }: { skin: Skin; source: Sourc
     );
   const Player = live ? LiveAudioPlayer : AudioPlayer;
   const FullSkin = live ? LiveAudioSkin : AudioSkin;
-  const MinimalSkin = live ? MinimalLiveAudioSkin : MinimalAudioSkin;
+  const NeutralSkin = live ? NeutralLiveAudioSkin : NeutralAudioSkin;
+  const CompatSkin = live ? CompatLiveAudioSkin : CompatAudioSkin;
+  const ScaffoldSkin = live ? ScaffoldLiveAudioSkin : ScaffoldAudioSkin;
 
   return (
     <div className="flex aspect-video w-full items-center justify-center">
       <Player>
         {$skin === 'none' ? (
           <Container className="w-full max-w-md [&_audio]:w-full">{media}</Container>
-        ) : $skin.startsWith('minimal') ? (
-          <MinimalSkin className="w-full max-w-md">{media}</MinimalSkin>
+        ) : $skin.startsWith('neutral') ? (
+          <NeutralSkin className="w-full max-w-md">{media}</NeutralSkin>
+        ) : $skin.startsWith('scaffold') ? (
+          <ScaffoldSkin className="w-full max-w-md">{media}</ScaffoldSkin>
+        ) : $skin.startsWith('compat') ? (
+          <CompatSkin className="w-full max-w-md">{media}</CompatSkin>
         ) : (
           <FullSkin className="w-full max-w-md">{media}</FullSkin>
         )}
@@ -188,11 +254,15 @@ function InstallationPreview() {
   const skinLabel =
     effectiveSkin === 'none'
       ? 'no skin'
-      : effectiveSkin.startsWith('minimal')
-        ? 'the minimal skin'
-        : 'the default skin';
+      : effectiveSkin.startsWith('neutral')
+        ? 'the neutral skin'
+        : effectiveSkin.startsWith('compat')
+          ? 'the compat skin'
+          : effectiveSkin.startsWith('scaffold')
+            ? 'the scaffold skin'
+            : 'the default skin';
   const referenceHref =
-    isHydrated && framework && skinPage ? `/docs/framework/${framework}/components/${skinPage}` : null;
+    isHydrated && framework && skinPage ? `/docs/framework/${framework}/reference/components/${skinPage}` : null;
 
   return (
     <figure className="flex flex-col gap-3">

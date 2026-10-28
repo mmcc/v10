@@ -1,10 +1,6 @@
-import {
-  type Composition,
-  type ContextSignals,
-  createComposition,
-  type StateSignals,
-} from '../../../core/composition/create-composition';
-import { makeShareSignals, type ShareSignalsConfig } from '../../../core/composition/share-signals';
+import { type Composition, createComposition } from '../../../core/composition/create-composition';
+import type { ContextSignals } from '../../../core/composition/define-behavior';
+import { defineExternalSignals } from '../../../core/composition/define-external-signals';
 import { peek } from '../../../core/signals/primitives';
 import type { BuildMsfCatalog } from '../../../media/moq/build-catalog';
 import type { AudioEncoderActor } from '../../actors/dom/audio-encoder';
@@ -79,8 +75,8 @@ export type {
 };
 
 /**
- * State shape for the MoQ publish engine — consumer intent slots (written through
- * {@link MoqPublishEngineConfig.onSignalsReady} refs by the adapter) plus pipeline facts (written by behaviors).
+ * State shape for the MoQ publish engine — consumer intent slots (written by the adapter through the composition's
+ * `state`) plus pipeline facts (written by behaviors).
  */
 export interface MoqPublishEngineState {
   // -- intent (adapter writes) --
@@ -151,17 +147,11 @@ export interface MoqPublishEngineContext {
   dataTrackProducers?: Readonly<Record<string, DataTrackProducer>> | undefined;
 }
 
-/** Composition signal refs handed to {@link ShareSignalsConfig.onSignalsReady}. */
-export interface MoqPublishEngineSignals {
-  state: StateSignals<MoqPublishEngineState>;
-  context: ContextSignals<MoqPublishEngineContext>;
-}
-
 // ============================================================================
 // MoQ Publish Engine Config
 // ============================================================================
 
-export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEngineState, MoqPublishEngineContext> {
+export interface MoqPublishEngineConfig {
   /**
    * Relative track importance for MoQ delivery and browser upload scheduling. Defaults to catalog, audio, camera, then
    * screen. Lower numbers have higher priority; see {@link PublishTrackPriorities}. Invalid values use the default.
@@ -210,12 +200,29 @@ export interface MoqPublishEngineConfig extends ShareSignalsConfig<MoqPublishEng
   buildCatalog?: BuildMsfCatalog;
 }
 
+type MoqPublishEngineExternalState = Pick<
+  MoqPublishEngineState,
+  | 'endpoint'
+  | 'publishActivated'
+  | 'cameraActive'
+  | 'screenShareActive'
+  | 'micActive'
+  | 'videoInputDeviceId'
+  | 'audioInputDeviceId'
+  | 'previewSource'
+  | 'cameraMuted'
+  | 'micMuted'
+>;
+
 /**
- * Materialize the consumer-input slots no composed behavior produces and hand the composition signal refs to
- * `onSignalsReady`.
+ * External signals of the MoQ publish engine: the consumer intent the adapter writes, which no composed behavior
+ * declares.
  */
-const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineContext>(
-  [
+const moqPublishEngineExternalSignals = defineExternalSignals<
+  MoqPublishEngineExternalState,
+  Pick<MoqPublishEngineContext, 'previewElement'>
+>()({
+  state: [
     'endpoint',
     'publishActivated',
     'cameraActive',
@@ -227,8 +234,8 @@ const shareSignals = makeShareSignals<MoqPublishEngineState, MoqPublishEngineCon
     'cameraMuted',
     'micMuted',
   ],
-  ['previewElement']
-);
+  context: ['previewElement'],
+});
 
 /**
  * Create a MoQ publish engine.
@@ -269,12 +276,13 @@ export function createMoqPublishEngine(
     });
   };
 
-  const engineConfig: MoqPublishEngineConfig = {
-    ...config,
-    // The `video` → `camera` rename is resolved here, before the config
-    // reaches `probeEncoderSupport`: that behavior knows only `camera`, so a
-    // client still passing `video` would otherwise be silently ignored.
-    camera: config.camera ?? config.video,
+  // The `video` → `camera` rename is resolved here, before the config
+  // reaches `probeEncoderSupport`: that behavior knows only `camera`, so a
+  // client still passing `video` would otherwise be silently ignored.
+  const { video, ...rest } = config;
+  const engineConfig: Omit<MoqPublishEngineConfig, 'video'> = {
+    ...rest,
+    camera: config.camera ?? video,
     chunkSink: config.chunkSink ?? routeToTrackPublishers,
   };
   const composition = createComposition(
@@ -299,7 +307,7 @@ export function createMoqPublishEngine(
       setupTrackPublishers,
       openPublishSession,
       deriveCatalog,
-      shareSignals,
+      moqPublishEngineExternalSignals,
     ],
     {
       config: engineConfig,

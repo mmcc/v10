@@ -23,6 +23,8 @@ import { UIElement } from '../ui-element';
  *
  * Doesn't extend `MediaButtonElement` because that base couples a button to a single feature selector; the
  * PublishButton needs two.
+ *
+ * @internal
  */
 export class PublishButtonElement extends UIElement {
   static readonly tagName = 'media-publish-button';

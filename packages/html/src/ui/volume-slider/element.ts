@@ -1,4 +1,4 @@
-import { VolumeSliderCore, VolumeSliderDataAttrs } from '@videojs/core';
+import { VolumeSliderCore, VolumeSliderDataAttrs, type VolumeSliderProps } from '@videojs/core';
 import {
   applyElementProps,
   applyStateDataAttrs,
@@ -37,7 +37,7 @@ export class VolumeSliderElement extends UIElement {
     orientation: { type: String },
     disabled: { type: Boolean },
     thumbAlignment: { type: String, attribute: 'thumb-alignment' },
-  } satisfies PropertyDeclarationMap<Exclude<keyof VolumeSliderCore.Props, 'value' | 'min' | 'max'>>;
+  } satisfies PropertyDeclarationMap<Exclude<keyof VolumeSliderProps, 'value' | 'min' | 'max'>>;
 
   label: Text | string = '';
   step = VolumeSliderCore.defaultProps.step;
@@ -96,14 +96,17 @@ export class VolumeSliderElement extends UIElement {
         this.dispatchEvent(new CustomEvent('drag-end', { bubbles: true }));
       },
       adjustPercent: (raw, thumbSize, trackSize) => this.#core.adjustPercentForAlignment(raw, thumbSize, trackSize),
-      onResize: () => this.requestUpdate(),
+      // Only edge alignment depends on the slider's size.
+      onResize: () => {
+        if (this.thumbAlignment === 'edge') this.requestUpdate();
+      },
     });
 
     const wheelProps = createWheelStep({
       isDisabled,
       getPercent,
       getStepPercent: () => this.#core.getWheelStepPercent(),
-      onValueChange: setVolume,
+      onValueChange: (percent) => this.#volumeState.value?.setVolume(this.#core.rawValueFromPercent(percent) / 100),
     });
 
     applyElementProps(this, this.#slider.rootProps, { signal });

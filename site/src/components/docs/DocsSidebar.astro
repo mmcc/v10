@@ -74,7 +74,10 @@ const TAB_ICONS = {
 } satisfies Record<string, typeof BookIcon>;
 ---
 
-<div class={clsx("bg-manila-light dark:bg-faded-black", className)}>
+<div
+  class={clsx("bg-manila-light dark:bg-faded-black", className)}
+  data-ph-capture-attribute-location="docs-sidebar"
+>
   <slot />
   {
     tabs.length > 1 && (
@@ -103,7 +106,6 @@ const TAB_ICONS = {
                   // One weight for both states prevents a layout shift when the selected section changes.
                   "group relative isolate flex cursor-pointer items-center rounded-md corner-squircle px-3 py-2 text-left text-p3 leading-5 font-medium select-none",
                   "text-muted intent:text-faded-black dark:intent:text-manila-light aria-selected:text-faded-black dark:aria-selected:text-manila-light",
-                  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-gold",
                 ]}
               >
                 <span

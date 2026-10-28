@@ -13,6 +13,7 @@ import { renderElement } from '../../utils/use-render';
 
 const DISPLAY_NAME = 'ConnectionIndicator';
 
+/** @internal */
 export interface ConnectionIndicatorProps
   extends UIComponentProps<'div', ConnectionIndicatorCore.State>, ConnectionIndicatorCore.Props {}
 
@@ -26,6 +27,8 @@ export interface ConnectionIndicatorProps
  *     <SignalIcon />
  *   </ConnectionIndicator>;
  *   ```;
+ *
+ * @internal
  */
 export const ConnectionIndicator = forwardRef(function ConnectionIndicator(
   componentProps: ConnectionIndicatorProps,
@@ -69,6 +72,7 @@ export const ConnectionIndicator = forwardRef(function ConnectionIndicator(
 
 ConnectionIndicator.displayName = DISPLAY_NAME;
 
+/** @internal */
 export namespace ConnectionIndicator {
   export type Props = ConnectionIndicatorProps;
   export type State = ConnectionIndicatorCore.State;

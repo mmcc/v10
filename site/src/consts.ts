@@ -2,7 +2,6 @@ import cdnPackage from '../../packages/cdn/package.json' with { type: 'json' };
 import htmlPackage from '../../packages/html/package.json' with { type: 'json' };
 // The Vite config reaches this module while discovering the workspace task graph, before package builds run.
 import { INSTALLATION_DEMO_SOURCES } from '../../packages/installation/src/defaults.ts';
-import utilsPackage from '../../packages/utils/package.json' with { type: 'json' };
 
 // Always https://videojs.org. Unlike Astro.site, which varies per deploy
 // (e.g. deploy preview URLs), this is stable for canonical URLs and other
@@ -11,15 +10,18 @@ export const PRODUCTION_URL = new URL('https://videojs.org');
 // Pre-release docs host (branch deploy of `main`). Keep references centralized
 // here so the hostname can move without touching components.
 export const PRERELEASE_URL = new URL('https://main.videojs.org');
+// Docs for Video.js 8 and earlier.
+export const LEGACY_URL = new URL('https://legacy.videojs.org');
 export const SITE_TITLE = 'Video.js';
 export const SEO_SUFFIX = 'Open Source Video Player';
 /** Month (`YYYY-MM`) of the first Video.js 10 blog post; earlier posts document Video.js 1 through 8. */
 export const FIRST_V10_BLOG_MONTH = '2026-03';
 export const SITE_DESCRIPTION = `The open-source video player for React and HTML. Lightweight, accessible components built for performance and streaming.`;
-export const GITHUB_REPO_URL = 'https://github.com/videojs/v10/';
+export const GITHUB_REPO_URL = 'https://github.com/videojs/video.js/';
 export const DISCORD_INVITE_URL = 'https://discord.gg/JBqHh485uF';
 export const MUX_URL = 'https://www.mux.com?utm_source=videojs&utm_campaign=vjs10';
 export const MUX_SUPPORT_URL = 'https://www.mux.com/sales-contact?form=sales&utm_source=videojs&utm_campaign=vjs10';
+export const MUX_SHOP_URL = 'https://shop.mux.com';
 export const THEME_KEY = 'vjs-site-theme';
 export const ACCENT_KEY = 'vjs-site-accent';
 export const TONE_KEY = 'vjs-site-tone';
@@ -34,12 +36,10 @@ export const THEME_COLORS = {
   soft: '#1e1d1d',
   deep: '#151414',
 } as const;
-export const BANNER_DISMISS_KEY = 'vjs-legacy-banner-dismissed';
 export const BLOG_PAGE_SIZE = 10;
 export const CDN_URL_BASE = `https://cdn.jsdelivr.net/npm`;
 export const VJS10_VERSION = htmlPackage.version;
 export const VJS10_CDN_BASE = `${CDN_URL_BASE}/@videojs/cdn@${cdnPackage.version}`;
-export const VJS10_UTILS_CDN_BASE = `${CDN_URL_BASE}/@videojs/utils@${utilsPackage.version}`;
 export const VJS10_CDN_ARCHIVE_VERSION = cdnPackage.version;
 
 export function isPrereleaseSite(siteUrl: URL | undefined): boolean {
@@ -101,6 +101,11 @@ export const VJS10_DEMO_VIMEO = INSTALLATION_DEMO_SOURCES.vimeo;
 export const VJS10_DEMO_WISTIA = 'https://wesleyluyten.wistia.com/medias/oifkgmxnkb';
 export const VJS10_DEMO_YOUTUBE = INSTALLATION_DEMO_SOURCES.youtube;
 export const VJS10_DEMO_CLOUDFLARE = INSTALLATION_DEMO_SOURCES.cloudflare;
+// player.js is a protocol rather than a host; Gumlet is one service whose embed
+// speaks it.
+export const VJS10_DEMO_PLAYERJS = 'https://play.gumlet.io/embed/64bfb0913ed6e5096d66dc1e';
+// SoundCloud's own docs embed from this account, so its tracks stay public.
+export const VJS10_DEMO_SOUNDCLOUD = 'https://soundcloud.com/forss/flickermood';
 // An episode rather than a track: Spotify plays episodes in full for a
 // signed-out listener, where a track is a 30 second preview.
 export const VJS10_DEMO_SPOTIFY = INSTALLATION_DEMO_SOURCES.spotify;

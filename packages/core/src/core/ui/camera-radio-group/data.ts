@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { CameraRadioGroupState } from './core';
 
+/** @internal */
 export const CameraRadioGroupDataAttrs = {
   /** Currently selected camera device id. */
   value: 'data-camera',

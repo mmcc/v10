@@ -1,8 +1,9 @@
-import { TimeSliderCore, TimeSliderDataAttrs } from '@videojs/core';
+import { SliderCSSVars, TimeSliderCore, TimeSliderDataAttrs, type TimeSliderProps } from '@videojs/core';
 import {
   applyElementProps,
   applyStateDataAttrs,
   createSlider,
+  createTimeSliderSeek,
   getTimeSliderCSSVars,
   logMissingFeature,
   type SliderApi,
@@ -14,7 +15,7 @@ import {
 import { type Text, translateText } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
 import { ContextProvider } from '@videojs/element/context';
-import { hasTimeRange } from '@videojs/media';
+import { hasTimeRange, isMediaPlaying } from '@videojs/media';
 import { applyStyles } from '@videojs/utils/dom';
 import { formatTime } from '@videojs/utils/time';
 
@@ -41,7 +42,7 @@ export class TimeSliderElement extends UIElement {
     disabled: { type: Boolean },
     thumbAlignment: { type: String, attribute: 'thumb-alignment' },
     pauseOnDrag: { type: Boolean, attribute: 'pause-on-drag' },
-  } satisfies PropertyDeclarationMap<Exclude<keyof TimeSliderCore.Props, 'value' | 'min' | 'max'>>;
+  } satisfies PropertyDeclarationMap<Exclude<keyof TimeSliderProps, 'value' | 'min' | 'max'>>;
 
   label: Text | string = '';
   changeThrottle = TimeSliderCore.defaultProps.changeThrottle;
@@ -58,8 +59,10 @@ export class TimeSliderElement extends UIElement {
   readonly #timeState = new PlayerController(this, playerContext, selectTime);
   readonly #bufferState = new PlayerController(this, playerContext, selectBuffer);
   readonly #playbackState = new PlayerController(this, playerContext, selectPlayback);
+  readonly #seek = createTimeSliderSeek(SliderCSSVars.fill);
   readonly #i18n = new I18nController(this, i18nContext);
 
+  #cssVars: Record<string, string> = {};
   #slider: SliderApi | null = null;
   #disconnect: AbortController | null = null;
   #releaseControlsLock: (() => void) | null = null;
@@ -71,6 +74,19 @@ export class TimeSliderElement extends UIElement {
 
     this.#disconnect = new AbortController();
     const signal = this.#disconnect.signal;
+
+    let dragSeekPercent: number | undefined;
+
+    const seek = (percent: number) => {
+      const media = this.#timeState.value;
+
+      if (media) {
+        const time = this.#core.rawValueFromPercent(percent);
+
+        this.#seek.seek(percent);
+        media.seek(time);
+      }
+    };
 
     this.#slider = createSlider({
       getElement: () => this,
@@ -91,10 +107,19 @@ export class TimeSliderElement extends UIElement {
       },
       getStepPercent: () => this.#core.getStepPercent(),
       getLargeStepPercent: () => this.#core.getLargeStepPercent(),
-      onValueCommit: (percent) => {
-        const media = this.#timeState.value;
+      // Seek on each (throttled) change while dragging so the frame follows the thumb.
+      // Presses and key steps seek once, on commit.
+      onValueChange: (percent) => {
+        if (!this.#slider?.input.current.dragging || percent === dragSeekPercent) return;
 
-        if (media) media.seek(this.#core.rawValueFromPercent(percent));
+        dragSeekPercent = percent;
+        seek(percent);
+      },
+      onValueCommit: (percent) => {
+        // Skip the commit when the drag already sought this position.
+        if (percent !== dragSeekPercent) seek(percent);
+
+        dragSeekPercent = undefined;
       },
       changeThrottle: this.changeThrottle,
       onPressStart: () => {
@@ -110,12 +135,16 @@ export class TimeSliderElement extends UIElement {
         this.dispatchEvent(new CustomEvent('drag-end', { bubbles: true }));
       },
       adjustPercent: (raw, thumbSize, trackSize) => this.#core.adjustPercentForAlignment(raw, thumbSize, trackSize),
-      onResize: () => this.requestUpdate(),
+      // Only edge alignment depends on the slider's size.
+      onResize: () => {
+        if (this.thumbAlignment === 'edge') this.requestUpdate();
+      },
     });
 
     applyElementProps(this, this.#slider.rootProps, { signal });
     applyStyles(this, this.#slider.rootStyle);
     this.#slider.input.subscribe(() => this.requestUpdate(), { signal });
+    this.#seek.state.subscribe(() => this.requestUpdate(), { signal });
 
     if (__DEV__ && !this.#timeState.value) {
       logMissingFeature(this.localName, this.#timeState.displayName!);
@@ -125,6 +154,7 @@ export class TimeSliderElement extends UIElement {
   override disconnectedCallback(): void {
     this.#releaseControlsVisibilityLock();
     this.#resumeIfDragPaused();
+    this.#seek.destroy();
     super.disconnectedCallback();
     this.#disconnect?.abort();
     this.#disconnect = null;
@@ -133,6 +163,7 @@ export class TimeSliderElement extends UIElement {
   override destroyCallback(): void {
     this.#releaseControlsVisibilityLock();
     this.#resumeIfDragPaused();
+    this.#seek.destroy();
     this.#slider?.destroy();
     super.destroyCallback();
   }
@@ -172,7 +203,11 @@ export class TimeSliderElement extends UIElement {
     const time = this.#timeState.value;
     const buffer = this.#bufferState.value;
 
-    if (!time) return;
+    if (!time) {
+      this.#seek.destroy();
+      this.removeAttribute('data-playing');
+      return;
+    }
 
     this.#core.setInput(this.#slider.input.current);
     const media = { ...time, ...(buffer ?? { buffered: [], seekable: [] }) };
@@ -180,10 +215,26 @@ export class TimeSliderElement extends UIElement {
     this.#core.setMedia(media);
     const state = this.#core.getState();
 
-    const cssVars = getTimeSliderCSSVars(this.#slider.adjustForAlignment(state));
-    const thumbAttrs = this.#core.getAttrs(state);
+    this.#seek.update(state.seeking, state.fillPercent, this);
+    const percent = this.#seek.state.current.percent;
 
-    applyStyles(this, cssVars);
+    this.toggleAttribute(
+      'data-playing',
+      isMediaPlaying(this.#playbackState.value) &&
+        !state.disabled &&
+        !state.dragging &&
+        !state.seeking &&
+        percent === undefined
+    );
+
+    const fill = percent === undefined || state.dragging || state.disabled ? state : { ...state, fillPercent: percent };
+    const cssVars = getTimeSliderCSSVars(this.#slider.adjustForAlignment(fill));
+    const styles = Object.fromEntries(Object.entries(cssVars).filter(([name, value]) => this.#cssVars[name] !== value));
+
+    applyStyles(this, styles);
+    this.#cssVars = cssVars;
+
+    const thumbAttrs = this.#core.getAttrs(state);
 
     // Domain-specific data attributes on root (includes data-seeking).
     applyStateDataAttrs(this, state, TimeSliderDataAttrs);

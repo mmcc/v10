@@ -9,11 +9,13 @@ import { connectingText, offlineText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface PublishBadgeProps {
   /** Custom label for the badge. */
   label?: Text | string | ((state: PublishBadgeState) => Text | string) | undefined;
 }
 
+/** @internal */
 export interface PublishBadgeState extends ButtonState {
   /** Current publish session lifecycle. */
   session: MediaPublishSessionState;
@@ -22,6 +24,8 @@ export interface PublishBadgeState extends ButtonState {
 /**
  * Core state machine for a publish status badge. Its label reflects the session lifecycle: "Live" while publishing,
  * "Connecting…" during session setup, and "Offline" otherwise (idle, stopping, or error).
+ *
+ * @internal
  */
 export class PublishBadgeCore {
   static readonly defaultProps: NonNullableObject<PublishBadgeProps> = {
@@ -75,6 +79,7 @@ export class PublishBadgeCore {
   }
 }
 
+/** @internal */
 export namespace PublishBadgeCore {
   export type Props = PublishBadgeProps;
   export type State = PublishBadgeState;

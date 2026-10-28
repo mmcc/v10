@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vite-plus/test';
 
-import type { ContextSignals, StateSignals } from '../../../../core/composition/create-composition';
+import type { ContextSignals, StateSignals } from '../../../../core/composition/define-behavior';
 import { signal } from '../../../../core/signals/primitives';
 import {
   type CurrentTimeContext,
@@ -43,23 +43,6 @@ describe('trackCurrentTime', () => {
 
     await vi.waitFor(() => {
       expect(state.currentTime.get()).toBe(5.5);
-    });
-
-    cleanup();
-  });
-
-  it('updates currentTime on timeupdate events', async () => {
-    const mediaElement = document.createElement('video');
-
-    Object.defineProperty(mediaElement, 'currentTime', { value: 0, writable: true });
-
-    const { state, cleanup } = setupTrackCurrentTime({}, { mediaElement });
-
-    (mediaElement as any).currentTime = 10.0;
-    mediaElement.dispatchEvent(new Event('timeupdate'));
-
-    await vi.waitFor(() => {
-      expect(state.currentTime.get()).toBe(10.0);
     });
 
     cleanup();

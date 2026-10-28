@@ -37,7 +37,7 @@ const extensionPackages = new Set(
 );
 
 /** Definitions the CDN build leaves out; mirrors `cdnMediaExclusions` in `packages/cdn/vite.config.ts`. */
-const CDN_EXCLUDED_MEDIA = new Set(['simple-moq-video']);
+const CDN_EXCLUDED_MEDIA = new Set(['simple-moq-video', 'moq-publish-video']);
 
 describe('installation workspace contract', () => {
   it('keeps CDN media support aligned with the definitions its build republishes', () => {
@@ -98,9 +98,13 @@ describe('installation workspace contract', () => {
 
   it('keeps AI Quickstart scoped to packages represented by installation instructions', () => {
     const required = new Set([
+      // Core is never installed directly; its README routes readers to the framework packages.
+      '@videojs/core',
       '@videojs/html',
       '@videojs/react',
       '@videojs/cdn',
+      // `video.js` routes npm installs to the framework packages, so its README carries the same AI Quickstart.
+      'video.js',
       ...adapterPackages,
       ...extensionPackages,
     ]);

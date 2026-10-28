@@ -162,20 +162,20 @@ async function loadCdnPlayer(skin: Skin, live: boolean) {
   switch (descriptor.player) {
     case 'video':
       if (live) {
-        if (skin === 'minimal') await import('@videojs/cdn/live-video-minimal');
+        if (skin === 'neutral') await import('@videojs/cdn/live-video-neutral');
         else await import('@videojs/cdn/live-video');
       } else {
-        if (skin === 'minimal') await import('@videojs/cdn/video-minimal');
+        if (skin === 'neutral') await import('@videojs/cdn/video-neutral');
         else await import('@videojs/cdn/video');
       }
 
       break;
     case 'audio':
       if (live) {
-        if (skin === 'minimal') await import('@videojs/cdn/live-audio-minimal');
+        if (skin === 'neutral') await import('@videojs/cdn/live-audio-neutral');
         else await import('@videojs/cdn/live-audio');
       } else {
-        if (skin === 'minimal') await import('@videojs/cdn/audio-minimal');
+        if (skin === 'neutral') await import('@videojs/cdn/audio-neutral');
         else await import('@videojs/cdn/audio');
       }
 
@@ -210,7 +210,7 @@ async function loadCdnMedia(media: MediaId) {
       break;
     // `<background-video>` rides along inside the `background` bundle above; the
     // SPF-backed tags are their own bundles, so the page loads them the way it
-    // loads every other media element. Both tags are one element, and a CDN page
+    // loads every other media component. Both tags are one element, and a CDN page
     // loads bundles at runtime — so it loads only the one the media names.
     case 'hls-background-video':
       await import('@videojs/cdn/media/hls-background-video');
@@ -243,6 +243,12 @@ async function loadCdnMedia(media: MediaId) {
       break;
     case 'cloudflare-video':
       await import('@videojs/cdn/media/cloudflare-video');
+      break;
+    case 'playerjs-video':
+      await import('@videojs/cdn/media/playerjs-video');
+      break;
+    case 'soundcloud-audio':
+      await import('@videojs/cdn/media/soundcloud-audio');
       break;
     case 'spotify-audio':
       await import('@videojs/cdn/media/spotify-audio');
@@ -392,7 +398,7 @@ async function render() {
 
   template.innerHTML = wrapCdnPlayerI18n(playerTag, skin);
 
-  // Subtitle tracks go in while the markup is still inert, as on the html pages: a custom media element reads its
+  // Subtitle tracks go in while the markup is still inert, as on the html pages: a media component reads its
   // tracks when it upgrades. An embed hands captions to its provider, so it gets none.
   const mediaElement = skinnedVideo ? findMediaTag(template.content) : undefined;
 

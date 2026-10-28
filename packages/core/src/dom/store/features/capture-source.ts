@@ -5,6 +5,7 @@ import { isFunction } from '@videojs/utils/predicate';
 
 import { definePlayerFeature } from '../../feature';
 
+/** @internal */
 export const captureSourceFeature = definePlayerFeature({
   name: 'captureSource',
   state: ({ target }): MediaCaptureSourceState => ({

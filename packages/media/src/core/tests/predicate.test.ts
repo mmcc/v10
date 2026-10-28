@@ -9,6 +9,7 @@ import {
   isMediaCaptureSourceCapable,
   isMediaCaptureToggleCapable,
   isMediaContentDataCapable,
+  isMediaPlaying,
   isMediaPublishCapable,
   isMediaPublishStatsCapable,
   isMediaRemotePlaybackCapable,
@@ -45,6 +46,20 @@ describe('hasTimeRange', () => {
 
   it('rejects an unknown time range', () => {
     expect(hasTimeRange({ duration: 0, seekable: [] })).toBe(false);
+  });
+});
+
+describe('isMediaPlaying', () => {
+  it('requires active playback with data available', () => {
+    const media = { paused: false, ended: false, waiting: false };
+
+    expect(isMediaPlaying(media)).toBe(true);
+    expect(isMediaPlaying(null)).toBe(false);
+    expect(isMediaPlaying(undefined)).toBe(false);
+
+    for (const key of ['paused', 'ended', 'waiting'] as const) {
+      expect(isMediaPlaying({ ...media, [key]: true })).toBe(false);
+    }
   });
 });
 

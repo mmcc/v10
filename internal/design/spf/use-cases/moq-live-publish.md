@@ -71,7 +71,7 @@ The entire behavior list of
 `enumerateCaptureDevices`, `acquireCaptureSource`, `syncPreview`,
 `applyTrackToggles`, `probeEncoderSupport`, `setupEncoderActors`,
 `pumpMediaFrames`, `trackPublishStats`, `openPublishSession`,
-`setupTrackPublishers`, `deriveCatalog`, then `shareSignals`. All belong
+`setupTrackPublishers`, `deriveCatalog`, then the external-signals declaration. All belong
 to the constituent feature — this use case adds no use-case-specific glue
 behaviors of its own (nothing to hold out of the feature registry).
 

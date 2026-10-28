@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { MicRadioGroupState } from './core';
 
+/** @internal */
 export const MicRadioGroupDataAttrs = {
   /** Currently selected microphone device id. */
   value: 'data-microphone',

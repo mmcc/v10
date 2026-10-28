@@ -12,8 +12,9 @@
  *
  * - `'preconditions-unmet'`: no presentation, or presentation has no URL.
  * - `'idle'`: URL present, unresolved, gate unmet (blocking preload + no load-activation). Waits for the gate to open.
- * - `'resolving'`: URL present, unresolved, gate met. Entry starts the fetch and returns the AbortController — the
- *   reactor calls `.abort()` on state exit, so source change / gate-close / destroy all cancel cleanly.
+ * - `'resolving'`: URL present, unresolved, gate met. A presentation-tracking effect starts the fetch and returns the
+ *   AbortController — the reactor calls `.abort()` on presentation replacement or state exit, so source change /
+ *   gate-close / destroy all cancel cleanly. Late results commit only while the input presentation is still current.
  * - `'resolved'`: `state.presentation` holds a resolved `Presentation`.
  *
  * Gate semantics: `state.preload` (or `config.defaultPreload`, default `'metadata'`, when state.preload is unset)
@@ -23,13 +24,16 @@
  * Multi-writer with the engine adapter, which writes the initial unresolved `{ url }` to `state.presentation` from src
  * input. Different domains (config-input vs. derived state via fetch) — legitimate multi-writer.
  */
-import { defineBehavior } from '../../core/composition/create-composition';
+import { defineBehavior } from '../../core/composition/define-behavior';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
 import { computed, type ReadonlySignal, type Signal } from '../../core/signals/primitives';
+import { SVTA_PRIMARY_MANIFEST_LOAD_ERROR } from '../../media/errors';
 import { isResolvedPresentation, type MaybeResolvedPresentation, type Presentation } from '../../media/types';
 import { DEFAULT_PRELOAD, isBlockingPreload, type StandardPreload } from '../../media/utils/preload';
-import { fetchResolvable, getResponseText } from '../../network/fetch';
+import { credentialsFetch, type RequestCredentialsPolicy } from '../../network/credentials-fetch';
+import { fetchResolvable as defaultFetchResolvable, getResponseText } from '../../network/fetch';
+import { type ErrorEmitterState, emitError } from './collect-errors';
 
 export interface PresentationState {
   presentation?: MaybeResolvedPresentation;
@@ -51,6 +55,8 @@ export interface ResolvePresentationConfig {
    * `'metadata'`, matching `syncPreload`'s own `defaultPreload`.
    */
   defaultPreload?: StandardPreload;
+  /** The `credentials` mode the manifest request is made with; absent → the platform default. */
+  requestCredentials?: RequestCredentialsPolicy;
 }
 
 export type ResolvePresentationState = 'preconditions-unmet' | 'idle' | 'resolving' | 'resolved';
@@ -70,19 +76,25 @@ function deriveState(
   return gateOpen ? 'resolving' : 'idle';
 }
 
+// A type alias rather than an interface: the signal-map bound needs the implicit index signature only an alias has.
+type ResolvePresentationStateMap = {
+  presentation: Signal<PresentationState['presentation']>;
+  preload: ReadonlySignal<PresentationState['preload']>;
+  loadActivated: ReadonlySignal<PresentationState['loadActivated']>;
+};
+
 function resolvePresentationSetup({
   state,
   config,
 }: {
-  state: {
-    presentation: Signal<PresentationState['presentation']>;
-    preload: ReadonlySignal<PresentationState['preload']>;
-    loadActivated: ReadonlySignal<PresentationState['loadActivated']>;
-  };
+  // Widened with the optional `errors` signal, as `resolveTrack` is: a failed
+  // load reports through it and no-ops when `collectErrors` isn't composed.
+  state: ResolvePresentationStateMap & ErrorEmitterState;
   config: ResolvePresentationConfig;
 }): Reactor<ResolvePresentationState | 'destroying' | 'destroyed'> {
   const { parsePresentation } = config;
   const defaultPreload: StandardPreload = config.defaultPreload ?? DEFAULT_PRELOAD;
+  const fetchResolvable = credentialsFetch(defaultFetchResolvable, config.requestCredentials);
 
   const derivedStateSignal = computed(() =>
     deriveState(state.presentation.get(), state.preload.get(), state.loadActivated.get(), defaultPreload)
@@ -95,13 +107,19 @@ function resolvePresentationSetup({
       'preconditions-unmet': {},
       idle: {},
       resolving: {
-        entry: () => {
-          const presentation = state.presentation.get()!;
+        effects: () => {
+          const presentation = state.presentation.get();
+          // Disposed effects reorder the shared watcher, so this can run before
+          // the monitor leaves the state; never fetch a cleared or resolved one.
+          if (!presentation?.url || isResolvedPresentation(presentation)) return;
+
           const ac = new AbortController();
 
           fetchResolvable(presentation, { signal: ac.signal })
             .then((response) => getResponseText(response))
             .then((text) => {
+              if (ac.signal.aborted || state.presentation.get() !== presentation) return;
+
               const parsed = parsePresentation(text, presentation);
 
               state.presentation.set(parsed);
@@ -109,8 +127,11 @@ function resolvePresentationSetup({
             .catch((error) => {
               if (error instanceof Error && error.name === 'AbortError') return;
 
-              // TODO(error-management): route to a state-error slot once one exists.
-              console.error('[resolvePresentation] manifest fetch/parse failed:', error);
+              // Fetch and parse failures alike: either way there is no primary manifest.
+              emitError(state, {
+                code: SVTA_PRIMARY_MANIFEST_LOAD_ERROR,
+                data: { url: presentation.url, cause: error },
+              });
             });
 
           return ac;
@@ -124,5 +145,6 @@ function resolvePresentationSetup({
 export const resolvePresentation = defineBehavior({
   stateKeys: ['presentation', 'preload', 'loadActivated'],
   contextKeys: [],
-  setup: resolvePresentationSetup,
+  setup: (deps: { state: ResolvePresentationStateMap; config: ResolvePresentationConfig }) =>
+    resolvePresentationSetup(deps),
 });

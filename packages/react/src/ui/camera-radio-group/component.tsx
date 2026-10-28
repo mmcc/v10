@@ -18,20 +18,24 @@ import {
   useCameraOptions,
 } from './use-camera-options';
 
+/** @internal */
 export type CameraRadioGroupItemState = CameraOption & {
   /** Whether this option is currently selected. */
   checked: boolean;
 };
 
+/** @internal */
 export interface CameraRadioGroupItemProps extends Omit<MenuRadioItemProps, 'ref'> {
   /** Camera device ID represented by the item. */
   'data-device': string;
 }
 
+/** @internal */
 export interface CameraRadioGroupRootProps extends CameraOptionsProps {
   children?: ReactNode;
 }
 
+/** @internal */
 export interface CameraRadioGroupOptionsProps extends Omit<
   UIComponentProps<'div', CameraRadioGroupCore.State>,
   'children'
@@ -40,11 +44,16 @@ export interface CameraRadioGroupOptionsProps extends Omit<
   renderItem: (props: CameraRadioGroupItemProps, state: CameraRadioGroupItemState) => ReactElement;
 }
 
+/** @internal */
 export type CameraRadioGroupValueProps = UIComponentProps<'span', CameraOptionsResult>;
 
 const CameraRadioGroupContext = createContext<CameraOptionsResult | null | undefined>(undefined);
 
-/** Owns camera option state and shares it with an enclosing menu. Does not render a DOM element. */
+/**
+ * Owns camera option state and shares it with an enclosing menu. Does not render a DOM element.
+ *
+ * @internal
+ */
 export function CameraRadioGroupRoot({ children, ...props }: CameraRadioGroupRootProps): ReactNode {
   const cameras = useCameraOptions(props);
 
@@ -53,7 +62,11 @@ export function CameraRadioGroupRoot({ children, ...props }: CameraRadioGroupRoo
   return <CameraRadioGroupContext.Provider value={cameras}>{children}</CameraRadioGroupContext.Provider>;
 }
 
-/** Displays the selected camera label. */
+/**
+ * Displays the selected camera label.
+ *
+ * @internal
+ */
 export const CameraRadioGroupValue = forwardRef<HTMLSpanElement, CameraRadioGroupValueProps>(
   function CameraRadioGroupValue({ render, className, style, ...elementProps }, forwardedRef) {
     const cameras = useCameraRadioGroupContext();
@@ -67,7 +80,11 @@ export const CameraRadioGroupValue = forwardRef<HTMLSpanElement, CameraRadioGrou
   }
 );
 
-/** Renders menu radio items for the available cameras. */
+/**
+ * Renders menu radio items for the available cameras.
+ *
+ * @internal
+ */
 export const CameraRadioGroupOptions = forwardRef<HTMLDivElement, CameraRadioGroupOptionsProps>(
   function CameraRadioGroupOptions(componentProps, forwardedRef) {
     const {
@@ -142,15 +159,18 @@ function toMenuOptionState(cameras: CameraOptionsResult | null): MenuOptionState
   };
 }
 
+/** @internal */
 export namespace CameraRadioGroupRoot {
   export type Props = CameraRadioGroupRootProps;
 }
 
+/** @internal */
 export namespace CameraRadioGroupValue {
   export type Props = CameraRadioGroupValueProps;
   export type State = CameraOptionsResult;
 }
 
+/** @internal */
 export namespace CameraRadioGroupOptions {
   export type Props = CameraRadioGroupOptionsProps;
   export type State = CameraRadioGroupCore.State;

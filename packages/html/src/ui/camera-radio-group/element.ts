@@ -10,6 +10,7 @@ import { PlayerController } from '../../player/controller';
 import { MenuRadioGroupElement } from '../menu/radio-group';
 import { RadioOptionsController } from '../radio-options/controller';
 
+/** @internal */
 export class CameraRadioGroupElement extends MenuRadioGroupElement {
   static override readonly tagName = 'media-camera-radio-group';
 
@@ -74,6 +75,7 @@ export class CameraRadioGroupElement extends MenuRadioGroupElement {
   }
 }
 
+/** @internal */
 export namespace CameraRadioGroupElement {
   export type State = CameraRadioGroupCore.State;
 }

@@ -8,6 +8,7 @@ import { cameraOffText, cameraOnText } from '../../i18n/text/publish';
 import type { ButtonState } from '../types';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface CameraButtonProps {
   /** Custom label for the button. */
   label?: Text | string | ((state: CameraButtonState) => Text | string) | undefined;
@@ -15,8 +16,10 @@ export interface CameraButtonProps {
   disabled?: boolean | undefined;
 }
 
+/** @internal */
 export interface CameraButtonState extends Pick<MediaCaptureTracksState, 'cameraMuted'>, ButtonState {}
 
+/** @internal */
 export class CameraButtonCore {
   static readonly defaultProps: NonNullableObject<CameraButtonProps> = {
     label: '',
@@ -73,6 +76,7 @@ export class CameraButtonCore {
   }
 }
 
+/** @internal */
 export namespace CameraButtonCore {
   export type Props = CameraButtonProps;
   export type State = CameraButtonState;

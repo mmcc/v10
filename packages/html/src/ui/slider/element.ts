@@ -1,4 +1,4 @@
-import { SliderCore, SliderDataAttrs } from '@videojs/core';
+import { SliderCore, SliderDataAttrs, type SliderProps } from '@videojs/core';
 import {
   applyElementProps,
   applyStateDataAttrs,
@@ -38,7 +38,7 @@ export class SliderElement extends UIElement {
     orientation: { type: String },
     disabled: { type: Boolean },
     thumbAlignment: { type: String, attribute: 'thumb-alignment' },
-  } satisfies PropertyDeclarationMap<keyof SliderCore.Props>;
+  } satisfies PropertyDeclarationMap<keyof SliderProps>;
 
   label: Text | string = '';
   value = SliderCore.defaultProps.value;
@@ -94,7 +94,10 @@ export class SliderElement extends UIElement {
         this.dispatchEvent(new CustomEvent('drag-end', { bubbles: true }));
       },
       adjustPercent: (raw, thumbSize, trackSize) => this.#core.adjustPercentForAlignment(raw, thumbSize, trackSize),
-      onResize: () => this.requestUpdate(),
+      // Only edge alignment depends on the slider's size.
+      onResize: () => {
+        if (this.thumbAlignment === 'edge') this.requestUpdate();
+      },
     });
 
     applyElementProps(this, this.#slider.rootProps, { signal });

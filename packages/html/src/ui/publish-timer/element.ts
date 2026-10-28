@@ -1,7 +1,8 @@
-import { PublishTimerCore, PublishTimerDataAttrs } from '@videojs/core';
+import { PublishTimerCore, PublishTimerDataAttrs, type PublishTimerState } from '@videojs/core';
 import { selectPublish } from '@videojs/core/dom';
 import type { Text } from '@videojs/core/i18n';
 import type { PropertyDeclarationMap, PropertyValues } from '@videojs/element';
+import type { MediaPublishState } from '@videojs/media';
 
 import { playerContext } from '../../player/context';
 import { PlayerController } from '../../player/controller';
@@ -11,8 +12,10 @@ import { MediaUIElement } from '../media-ui-element';
  * `<media-publish-timer>` — elapsed time since the publish session went live. `PublishTimerCore` is tick-less: this
  * element owns a one-second interval that runs only while the session is `live`, passing a fresh `now` to the core on
  * every render.
+ *
+ * @internal
  */
-export class PublishTimerElement extends MediaUIElement<PublishTimerCore> {
+export class PublishTimerElement extends MediaUIElement<PublishTimerState, MediaPublishState> {
   static readonly tagName = 'media-publish-timer';
 
   static override properties: PropertyDeclarationMap = {

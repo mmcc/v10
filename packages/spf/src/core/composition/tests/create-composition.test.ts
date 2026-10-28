@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test';
 
-import {
-  type Behavior,
-  buildSignalMap,
-  type ContextSignals,
-  createComposition,
-  defineBehavior,
-  type StateSignals,
-} from '../create-composition';
+import { createComposition, defineCompositionFactory } from '../create-composition';
+import { type Behavior, type ContextSignals, defineBehavior, type StateSignals } from '../define-behavior';
 
 interface Resource {
   id: string;
@@ -22,6 +16,14 @@ interface Context {
 }
 
 describe('createComposition', () => {
+  it('creates empty signal maps for an empty composition', async () => {
+    const composition = createComposition([]);
+
+    expect(composition.state).toEqual({});
+    expect(composition.context).toEqual({});
+    await composition.destroy();
+  });
+
   describe('signal map derivation', () => {
     it('creates one signal per declared state key', () => {
       const behavior: Behavior<StateSignals<State>, ContextSignals<Context>, object> = {
@@ -49,7 +51,7 @@ describe('createComposition', () => {
 
     it('deduplicates keys across behaviors that share them', () => {
       const a: Behavior<StateSignals<State>, ContextSignals<Context>, object> = {
-        stateKeys: ['count'],
+        stateKeys: ['count', 'count'],
         contextKeys: [],
         setup: ({ state }) => {
           state.count.set(1);
@@ -66,6 +68,7 @@ describe('createComposition', () => {
       };
       const composition = createComposition([a, b]);
 
+      expect(Object.keys(composition.state)).toEqual(['count']);
       expect(composition.state.count.get()).toBe(2);
     });
 
@@ -139,28 +142,33 @@ describe('createComposition', () => {
     });
 
     it('awaits async cleanups before clearing', async () => {
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       let cleanupCompleted = false;
-
-      const asyncCleanupBehavior: Behavior<StateSignals<State>, ContextSignals<Context>, object> = {
+      const behavior: Behavior<StateSignals<State>, ContextSignals<Context>, object> = {
         stateKeys: ['count'],
         contextKeys: [],
         setup:
           ({ state }) =>
           async () => {
-            await new Promise<void>((resolve) => setTimeout(resolve, 10));
+            await barrier;
+            expect(state.count.get()).toBe(42);
             cleanupCompleted = true;
-            // Verify state is still readable inside the cleanup.
-            void state.count.get();
           },
       };
+      const composition = createComposition([behavior], { initialState: { count: 42 } });
+      const destroying = composition.destroy();
 
-      const composition = createComposition([asyncCleanupBehavior]);
-
-      const destroyPromise = composition.destroy();
-
-      expect(cleanupCompleted).toBe(false);
-
-      await destroyPromise;
+      try {
+        await Promise.resolve();
+        expect(cleanupCompleted).toBe(false);
+        expect(composition.state.count.get()).toBe(42);
+      } finally {
+        release();
+        await destroying;
+      }
 
       expect(cleanupCompleted).toBe(true);
       expect(composition.state.count.get()).toBeUndefined();
@@ -218,16 +226,17 @@ describe('createComposition', () => {
 
   describe('initial values', () => {
     it('seeds state signals from initialState', () => {
-      const behavior: Behavior<StateSignals<State>, ContextSignals<Context>, object> = {
-        stateKeys: ['count'],
+      const behavior = defineBehavior({
+        stateKeys: ['count', 'label'],
         contextKeys: [],
-        setup: () => {},
-      };
+        setup: (_deps: { state: StateSignals<{ count?: number; label?: string }> }) => {},
+      });
       const composition = createComposition([behavior], {
-        initialState: { count: 42 },
+        initialState: { count: 42, label: 'hello' },
       });
 
       expect(composition.state.count.get()).toBe(42);
+      expect(composition.state.label.get()).toBe('hello');
     });
 
     it('seeds context signals from initialContext', () => {
@@ -312,48 +321,123 @@ describe('createComposition', () => {
       expect(received).toEqual({});
     });
   });
+
+  describe('defaultConfig', () => {
+    interface Cfg {
+      interval: number;
+      label?: string;
+      extra?: string;
+    }
+
+    function captureComposedConfig(options: Parameters<typeof createComposition>[1]) {
+      let received: Cfg | undefined;
+      const captureConfig: Behavior<StateSignals<State>, ContextSignals<Context>, Cfg> = {
+        stateKeys: [],
+        contextKeys: [],
+        setup: ({ config }) => {
+          received = config;
+        },
+      };
+
+      createComposition([captureConfig], options as never);
+
+      return received;
+    }
+
+    it('fills every key config leaves out', () => {
+      expect(captureComposedConfig({ defaultConfig: { interval: 250, label: 'a' }, config: {} })).toEqual({
+        interval: 250,
+        label: 'a',
+      });
+    });
+
+    it('lets config override a default', () => {
+      expect(captureComposedConfig({ defaultConfig: { interval: 250 }, config: { interval: 500 } })).toEqual({
+        interval: 500,
+      });
+    });
+
+    it('fills a key config sets to undefined', () => {
+      expect(captureComposedConfig({ defaultConfig: { interval: 250 }, config: { interval: undefined } })).toEqual({
+        interval: 250,
+      });
+    });
+
+    it('keeps config keys the defaults do not cover', () => {
+      expect(captureComposedConfig({ defaultConfig: { interval: 250 }, config: { extra: 'x' } })).toEqual({
+        interval: 250,
+        extra: 'x',
+      });
+    });
+
+    it('uses the defaults alone when config is omitted', () => {
+      expect(captureComposedConfig({ defaultConfig: { interval: 250 } })).toEqual({ interval: 250 });
+    });
+  });
+});
+
+describe('defineCompositionFactory', () => {
+  interface Cfg {
+    interval: number;
+    label?: string;
+  }
+
+  function captureConfig() {
+    const received: { config?: Cfg; count?: number } = {};
+    const behavior: Behavior<StateSignals<State>, ContextSignals<Context>, Cfg> = {
+      stateKeys: ['count'],
+      contextKeys: [],
+      setup: ({ state, config }) => {
+        received.config = config;
+        received.count = state.count.get();
+      },
+    };
+
+    return { behavior, received };
+  }
+
+  it('composes the same behaviors, defaults, and initial state on every call', () => {
+    const { behavior, received } = captureConfig();
+    const create = defineCompositionFactory([behavior], {
+      defaultConfig: { interval: 250 },
+      initialState: { count: 1 },
+    });
+
+    create();
+    expect(received).toEqual({ config: { interval: 250 }, count: 1 });
+
+    create({ interval: 500, label: 'a' });
+    expect(received).toEqual({ config: { interval: 500, label: 'a' }, count: 1 });
+  });
+
+  it('creates a separate composition per call', async () => {
+    const { behavior } = captureConfig();
+    const create = defineCompositionFactory([behavior], { defaultConfig: { interval: 250 } });
+    const first = create();
+    const second = create();
+
+    expect(first.state.count).not.toBe(second.state.count);
+
+    await first.destroy();
+    await second.destroy();
+  });
 });
 
 describe('defineBehavior', () => {
-  it('preserves stateKeys, contextKeys, and setup on the returned object', () => {
-    const setup = (): void => {};
-    const behavior = defineBehavior({
-      stateKeys: ['a'],
-      contextKeys: ['b'],
-      setup: setup as (deps: { state: StateSignals<{ a?: number }>; context: ContextSignals<{ b?: string }> }) => void,
-    });
-
-    expect(behavior.stateKeys).toEqual(['a']);
-    expect(behavior.contextKeys).toEqual(['b']);
-    expect(behavior.setup).toBe(setup);
-  });
-
-  it('is essentially identity at runtime — returns the same input properties', () => {
-    const stateKeys = ['count'] as const;
-    const contextKeys = [] as const;
-    const setup = ({ state }: { state: StateSignals<{ count?: number }> }) => {
-      void state;
-    };
-    const input = { stateKeys, contextKeys, setup };
-    const result = defineBehavior(input);
-
-    expect(result.stateKeys).toBe(stateKeys);
-    expect(result.contextKeys).toBe(contextKeys);
-    expect(result.setup).toBe(setup);
-  });
-
   it('produces a behavior that composes correctly with createComposition', () => {
     const incrementCount = defineBehavior({
       stateKeys: ['count'],
-      contextKeys: [],
-      setup: ({ state }: { state: StateSignals<{ count?: number }> }) => {
+      contextKeys: ['resource'],
+      setup: ({ state, context }: { state: StateSignals<State>; context: ContextSignals<Context> }) => {
         state.count.set(7);
+        context.resource.set({ id: 'behavior-resource' });
       },
     });
 
     const composition = createComposition([incrementCount]);
 
     expect(composition.state.count.get()).toBe(7);
+    expect(composition.context.resource.get()).toEqual({ id: 'behavior-resource' });
   });
 
   it('produces a behavior whose returned cleanup runs on destroy', async () => {
@@ -371,76 +455,5 @@ describe('defineBehavior', () => {
     expect(cleanupRan).toBe(false);
     await composition.destroy();
     expect(cleanupRan).toBe(true);
-  });
-});
-
-describe('buildSignalMap', () => {
-  it('creates one signal per key', () => {
-    const map = buildSignalMap<{ a?: number; b?: string }>(['a', 'b'], {});
-
-    expect(typeof map.a.get).toBe('function');
-    expect(typeof map.b.get).toBe('function');
-    expect(map.a.get()).toBeUndefined();
-    expect(map.b.get()).toBeUndefined();
-  });
-
-  it('seeds signals from initial values', () => {
-    const map = buildSignalMap<{ count?: number; label?: string }>(['count', 'label'], {
-      count: 42,
-      label: 'hello',
-    });
-
-    expect(map.count.get()).toBe(42);
-    expect(map.label.get()).toBe('hello');
-  });
-
-  it('leaves unseeded keys as undefined', () => {
-    const map = buildSignalMap<{ a?: number; b?: string }>(['a', 'b'], { a: 1 });
-
-    expect(map.a.get()).toBe(1);
-    expect(map.b.get()).toBeUndefined();
-  });
-
-  it('deduplicates duplicate keys (one signal per unique key)', () => {
-    const map = buildSignalMap<{ a?: number; b?: string }>(['a', 'b', 'a', 'b', 'a'], {});
-
-    expect(Object.keys(map)).toEqual(['a', 'b']);
-  });
-
-  it('returns reactive signals — set/get works', () => {
-    const map = buildSignalMap<{ count?: number }>(['count'], { count: 0 });
-
-    expect(map.count.get()).toBe(0);
-    map.count.set(7);
-    expect(map.count.get()).toBe(7);
-  });
-
-  it('produces an empty map for an empty key list', () => {
-    // empty interface intentional
-    // oxlint-disable-next-line typescript/no-empty-object-type
-    const map = buildSignalMap<{}>([], {});
-
-    expect(Object.keys(map)).toEqual([]);
-  });
-
-  it('accepts any Iterable<PropertyKey> — Set, generator, etc.', () => {
-    const fromSet = buildSignalMap<{ a?: number; b?: string }>(new Set(['a', 'b']), {});
-
-    expect(Object.keys(fromSet).sort()).toEqual(['a', 'b']);
-
-    function* keys(): Generator<PropertyKey> {
-      yield 'a';
-      yield 'b';
-    }
-    const fromGen = buildSignalMap<{ a?: number; b?: string }>(keys(), {});
-
-    expect(Object.keys(fromGen).sort()).toEqual(['a', 'b']);
-  });
-
-  it('preserves first-occurrence order across duplicate keys', () => {
-    const map = buildSignalMap<{ a?: number; b?: string; c?: boolean }>(['c', 'a', 'b', 'a', 'c'], {});
-
-    // Set keeps insertion order; first occurrence of each key wins.
-    expect(Object.keys(map)).toEqual(['c', 'a', 'b']);
   });
 });

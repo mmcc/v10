@@ -4,6 +4,7 @@ import { listen } from '@videojs/utils/dom';
 
 import { definePlayerFeature } from '../../feature';
 
+/** @internal */
 export const captureTracksFeature = definePlayerFeature({
   name: 'captureTracks',
   state: ({ target }): MediaCaptureTracksState => ({

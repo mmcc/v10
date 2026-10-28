@@ -9,11 +9,13 @@ import type { ButtonState } from '../types';
 import { aggregateCaptureState } from '../utils/aggregate-capture-state';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface CapturePlaceholderProps {
   /** Custom label for the placeholder. */
   label?: Text | string | ((state: CapturePlaceholderState) => Text | string) | undefined;
 }
 
+/** @internal */
 export interface CapturePlaceholderState extends ButtonState {
   /** Current capture lifecycle. */
   captureState: MediaCaptureState;
@@ -23,6 +25,8 @@ export interface CapturePlaceholderState extends ButtonState {
  * Core state machine for the placeholder shown over the preview area before any capture source is active. Its label is
  * an enable-devices CTA while `idle` or `ended`, a progress hint while `acquiring`, permission guidance when `denied`,
  * and empty once any counted source is `active`.
+ *
+ * @internal
  */
 export class CapturePlaceholderCore {
   static readonly defaultProps: NonNullableObject<CapturePlaceholderProps> = {
@@ -78,6 +82,7 @@ export class CapturePlaceholderCore {
   }
 }
 
+/** @internal */
 export namespace CapturePlaceholderCore {
   export type Props = CapturePlaceholderProps;
   export type State = CapturePlaceholderState;

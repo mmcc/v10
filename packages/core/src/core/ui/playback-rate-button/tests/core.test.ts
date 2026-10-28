@@ -8,6 +8,7 @@ function createMediaState(overrides: Partial<MediaPlaybackRateState> = {}): Medi
   return {
     playbackRates: [0.2, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2],
     playbackRate: 1,
+    playbackRateAvailability: 'available',
     setPlaybackRate: vi.fn(),
     ...overrides,
   };
@@ -16,6 +17,8 @@ function createMediaState(overrides: Partial<MediaPlaybackRateState> = {}): Medi
 function createState(overrides: Partial<PlaybackRateButtonState> = {}): PlaybackRateButtonState {
   return {
     rate: 1,
+    availability: 'available',
+    hidden: false,
     label: '',
     ...overrides,
   };
@@ -32,6 +35,24 @@ describe('PlaybackRateButtonCore', () => {
 
       expect(state.rate).toBe(1.5);
     });
+
+    it('shows itself when the media can change its playback rate', () => {
+      const core = new PlaybackRateButtonCore();
+
+      core.setMedia(createMediaState());
+
+      expect(core.getState()).toMatchObject({ availability: 'available', hidden: false });
+    });
+
+    it.each(['unavailable', 'unsupported'] as const)('hides itself when playback rate is %s', (availability) => {
+      // A media with no playback rate, such as TikTok, leaves this button with
+      // nothing to do, so it is removed rather than rendered and inert.
+      const core = new PlaybackRateButtonCore();
+
+      core.setMedia(createMediaState({ playbackRateAvailability: availability }));
+
+      expect(core.getState()).toMatchObject({ availability, hidden: true });
+    });
   });
 
   describe('getLabel', () => {
@@ -40,16 +61,7 @@ describe('PlaybackRateButtonCore', () => {
 
       expect(core.getLabel(createState({ rate: 1.5 }))).toMatchObject({
         key: 'playback.rate',
-        text: 'Playback rate {rate}',
-      });
-    });
-
-    it('returns default label for rate 1', () => {
-      const core = new PlaybackRateButtonCore();
-
-      expect(core.getLabel(createState({ rate: 1 }))).toMatchObject({
-        key: 'playback.rate',
-        text: 'Playback rate {rate}',
+        text: 'Playback rate, {rate}',
       });
     });
 
@@ -74,8 +86,25 @@ describe('PlaybackRateButtonCore', () => {
 
       expect(core.getLabel(createState({ rate: 1.5 }))).toMatchObject({
         key: 'playback.rate',
-        text: 'Playback rate {rate}',
+        text: 'Playback rate, {rate}',
       });
+    });
+  });
+
+  describe('getTooltipLabel', () => {
+    it('returns the control name without the rate', () => {
+      const core = new PlaybackRateButtonCore();
+
+      expect(core.getTooltipLabel(createState({ rate: 1.5 }))).toMatchObject({
+        key: 'menu.playbackRate',
+        text: 'Playback rate',
+      });
+    });
+
+    it('returns the custom label', () => {
+      const core = new PlaybackRateButtonCore({ label: 'Speed' });
+
+      expect(core.getTooltipLabel(createState())).toBe('Speed');
     });
   });
 
@@ -98,7 +127,7 @@ describe('PlaybackRateButtonCore', () => {
       const core = new PlaybackRateButtonCore();
       const attrs = core.getAttrs(createState({ rate: 1.5 }));
 
-      expect(attrs['aria-label']).toMatchObject({ key: 'playback.rate', text: 'Playback rate {rate}' });
+      expect(attrs['aria-label']).toMatchObject({ key: 'playback.rate', text: 'Playback rate, {rate}' });
     });
 
     it('sets aria-disabled when disabled', () => {
@@ -117,12 +146,18 @@ describe('PlaybackRateButtonCore', () => {
   });
 
   describe('cycle', () => {
-    it('advances to the next rate', () => {
+    it.each([
+      [1, 1.2],
+      [1.5, 1.7],
+      [0.3, 0.5],
+      [1.3, 1.5],
+      [0.2, 0.5],
+    ])('advances from %s to %s', (current, expected) => {
       const core = new PlaybackRateButtonCore();
-      const media = createMediaState({ playbackRate: 1 });
+      const media = createMediaState({ playbackRate: current });
 
       core.cycle(media);
-      expect(media.setPlaybackRate).toHaveBeenCalledWith(1.2);
+      expect(media.setPlaybackRate).toHaveBeenCalledWith(expected);
     });
 
     it('wraps to the first rate after the last', () => {
@@ -133,44 +168,12 @@ describe('PlaybackRateButtonCore', () => {
       expect(media.setPlaybackRate).toHaveBeenCalledWith(0.2);
     });
 
-    it('advances through the middle of the list', () => {
-      const core = new PlaybackRateButtonCore();
-      const media = createMediaState({ playbackRate: 1.5 });
-
-      core.cycle(media);
-      expect(media.setPlaybackRate).toHaveBeenCalledWith(1.7);
-    });
-
-    it('finds the first rate greater than current when not in list', () => {
-      const core = new PlaybackRateButtonCore();
-      const media = createMediaState({ playbackRate: 0.3 });
-
-      core.cycle(media);
-      expect(media.setPlaybackRate).toHaveBeenCalledWith(0.5);
-    });
-
-    it('finds the next greater rate when between list values', () => {
-      const core = new PlaybackRateButtonCore();
-      const media = createMediaState({ playbackRate: 1.3 });
-
-      core.cycle(media);
-      expect(media.setPlaybackRate).toHaveBeenCalledWith(1.5);
-    });
-
     it('wraps to first rate when current is above all rates and not in list', () => {
       const core = new PlaybackRateButtonCore();
       const media = createMediaState({ playbackRate: 3 });
 
       core.cycle(media);
       expect(media.setPlaybackRate).toHaveBeenCalledWith(0.2);
-    });
-
-    it('cycles through sub-1x rates', () => {
-      const core = new PlaybackRateButtonCore();
-      const media = createMediaState({ playbackRate: 0.2 });
-
-      core.cycle(media);
-      expect(media.setPlaybackRate).toHaveBeenCalledWith(0.5);
     });
 
     it('does nothing when menuTrigger is set', () => {
@@ -184,6 +187,14 @@ describe('PlaybackRateButtonCore', () => {
     it('does nothing when disabled', () => {
       const core = new PlaybackRateButtonCore({ disabled: true });
       const media = createMediaState();
+
+      core.cycle(media);
+      expect(media.setPlaybackRate).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when the media has no playback rate', () => {
+      const core = new PlaybackRateButtonCore();
+      const media = createMediaState({ playbackRateAvailability: 'unsupported' });
 
       core.cycle(media);
       expect(media.setPlaybackRate).not.toHaveBeenCalled();

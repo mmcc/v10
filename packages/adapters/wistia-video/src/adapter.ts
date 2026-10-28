@@ -11,6 +11,8 @@ import { type WistiaSource, wistiaPlayerStyle } from './source';
  * Wistia in would leave a bundler free to drop this module and React rendering an undefined tag.
  *
  * `server.ts` declares it too, for the runtimes that resolve there instead.
+ *
+ * @internal
  */
 export const WISTIA_PLAYER_TAG = 'wistia-player';
 
@@ -38,6 +40,9 @@ export class WistiaAdapter extends WistiaPlayer {
     poster: '',
     source: null,
   };
+
+  /** Engine this media plays through, reported to analytics such as Mux Data. */
+  static readonly engineName: string = 'wistia';
 
   /** The hashed id of the media playing, or a Wistia URL to resolve one from. Installed by the normalizer. */
   declare src: string;

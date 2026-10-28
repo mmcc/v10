@@ -13,6 +13,7 @@ import { renderElement } from '../../utils/use-render';
 
 const DISPLAY_NAME = 'PublishTimer';
 
+/** @internal */
 export interface PublishTimerProps
   extends Omit<UIComponentProps<'div', PublishTimerCore.State>, 'children'>, Omit<PublishTimerCore.Props, 'now'> {}
 
@@ -27,6 +28,8 @@ export interface PublishTimerProps
  *   ```tsx
  *   <PublishTimer />;
  *   ```;
+ *
+ * @internal
  */
 export const PublishTimer = forwardRef(function PublishTimer(
   componentProps: PublishTimerProps,
@@ -82,6 +85,7 @@ export const PublishTimer = forwardRef(function PublishTimer(
 
 PublishTimer.displayName = DISPLAY_NAME;
 
+/** @internal */
 export namespace PublishTimer {
   export type Props = PublishTimerProps;
   export type State = PublishTimerCore.State;

@@ -158,7 +158,7 @@ promotion). Zero page errors.
   real relay.
 - **Adapter seam**: `MoqMediaOptions.engineConfig` forwards engine config
   (transport factory, ABR/latency tuning) through the element
-  constructor; the adapter still owns `onSignalsReady`. Without it there
+  constructor. Without it there
   was no way to reach `createMoqTransport` from outside SPF.
 - **Skin layout parity**: the wrapper's canvas is now styled by a shadow
   stylesheet with `:host { display: contents }` and the same

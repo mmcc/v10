@@ -97,6 +97,8 @@ type InferredClassPropertyTypes = Readonly<Record<string, Readonly<Record<string
 const INFERRED_CLASS_PROPERTY_TYPES: InferredClassPropertyTypes = {
   HlsJsAdapter: { engine: 'Hls | null', error: 'MediaError | null' },
   NativeHlsMediaBase: { engine: 'null' },
+  PlayerJsAdapter: { engine: 'Window | null' },
+  SoundCloudAdapter: { engine: 'Window | null' },
   ShakaMediaBase: { error: 'MediaError | null' },
   TikTokAdapter: { engine: 'Window | null' },
 };
@@ -1073,6 +1075,7 @@ function extractReactReference(
 
   let target: MediaTargetTag | undefined;
   let acceptsNativeProps = false;
+  let mediaRefType: string | undefined;
   let defaultsExpression: Expression | undefined;
 
   walkAst(file.program, (node) => {
@@ -1080,6 +1083,12 @@ function extractReactReference(
       acceptsNativeProps = node.extends.some((heritage) =>
         /(?:Video|Audio)HTMLAttributes/.test(sourceText(file, heritage))
       );
+
+      for (const heritage of node.extends) {
+        const match = /^MediaRefProps<\s*(\w+)\s*>$/.exec(sourceText(file, heritage));
+
+        if (match) mediaRefType = match[1];
+      }
     }
 
     if (node.type === 'VariableDeclarator' && staticName(node.id) === source.className && node.init) {
@@ -1129,7 +1138,22 @@ function extractReactReference(
     }
   }
 
-  return { target, acceptsNativeProps, props };
+  const mediaRef = mediaRefType ? { type: mediaRefType, ...importedFrom(file, mediaRefType) } : undefined;
+
+  return { target, acceptsNativeProps, props, ...(mediaRef ? { mediaRef } : {}) };
+}
+
+/** The module a top-level import binds `name` from, so docs can show where to import a type the source names. */
+function importedFrom(file: SourceFile, name: string): { module?: string } {
+  for (const statement of file.program.body) {
+    if (statement.type !== 'ImportDeclaration') continue;
+
+    if (statement.specifiers.some((specifier) => specifier.local.name === name)) {
+      return { module: statement.source.value };
+    }
+  }
+
+  return {};
 }
 
 function extractPublicMethodNames(filePath: string, className: string, project: OxcProject): string[] {

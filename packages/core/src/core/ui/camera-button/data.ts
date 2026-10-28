@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { CameraButtonState } from './core';
 
+/** @internal */
 export const CameraButtonDataAttrs = {
   /** Present when outgoing video is muted. */
   cameraMuted: 'data-muted',

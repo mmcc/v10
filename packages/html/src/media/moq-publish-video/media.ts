@@ -15,6 +15,8 @@ const MoqPublishVideoBase = MediaAttachMixin(CustomMediaElement('video', MoqPubl
  * Shared rather than inlined per element: any element built the same way around a `MoqPublishMedia`-shaped host (this
  * one, or a seamed twin like the sandbox's loopback publisher) needs the identical reconciliation — one behavioral
  * contract, not a copy that can drift per element.
+ *
+ * @internal
  */
 export function installCaptureAttributeReflection(
   el: HTMLElement & { adapter: Pick<MoqPublishMedia, 'cameraActive' | 'screenShareActive' | 'micActive'> }

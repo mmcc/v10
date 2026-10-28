@@ -8,14 +8,17 @@ import { useCallback, useState } from 'react';
 import { useTranslator } from '../../i18n/context';
 import { usePlayer } from '../../player/context';
 
+/** @internal */
 export interface MicrophoneOptionsProps extends MicRadioGroupCore.Props {}
 
+/** @internal */
 export interface MicrophoneOption {
   value: string;
   label: string;
   disabled: boolean;
 }
 
+/** @internal */
 export interface MicrophoneOptionsResult {
   /** Translated accessible name for the options group. */
   label: string;
@@ -32,6 +35,7 @@ export interface MicrophoneOptionsResult {
  * feature is not configured.
  *
  * @param props - Optional `label`, `formatDevice`, and `disabled` overrides.
+ * @internal
  */
 export function useMicrophoneOptions(props?: MicrophoneOptionsProps): MicrophoneOptionsResult | null {
   'use no memo';
@@ -68,6 +72,7 @@ export function useMicrophoneOptions(props?: MicrophoneOptionsProps): Microphone
   };
 }
 
+/** @internal */
 export namespace useMicrophoneOptions {
   export type Props = MicrophoneOptionsProps;
   export type Result = MicrophoneOptionsResult;

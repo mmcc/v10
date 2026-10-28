@@ -16,6 +16,7 @@ import {
   DEFAULT_PRELOAD,
   PLATFORMS,
   PRELOAD_VALUES,
+  SKINS,
   type PreloadValue,
   SKIN_SOURCES,
   STYLINGS,
@@ -23,12 +24,20 @@ import {
   type TextDirection,
 } from '@app/constants';
 import { COMPARE_LABELS } from '@app/labels';
-import { hasTailwindSkin, isMediaId, MEDIA, type MediaId, mediaSources } from '@app/media';
+import { hasTailwindSkin, isMediaId, landingSource, MEDIA, type MediaId, mediaSources } from '@app/media';
 import { CAPTIONS_MODES, type CaptionsMode } from '@app/shared/captions';
 import { DEFAULT_SANDBOX_LOCALE, SANDBOX_LOCALE_TAGS, type SandboxLocaleTag } from '@app/shared/i18n/locale-meta';
 import { ASPECT_RATIOS, type AspectRatio, defaultPlayerWidth, PLAYER_WIDTH } from '@app/shared/player-frame';
 import { skinSourceAvailable, skinStylings, tailwindSkinAvailable } from '@app/shared/skin-sources';
-import { DEFAULT_SOURCE, SOURCES, type SourceId } from '@app/shared/sources';
+import {
+  DEFAULT_SOURCE,
+  PLAYERJS_SOURCE_IDS,
+  SOUNDCLOUD_SOURCE_IDS,
+  SOURCE_IDS,
+  SOURCES,
+  type SourceId,
+  YOUTUBE_SOURCE_IDS,
+} from '@app/shared/sources';
 import type { Platform, SkinSource, Styling } from '@app/types';
 import { type CSSProperties, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
@@ -36,6 +45,7 @@ import { Navbar, SkinControls } from './navbar';
 import { OptionsPanel } from './options-panel';
 import { type FrameParams, Preview } from './preview';
 import { describeError, MAX_ERRORS, type RelayedError, usePreferences } from './report';
+import { createUrlWriter } from './url';
 
 /** `preset` named this parameter before the skins' player presets took the word, so older links still resolve. */
 function readMedia(params: URLSearchParams): MediaId {
@@ -43,6 +53,11 @@ function readMedia(params: URLSearchParams): MediaId {
 
   return isMediaId(value) ? value : 'video';
 }
+
+// Embed sources are listed apart from SOURCE_IDS, but a shared link may name any of them.
+const writeUrl = createUrlWriter();
+
+const LINKABLE_SOURCE_IDS = [...SOURCE_IDS, ...YOUTUBE_SOURCE_IDS, ...PLAYERJS_SOURCE_IDS, ...SOUNDCLOUD_SOURCE_IDS];
 
 function readOption<T extends string, const Fallback>(
   values: readonly T[],
@@ -77,9 +92,9 @@ function readParams() {
     styling: readOption(STYLINGS, params.get('styling'), 'css'),
     skins: readSkins(params.get('skins'), platform),
     media,
-    skin: (params.get('skin') ?? 'default') as 'default' | 'minimal',
-    // An explicit `?source=` wins over where the media lands on entry, so a shared link reaches the source it names.
-    source: (params.get('source') ?? MEDIA[media].entrySource ?? DEFAULT_SOURCE) as SourceId,
+    skin: readOption(SKINS, params.get('skin'), 'default'),
+    // A valid `?source=` wins over where the media lands on entry, so a shared link reaches the source it names.
+    source: readOption(LINKABLE_SOURCE_IDS, params.get('source'), MEDIA[media].entrySource ?? DEFAULT_SOURCE),
     autoplay: params.get('autoplay') === '1',
     muted: params.get('muted') === '1',
     loop: params.get('loop') === '1',
@@ -255,7 +270,7 @@ export function App() {
       if (mirror) params.set('mirror', '1');
     }
 
-    history.replaceState(null, '', `/?${params}`);
+    writeUrl(`/?${params}`);
   }, [
     platform,
     styling,
@@ -402,19 +417,6 @@ export function App() {
     if (!availableSources.includes(source)) setSource(descriptor.fallbackSource ?? DEFAULT_SOURCE);
   }, [availableSources, descriptor.fallbackSource, source]);
 
-  // Land on the media's own source when *switched into*, rather than inheriting whatever the previous media was
-  // showing — `readParams` covers the first-mount half. Keyed on entry, so a source picked afterwards sticks. Declared
-  // after the constraint so the landing wins when both fire in one pass.
-  const previousMedia = useRef(media);
-
-  useEffect(() => {
-    const entered = previousMedia.current !== media;
-
-    previousMedia.current = media;
-
-    if (entered && descriptor.entrySource) setSource(descriptor.entrySource);
-  }, [media, descriptor.entrySource]);
-
   useEffect(() => {
     if (!tailwindAvailable && styling === 'tailwind') setStyling('css');
   }, [tailwindAvailable, styling]);
@@ -429,6 +431,17 @@ export function App() {
   useEffect(() => {
     if (compare !== 'off' && !compareAvailable(compare, selection)) setCompare('off');
   }, [compare, selection]);
+
+  // Land on the media's own source in the same update that switches media — `readParams` covers the first-mount half.
+  // Switching remounts the preview frame with the URL of that render, so a source fixed up by an effect afterwards would
+  // be posted to a page that is still loading and lost.
+  const handleMediaChange = useCallback(
+    (value: MediaId) => {
+      setMedia(value);
+      setSource((current) => landingSource(value, platform, current));
+    },
+    [platform]
+  );
 
   const handleSourceChange = useCallback((value: string) => setSource(value as SourceId), []);
 
@@ -464,9 +477,20 @@ export function App() {
 
   // The URL carried these too, but a change made while the page was still loading has no other way in.
   const handleFrameLoad = (id: string) => {
-    const target = frames.current.get(id)?.contentWindow;
+    const frame = frames.current.get(id);
+    const target = frame?.contentWindow;
+    const panel = panels.find((panel) => panel.id === id);
+    if (!frame || !target || !panel) return;
 
-    if (target) postPreferences(target, frameParams);
+    const frameQuery = new URL(frame.src).searchParams;
+
+    if (frameQuery.get('skin') !== panel.skin) {
+      target.postMessage({ type: 'skin-change', skin: panel.skin }, '*');
+    }
+
+    if (frameQuery.get('source') !== source) target.postMessage({ type: 'source-change', source }, '*');
+
+    postPreferences(target, frameParams);
   };
 
   const summary = summarizeSelection({
@@ -490,7 +514,7 @@ export function App() {
         platform={platform}
         onPlatformChange={setPlatform}
         media={media}
-        onMediaChange={setMedia}
+        onMediaChange={handleMediaChange}
         source={source}
         onSourceChange={handleSourceChange}
         availableSources={availableSources}

@@ -9,6 +9,7 @@ import type { ButtonState } from '../types';
 import { aggregateCaptureState } from '../utils/aggregate-capture-state';
 import { resolveLabel } from '../utils/resolve-label';
 
+/** @internal */
 export interface PublishButtonProps {
   /** Custom label for the button. */
   label?: Text | string | ((state: PublishButtonState) => Text | string) | undefined;
@@ -19,10 +20,13 @@ export interface PublishButtonProps {
 /**
  * Media state slice consumed by `PublishButtonCore` — composed by the HTML and React `PublishButton` adapters from the
  * `publish` and `capture-source` store slices.
+ *
+ * @internal
  */
 export type PublishButtonMediaState = MediaPublishState &
   Pick<MediaCaptureSourceState, 'cameraState' | 'screenShareState' | 'micState' | 'micExplicit'>;
 
+/** @internal */
 export interface PublishButtonState extends ButtonState {
   /** Current publish session lifecycle. */
   session: MediaPublishSessionState;
@@ -33,6 +37,8 @@ export interface PublishButtonState extends ButtonState {
 /**
  * Core state machine for a "Go live" button. Starts a publish session from `idle`/`error`, stops it from
  * `live`/`connecting`, and disables itself while capture is inactive or the session is transitioning.
+ *
+ * @internal
  */
 export class PublishButtonCore {
   static readonly defaultProps: NonNullableObject<PublishButtonProps> = {
@@ -118,6 +124,7 @@ export class PublishButtonCore {
   }
 }
 
+/** @internal */
 export namespace PublishButtonCore {
   export type Props = PublishButtonProps;
   export type State = PublishButtonState;

@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { PublishBadgeState } from './core';
 
+/** @internal */
 export const PublishBadgeDataAttrs = {
   /** Current publish session lifecycle. */
   session: 'data-publish-state',

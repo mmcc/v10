@@ -44,8 +44,8 @@ export interface RadioOptionsState<Option extends RadioOption = RadioOption> ext
   disabled: boolean;
   /** Whether the option group is hidden because no meaningful selection is available. */
   hidden: boolean;
-  /** Whether the media exposes a meaningful selection. */
-  availability: 'available' | 'unavailable';
+  /** Whether the media exposes a meaningful selection. `unsupported` when the media has no such capability at all. */
+  availability: 'available' | 'unavailable' | 'unsupported';
 }
 
 /** Constraint for media button cores that provide a label derived from state. */
@@ -57,8 +57,16 @@ export interface MediaButtonComponent<
   getLabel(state: ComponentState): Text | string;
 }
 
-/** Extracts the media state parameter type from a core's `setMedia` method. */
+/**
+ * Extracts the media state parameter type from a core's `setMedia` method.
+ *
+ * @internal
+ */
 export type InferMediaState<Core extends MediaUIComponent> = Parameters<Core['setMedia']>[0];
 
-/** Extracts the component state return type from a core's `getState` method. */
+/**
+ * Extracts the component state return type from a core's `getState` method.
+ *
+ * @internal
+ */
 export type InferComponentState<Core extends UIComponent> = ReturnType<Core['getState']>;

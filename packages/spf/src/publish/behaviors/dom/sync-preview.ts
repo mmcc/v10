@@ -11,7 +11,7 @@
  * — so a source switch, a stream release, an element swap, a detach, or behavior teardown all clear the old preview
  * structurally before (or without) a new pairing.
  */
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import { effect } from '../../../core/signals/effect';
 import type { ReadonlySignal } from '../../../core/signals/primitives';
 

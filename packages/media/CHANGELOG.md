@@ -1,5 +1,94 @@
 # Changelog
 
+## [10.2.0](https://github.com/videojs/video.js/compare/@videojs/media@10.1.0...@videojs/media@10.2.0) (2026-10-22)
+
+
+### Miscellaneous Chores
+
+* **@videojs/media:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.2.0
+
+## [10.1.0](https://github.com/videojs/video.js/compare/@videojs/media@10.0.1...@videojs/media@10.1.0) (2026-10-12)
+
+
+### Features
+
+* **spf:** send credentials with hls requests for crossorigin="use-credentials" ([#2870](https://github.com/videojs/video.js/issues/2870)) ([897901b](https://github.com/videojs/video.js/commit/897901b88359dca0dc3e59fcecd766cb59f8fe24))
+
+
+### Bug Fixes
+
+* **core:** smooth time slider playback progress ([50f59a2](https://github.com/videojs/video.js/commit/50f59a23f1ca2c394998ba38cc274df6154ef214))
+* **core:** smooth time slider playback progress ([6a21d0b](https://github.com/videojs/video.js/commit/6a21d0b4ee6211f705edc3efbac36bc53cb8855f))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.1.0
+
+## [10.0.1](https://github.com/videojs/v10/compare/@videojs/media@10.0.0...@videojs/media@10.0.1) (2026-10-02)
+
+
+### Miscellaneous Chores
+
+* **@videojs/media:** Synchronize videojs versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.1
+
+## [10.0.0](https://github.com/videojs/v10/compare/@videojs/media@10.0.0-rc.5...@videojs/media@10.0.0) (2026-10-01)
+
+
+### Features
+
+* **packages:** release Video.js 10.0.0 as stable ([#3058](https://github.com/videojs/v10/issues/3058)) ([37477fc](https://github.com/videojs/v10/commit/37477fc187f36fc2ab3cbc0db7c1b2d3fc6bcca9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.0
+
+## [10.0.0-rc.5](https://github.com/videojs/v10/compare/@videojs/media@10.0.0-rc.4...@videojs/media@10.0.0-rc.5) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880))
+* **media:** tidy text track state ([#3057](https://github.com/videojs/v10/issues/3057))
+* **core:** align player store API ([#3012](https://github.com/videojs/v10/issues/3012))
+
+### Features
+
+* **media:** add resolveAdapterType and resolveMimeType ([#3024](https://github.com/videojs/v10/issues/3024)) ([a77010c](https://github.com/videojs/v10/commit/a77010c77ff4971a9f7f1c43d5c24c20ee67d505))
+
+
+### Code Refactoring
+
+* **core:** align player store API ([#3012](https://github.com/videojs/v10/issues/3012)) ([d1f57f8](https://github.com/videojs/v10/commit/d1f57f8ea733d10247b8e9bd9f8b5577e52ed66b))
+* **media:** tidy text track state ([#3057](https://github.com/videojs/v10/issues/3057)) ([614b77d](https://github.com/videojs/v10/commit/614b77dce7d9a3ed60baa1b0e2af854c8c8d865b))
+* **packages:** attach extensions at the player ([#2880](https://github.com/videojs/v10/issues/2880)) ([9b6675e](https://github.com/videojs/v10/commit/9b6675e3cfe50e3b54f4d4d07a563a4fdc712291))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @videojs/utils bumped to 10.0.0-rc.5
+
 ## [10.0.0-rc.4](https://github.com/videojs/v10/compare/@videojs/media@10.0.0-rc.3...@videojs/media@10.0.0-rc.4) (2026-09-26)
 
 

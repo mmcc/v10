@@ -1,3 +1,5 @@
+import { isNil } from '@videojs/utils/predicate';
+
 // ----------------------------------------
 // Event primitives
 // ----------------------------------------
@@ -18,6 +20,7 @@ export interface EventTargetLike<Events extends { [K in keyof Events]: EventLike
   dispatchEvent(event: EventLike): boolean;
 }
 
+/** @internal */
 export function TypedEventTarget<Events extends { [K in keyof Events]: EventLike }>() {
   return EventTarget as unknown as { new (): EventTargetLike<Events> };
 }
@@ -106,6 +109,27 @@ export interface MediaSeekCapability {
 
 export type MediaPreloadType = '' | 'none' | 'metadata' | 'auto';
 
+/**
+ * A media element's CORS mode as its `crossOrigin` IDL attribute reflects it — "limited to only known values": the
+ * empty string and unknown keywords read as `anonymous`. `null` (no attribute) is not a mode; the element is not in
+ * CORS mode at all.
+ */
+export type MediaCrossOriginType = 'anonymous' | 'use-credentials';
+
+/**
+ * Normalize a `crossorigin` value the way the element's IDL attribute reflects it: missing stays `null`,
+ * `use-credentials` in any ASCII case is itself, and everything else — the empty string and unknown keywords included —
+ * is `anonymous`. A custom element delivers the raw attribute string, so this is where author spelling is settled.
+ *
+ * @internal
+ */
+export function toMediaCrossOrigin(value: string | null | undefined): MediaCrossOriginType | null {
+  if (isNil(value)) return null;
+
+  return value.toLowerCase() === 'use-credentials' ? 'use-credentials' : 'anonymous';
+}
+
+/** @internal */
 export const MediaReadyState = {
   HAVE_NOTHING: 0,
   HAVE_METADATA: 1,
@@ -114,7 +138,8 @@ export const MediaReadyState = {
   HAVE_ENOUGH_DATA: 4,
 } as const;
 
-export type MediaReadyStateValue = (typeof MediaReadyState)[keyof typeof MediaReadyState];
+/** An `HTMLMediaElement.readyState` value, from `0` (`HAVE_NOTHING`) to `4` (`HAVE_ENOUGH_DATA`). */
+export type MediaReadyStateValue = 0 | 1 | 2 | 3 | 4;
 
 export interface MediaSourceEvents {
   loadstart: EventLike;
@@ -325,6 +350,7 @@ export interface MediaAudioTrackCapability {
   removeAudioTrack(track: AudioTrackLike): void;
 }
 
+/** @experimental */
 export interface MediaVideoTrackCapability {
   readonly videoTracks: VideoTrackListLike;
   addVideoTrack(kind: string, label?: string, language?: string): VideoTrackLike;
@@ -383,6 +409,7 @@ export interface VideoRenditionListLike extends EventTargetLike<VideoRenditionLi
   selectedIndex: number;
 }
 
+/** @experimental */
 export interface MediaAudioRenditionCapability {
   readonly audioRenditions: AudioRenditionListLike;
 }
@@ -422,12 +449,9 @@ export interface MediaPictureInPictureCapability {
 // ----------------------------------------
 
 /**
- * Canonical values for {@link MediaStreamType}.
+ * Named values of {@link MediaStreamType}.
  *
- * - `ON_DEMAND` — a finite-duration asset (VOD). Scrubbing is generally supported across the full timeline.
- * - `LIVE` — a live or DVR stream. The seekable window may slide as new segments are published, and `duration` is
- *   typically `Infinity`.
- * - `UNKNOWN` — the stream type has not been determined yet (no source, or metadata has not loaded).
+ * @internal
  */
 export const MediaStreamTypes = {
   ON_DEMAND: 'on-demand',
@@ -435,7 +459,15 @@ export const MediaStreamTypes = {
   UNKNOWN: 'unknown',
 } as const;
 
-export type MediaStreamType = (typeof MediaStreamTypes)[keyof typeof MediaStreamTypes];
+/**
+ * How a stream is delivered.
+ *
+ * - `on-demand` — a finite-duration asset (VOD). Scrubbing is generally supported across the full timeline.
+ * - `live` — a live or DVR stream. The seekable window may slide as new segments are published, and `duration` is
+ *   typically `Infinity`.
+ * - `unknown` — the stream type has not been determined yet (no source, or metadata has not loaded).
+ */
+export type MediaStreamType = 'on-demand' | 'live' | 'unknown';
 
 export interface MediaStreamTypeEvents {
   streamtypechange: EventLike;
@@ -566,6 +598,7 @@ export interface MediaVideoDimensionsCapability {
 // Config
 // ----------------------------------------
 
+/** @internal */
 export interface MediaConfigCapability {
   config: Record<string, unknown>;
 }
@@ -582,13 +615,17 @@ export interface MediaConfigCapability {
  * - `live` — the session is established and media is being published.
  * - `stopping` — an orderly shutdown (unpublish or server GOAWAY) is draining; a new `publish()` must wait for `idle`.
  * - `error` — the session failed; `publishError` holds the cause and `publish()` may retry.
+ *
+ * @internal
  */
 export type MediaPublishSessionState = 'idle' | 'connecting' | 'live' | 'stopping' | 'error';
 
+/** @internal */
 export interface MediaPublishEvents {
   publishstatechange: EventLike;
 }
 
+/** @internal */
 export interface MediaPublishCapability {
   /** Publish endpoint URL (e.g. a MoQ relay's WebTransport URL). */
   publishEndpoint: string;
@@ -622,7 +659,11 @@ export interface MediaPublishCapability {
 // Capture (publisher-only)
 // ----------------------------------------
 
-/** Which kind of video feeds capture. Additive — both may be active at once. */
+/**
+ * Which kind of video feeds capture. Additive — both may be active at once.
+ *
+ * @internal
+ */
 export type MediaCaptureSourceKind = 'camera' | 'screen';
 
 /**
@@ -633,9 +674,12 @@ export type MediaCaptureSourceKind = 'camera' | 'screen';
  * - `active` — tracks are live and previewable.
  * - `denied` — the user (or platform policy) refused access.
  * - `ended` — the source ended outside our control (device unplugged, screen share stopped from browser UI).
+ *
+ * @internal
  */
 export type MediaCaptureState = 'idle' | 'acquiring' | 'active' | 'denied' | 'ended';
 
+/** @internal */
 export interface MediaCaptureSourceEvents {
   capturesourcechange: EventLike;
   capturestatechange: EventLike;
@@ -651,6 +695,8 @@ export interface MediaCaptureSourceEvents {
  * The intent slots are consumed by the pipeline on terminal outcomes: after a permission denial or an out-of-band end
  * (device unplugged, browser-native "Stop sharing") the slot reads `false` again while the matching state holds
  * `denied`/`ended` — so writing `true` always means "attempt acquisition now", including retries.
+ *
+ * @internal
  */
 export interface MediaCaptureSourceCapability {
   /** Camera acquisition; `true` acquires (prompting as needed), `false` releases. Fires `capturesourcechange`. */
@@ -689,6 +735,8 @@ export interface MediaCaptureSourceCapability {
 /**
  * Structural stand-in for the DOM `MediaStream` — keeps this contract DOM-free. (Not to be confused with
  * {@link MediaStreamType}, which classifies live vs on-demand playback.)
+ *
+ * @internal
  */
 export interface MediaStreamLike {
   readonly id: string;
@@ -696,7 +744,11 @@ export interface MediaStreamLike {
   getVideoTracks(): { enabled: boolean }[];
 }
 
-/** One selectable capture input device. */
+/**
+ * One selectable capture input device.
+ *
+ * @internal
+ */
 export interface MediaCaptureDeviceInfo {
   readonly deviceId: string;
   readonly kind: 'videoinput' | 'audioinput';
@@ -704,10 +756,12 @@ export interface MediaCaptureDeviceInfo {
   readonly label: string;
 }
 
+/** @internal */
 export interface MediaCaptureDevicesEvents {
   capturedeviceschange: EventLike;
 }
 
+/** @internal */
 export interface MediaCaptureDevicesCapability {
   /** Known capture input devices. Fires `capturedeviceschange`. */
   readonly captureDevices: readonly MediaCaptureDeviceInfo[];
@@ -720,10 +774,12 @@ export interface MediaCaptureDevicesCapability {
   audioInputDeviceId: string;
 }
 
+/** @internal */
 export interface MediaCaptureToggleEvents {
   capturetogglechange: EventLike;
 }
 
+/** @internal */
 export interface MediaCaptureToggleCapability {
   /** Whether outgoing video is muted. Muting disables the track (black frames) without stopping capture or encoding. */
   cameraMuted: boolean;
@@ -731,7 +787,11 @@ export interface MediaCaptureToggleCapability {
   micMuted: boolean;
 }
 
-/** Point-in-time health counters for an active publish session. */
+/**
+ * Point-in-time health counters for an active publish session.
+ *
+ * @internal
+ */
 export interface MediaPublishStats {
   /** Encoded video frames per second over the last sample window; `NaN` when unknown. */
   readonly encodedFps: number;
@@ -749,10 +809,12 @@ export interface MediaPublishStats {
   readonly subscriberCount: number;
 }
 
+/** @internal */
 export interface MediaPublishStatsEvents {
   publishstatsupdate: EventLike;
 }
 
+/** @internal */
 export interface MediaPublishStatsCapability {
   /**
    * Latest sampled stats, `null` before the first sample. Updated at a low frequency (~1 Hz); fires
@@ -819,8 +881,10 @@ export interface Video
     MediaPictureInPictureCapability,
     MediaVideoDimensionsCapability {}
 
+/** @internal */
 export interface AudioEvents extends CommonMediaEvents {}
 
+/** @internal */
 export interface Audio extends CommonMedia<AudioEvents> {}
 
 // ----------------------------------------
@@ -855,6 +919,7 @@ export interface VideoTargetLike
   requestFullscreen(): Promise<unknown>;
 }
 
+/** @experimental */
 export interface EngineAdapter<Engine = unknown, Target = unknown> {
   readonly engine: Engine | null;
   attach?(target: Target): void;

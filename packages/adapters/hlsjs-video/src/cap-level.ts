@@ -1,5 +1,5 @@
 import type { MediaResolution } from '@videojs/media';
-import Hls, { type Level } from 'hls.js';
+import Hls, { CapLevelController, type Level } from 'hls.js';
 
 /**
  * Live cap inputs the installed cap-level controller reads on every evaluation.
@@ -29,7 +29,7 @@ export interface RenditionCapPolicy {
 export const DEFAULT_MIN_AUTO_RESOLUTION: MediaResolution = '720p';
 
 export interface RenditionCapController {
-  /** Re-evaluate the policy now rather than on hls.js's next tick. */
+  /** Re-evaluate the policy now rather than when hls.js next measures the element. */
   apply(): void;
 }
 
@@ -39,10 +39,9 @@ export interface RenditionCapController {
  * Renditions are matched on area rather than literal height so anamorphic variants are judged by how many pixels they
  * actually carry: a 2560×1080 ultrawide rendition costs more than 16:9 1080p and is capped accordingly.
  *
- * Mirrors `maxResolutionToPixelArea` in `@videojs/spf`, and agrees with it on every rung whose 16:9 width is a whole
- * number. It parts company at `'480p'` on purpose: 16:9 at 480 tall is 853.33 wide, ladders ship the rounded-up
- * 854×480, and the exact area would put the standard 480p rendition over its own cap. Rounding the width up admits it
- * while still excluding anything genuinely wider.
+ * Rounds the 16:9 width up so every standard rendition fits its own cap. For `'480p'`, the exact width is 853.33, while
+ * ladders ship 854×480. The exact area would put that rendition over its own cap; rounding admits it while still
+ * excluding wider renditions.
  */
 export function resolutionToPixelArea(resolution: MediaResolution | undefined): number {
   if (resolution === undefined) return Number.POSITIVE_INFINITY;
@@ -105,18 +104,18 @@ export function levelIndexAtOrAbove(
   return atFloor === -1 ? levels.length - 1 : atFloor;
 }
 
-type CapLevelControllerClass = typeof Hls.DefaultConfig.capLevelController;
+type CapLevelControllerClass = typeof CapLevelController;
 
 /**
  * Build the `capLevelController` class to hand to the hls.js constructor.
  *
- * `hls.autoLevelCapping` has exactly one writer: hls.js's own `CapLevelController`, which rewrites it on a one-second
- * interval for as long as `capLevelToPlayerSize` is on — and it is on by default here. Assigning the property from
- * outside is undone within a second, so a cap has to be applied from inside the controller rather than in competition
- * with it.
+ * `hls.autoLevelCapping` is rewritten by hls.js's own `CapLevelController` whenever the element resizes (or on a
+ * one-second interval where `ResizeObserver` is missing) for as long as `capLevelToPlayerSize` is on — and it is on by
+ * default here. Assigning the property from outside is undone on the next measurement, so a cap has to be applied from
+ * inside the controller rather than in competition with it.
  *
  * The only seam hls.js offers is `getMaxLevel()`, which every value the capping loop writes passes through. Overriding
- * it makes the requested ceiling part of the same single-writer computation.
+ * it makes the requested ceiling part of the same computation.
  *
  * @param policy - Live cap inputs, re-read on every evaluation.
  * @param BaseController - Controller to layer on top of, so a controller passed through
@@ -124,11 +123,10 @@ type CapLevelControllerClass = typeof Hls.DefaultConfig.capLevelController;
  */
 export function createCapLevelController(
   policy: RenditionCapPolicy,
-  BaseController: CapLevelControllerClass = Hls.DefaultConfig.capLevelController
+  BaseController: CapLevelControllerClass = Hls.DefaultConfig.capLevelController ?? CapLevelController
 ): CapLevelControllerClass {
   return class RenditionCapLevelController extends BaseController {
     #hls: Hls;
-    #capping = false;
     #measuringWithoutSize = false;
 
     constructor(hls: Hls) {
@@ -149,18 +147,6 @@ export function createCapLevelController(
       if (policy.controller === this) policy.controller = undefined;
 
       super.destroy();
-    }
-
-    // hls.js keeps the interval handle private, so the loop is tracked through
-    // the public start/stop pair instead of reaching into it.
-    startCapping() {
-      this.#capping = true;
-      super.startCapping();
-    }
-
-    stopCapping() {
-      this.#capping = false;
-      super.stopCapping();
     }
 
     /**
@@ -246,9 +232,11 @@ export function createCapLevelController(
     }
 
     apply() {
-      // While the loop runs it owns the slot, so go through its own path;
-      // everything it writes already passes through `getMaxLevel()`.
-      if (this.#capping) {
+      // With size capping on, measuring owns the slot: everything it writes
+      // passes through `getMaxLevel()`, and an unmeasurable element falls back
+      // to the resolution cap. Whether hls.js's own loop is running is not
+      // tracked, since it starts measuring on attach without `startCapping()`.
+      if (this.#hls.config.capLevelToPlayerSize) {
         this.detectPlayerSize();
         return;
       }

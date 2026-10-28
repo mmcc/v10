@@ -73,14 +73,12 @@ describe('publish engine ↔ playback engine (mic-switch timeline continuity)', 
     );
 
     // The real playback engine, joined to the live broadcast.
-    const { signals } = createSubscriber(hub, disposals);
+    const { player } = createSubscriber(hub, disposals);
 
     await vi.waitFor(
       () => {
-        expect(signals.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(
-          0
-        );
-        expect(signals.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
+        expect(player.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(0);
+        expect(player.context.videoRendererActor.get()?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
       },
       { timeout: 15_000, interval: 100 }
     );
@@ -145,25 +143,25 @@ describe('publish engine ↔ playback engine (mic-switch timeline continuity)', 
 
     // Playout stays healthy on BOTH tracks: audio keeps scheduling, video
     // keeps presenting…
-    const scheduledAfterSwitch = signals.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled;
-    const presentedAfterSwitch = signals.context.videoRendererActor.get()!.snapshot.get()
+    const scheduledAfterSwitch = player.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled;
+    const presentedAfterSwitch = player.context.videoRendererActor.get()!.snapshot.get()
       .context.lastPresentedTimestampUs!;
 
     await vi.waitFor(
       () => {
-        expect(signals.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled).toBeGreaterThan(
+        expect(player.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled).toBeGreaterThan(
           scheduledAfterSwitch
         );
         expect(
-          signals.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!
+          player.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!
         ).toBeGreaterThan(presentedAfterSwitch);
       },
       { timeout: 15_000, interval: 100 }
     );
     // …and presented video still tracks the audio master clock — the
     // cross-track alignment that coherent published timelines buy.
-    const clockUs = signals.context.audioRendererActor.get()!.getClockTimeUs()!;
-    const presentedUs = signals.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!;
+    const clockUs = player.context.audioRendererActor.get()!.getClockTimeUs()!;
+    const presentedUs = player.context.videoRendererActor.get()!.snapshot.get().context.lastPresentedTimestampUs!;
 
     expect(Math.abs(presentedUs - clockUs)).toBeLessThan(2_000_000);
   }, 120_000);

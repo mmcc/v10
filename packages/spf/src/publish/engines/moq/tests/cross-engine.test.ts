@@ -96,13 +96,13 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     );
 
     // ── Late join: the real playback engine, subscribed to the catalog ───
-    const { canvas: renderCanvas, signals } = createSubscriber(hub, disposals);
+    const { canvas: renderCanvas, player } = createSubscriber(hub, disposals);
 
     // Bug regression: the late joiner must reach decoded, PRESENTED video
     // from a post-join keyframe with the default codec config.
     await vi.waitFor(
       () => {
-        const renderer = signals.context.videoRendererActor.get();
+        const renderer = player.context.videoRendererActor.get();
 
         expect(renderer?.snapshot.get().context.framesDecoded ?? 0).toBeGreaterThan(0);
         expect(renderer?.snapshot.get().context.lastPresentedTimestampUs).toBeDefined();
@@ -114,9 +114,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     // Audio (the mic's own pipeline) is being scheduled from the live opus track.
     await vi.waitFor(
       () => {
-        expect(signals.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(
-          0
-        );
+        expect(player.context.audioRendererActor.get()?.snapshot.get().context.framesScheduled ?? 0).toBeGreaterThan(0);
       },
       { timeout: 15_000, interval: 100 }
     );
@@ -148,7 +146,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     // share as a cheaper camera and swap the viewer's content on a dip.
     await vi.waitFor(
       () => {
-        const videoSet = signals.state.presentation.get()?.selectionSets?.find((set) => set.type === 'video');
+        const videoSet = player.state.presentation.get()?.selectionSets?.find((set) => set.type === 'video');
 
         expect(videoSet?.switchingSets.map((switchingSet) => switchingSet.tracks.map((track) => track.id))).toEqual([
           ['live/video'],
@@ -160,16 +158,16 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     // Selection stays on the camera — the rendered switching set is the only
     // one it ranks, so a screen share appearing never changes what is on
     // screen (its canvas is still the camera's, not SCREEN_SIZE).
-    expect(signals.state.selectedVideoTrackId.get()).toBe('live/video');
+    expect(player.state.selectedVideoTrackId.get()).toBe('live/video');
     expect(renderCanvas.width).toBe(CAMERA_SIZE.width);
 
     // An EXPLICIT cross-set selection is the sanctioned way to watch the
     // screen: `findTrack` resolves ids across sibling switching sets, and
     // the ranker (confined to the selected set) must not clobber it back.
-    signals.state.selectedVideoTrackId.set('live/screen');
+    player.state.selectedVideoTrackId.set('live/screen');
     await vi.waitFor(
       () => {
-        expect(signals.state.selectedVideoTrackId.get()).toBe('live/screen');
+        expect(player.state.selectedVideoTrackId.get()).toBe('live/screen');
         expect(renderCanvas.width).toBe(SCREEN_SIZE.width);
         expect(renderCanvas.height).toBe(SCREEN_SIZE.height);
       },
@@ -177,7 +175,7 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
     );
 
     // …and selecting back re-renders the camera.
-    signals.state.selectedVideoTrackId.set('live/video');
+    player.state.selectedVideoTrackId.set('live/video');
     await vi.waitFor(
       () => {
         expect(renderCanvas.width).toBe(CAMERA_SIZE.width);
@@ -202,11 +200,11 @@ describe('publish engine ↔ playback engine (relay hub)', () => {
       { timeout: 15_000, interval: 100 }
     );
     // …and the camera subscriber keeps scheduling them.
-    const scheduledAfterScreen = signals.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled;
+    const scheduledAfterScreen = player.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled;
 
     await vi.waitFor(
       () => {
-        expect(signals.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled).toBeGreaterThan(
+        expect(player.context.audioRendererActor.get()!.snapshot.get().context.framesScheduled).toBeGreaterThan(
           scheduledAfterScreen
         );
       },

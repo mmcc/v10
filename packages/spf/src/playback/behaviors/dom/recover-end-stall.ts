@@ -25,7 +25,7 @@
  */
 import { listen } from '@videojs/utils/dom';
 
-import { defineBehavior } from '../../../core/composition/create-composition';
+import { defineBehavior } from '../../../core/composition/define-behavior';
 import { effect } from '../../../core/signals/effect';
 import type { ReadonlySignal } from '../../../core/signals/primitives';
 import { getMinBufferedEnd } from '../../../media/dom/mse/duration';
@@ -52,7 +52,7 @@ export const DEFAULT_END_STALL_NUDGE_WINDOW = 0.2;
  * playback is active (not paused/seeking/already-ended), and the playhead sits within `nudgeWindow` of the reachable
  * buffered end (so it's the true end, not a mid-stream buffer hole). Pure — the behavior supplies the live values.
  */
-export function shouldForceEnded(
+function shouldForceEnded(
   input: {
     msEnded: boolean;
     durationFinite: boolean;
@@ -69,7 +69,8 @@ export function shouldForceEnded(
 
   const gap = bufferedEnd - currentTime;
 
-  return gap >= 0 && gap < nudgeWindow;
+  // getMinBufferedEnd returns 0 when no media is buffered.
+  return bufferedEnd > 0 && gap >= 0 && gap < nudgeWindow;
 }
 
 function recoverEndStallSetup({

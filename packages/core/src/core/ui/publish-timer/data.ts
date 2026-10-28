@@ -1,6 +1,7 @@
 import type { StateAttrMap } from '../types';
 import type { PublishTimerState } from './core';
 
+/** @internal */
 export const PublishTimerDataAttrs = {
   /** Current publish session lifecycle. */
   session: 'data-publish-state',
