@@ -1,8 +1,7 @@
 /**
  * In-memory MoQ relay hub for cross-engine tests: real publish engine on one side, real playback engine(s) on the
- * other, over `createTransportPair` transports. Each side speaks its engine's draft: the publisher's own draft-20 codec
- * upstream, and `@caprid/moq-core`'s moqt-22 codec (through `moqt-wire`) toward the player, the way the real relay
- * terminates each session in the version it negotiated.
+ * other, over `createTransportPair` transports. Both engines speak `@caprid/moq-core`'s moqt-22, and so does the hub,
+ * through the package's own relay-side codec (`moqt-wire`).
  *
  * Publisher side (`connectPublisher`) mirrors moq-relay 0.14.17's announce-and-serve ingest. After the SETUP exchange
  * the hub opens a bidi stream and solicits announces (SUBSCRIBE_NAMESPACE, empty prefix, odd server-side request ids)
@@ -26,41 +25,35 @@
  * Tracks and demand persist across publisher sessions (a reconnecting publisher is re-solicited and its demanded tracks
  * re-subscribed), so the hub can also observe teardown/reconnect churn instead of crashing on it.
  */
-import { createSubgroupWriter as createPlayerSubgroupWriter } from '@caprid/moq-core';
+import {
+  type BidirectionalStreamLike,
+  createSubgroupWriter,
+  type KeyValuePair,
+  type Location,
+  type LocationFilter,
+  type MoqtTransport,
+  PUBLISH_DONE_STATUS,
+  REQUEST_ERROR_CODE,
+  type TrackNamespace,
+} from '@caprid/moq-core';
 
-import { StreamReader } from '../../../network/moqt/bytes';
 import {
   type ControlMessage,
   decodeControlMessage,
+  encodePublishDone,
   encodeRequestError,
   encodeSetup,
   encodeSubscribe,
   encodeSubscribeNamespace,
-  type KeyValuePair,
-  type Location,
-  type LocationFilter,
-  PUBLISH_DONE_STATUS,
-  REQUEST_ERROR_CODE,
-  type TrackNamespace,
-} from '../../../network/moqt/control-messages';
-import {
+  encodeSubscribeOk,
   isSubgroupHeaderType,
   readFetchHeader,
   readSubgroupHeader,
   readSubgroupObjects,
   STREAM_TYPE,
-} from '../../../network/moqt/object-stream';
-import type { BidirectionalStreamLike } from '../../../network/moqt/request-stream';
-import type { MoqtTransport } from '../../../network/moqt/session';
-import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
-import {
-  decodeControlMessage as decodePlayerControlMessage,
-  encodePublishDone as encodePlayerPublishDone,
-  encodeRequestError as encodePlayerRequestError,
-  encodeSetup as encodePlayerSetup,
-  encodeSubscribeOk as encodePlayerSubscribeOk,
-  StreamReader as PlayerStreamReader,
+  StreamReader,
 } from '../../../network/tests/helpers/moqt-wire';
+import { createTransportPair } from '../../../network/tests/helpers/transport-pair';
 import type { ConnectPublishTransport } from '../../session/publish-session';
 
 // =============================================================================
@@ -163,7 +156,7 @@ function isAtOrAfter(a: Location, b: Location): boolean {
 
 /**
  * Where a new subscription starts, resolved against the track's Largest Object the way moq-relay 0.14.17 resolves a
- * draft-20 Location Filter (§5.1.2): `next-object` is strict (nothing already published is replayed), `relative-group`
+ * Location Filter (moqt-22 §3.3.1): `next-object` is strict (nothing already published is replayed), `relative-group`
  * counts back from the next group (`0` = the next group, `1` = the current group from object 0), an absolute start is
  * honored as given (the hub never sees an end), and an unfiltered request starts at the current group like moq-lite.
  */
@@ -584,7 +577,7 @@ export function createRelayHub(
       void (async () => {
         try {
           const stream = await server.createUnidirectionalStream();
-          const writer = createPlayerSubgroupWriter(stream, {
+          const writer = createSubgroupWriter(stream, {
             trackAlias,
             groupId: object.groupId,
             hasProperties: true,
@@ -605,7 +598,7 @@ export function createRelayHub(
 
     const serveRequestStream = async (stream: BidirectionalStreamLike): Promise<void> => {
       const writer = stream.writable.getWriter();
-      const reader = new PlayerStreamReader(stream.readable);
+      const reader = new StreamReader(stream.readable);
       let subscription: Subscription | undefined;
       let subscribedTrack: TrackRecord | undefined;
 
@@ -614,7 +607,7 @@ export function createRelayHub(
           const type = await reader.readVarint();
           const high = await reader.readUint8();
           const low = await reader.readUint8();
-          const message = decodePlayerControlMessage({ type, body: await reader.readBytes(high * 256 + low) });
+          const message = decodeControlMessage({ type, body: await reader.readBytes(high * 256 + low) });
 
           if (message.kind === 'subscribe') {
             // Downstream demand is what makes the hub pull the track from
@@ -625,9 +618,7 @@ export function createRelayHub(
 
             // Like the relay, SUBSCRIBE_OK reports the Largest Object once
             // the track has content.
-            await writer.write(
-              encodePlayerSubscribeOk(trackAlias, track.largest ? { largestObject: track.largest } : {})
-            );
+            await writer.write(encodeSubscribeOk(trackAlias, track.largest ? { largestObject: track.largest } : {}));
             subscription = {
               trackAlias,
               start: resolveStart(message.parameters.locationFilter, track.largest),
@@ -648,7 +639,7 @@ export function createRelayHub(
               },
               end: (statusCode) => {
                 void writer
-                  .write(encodePlayerPublishDone(statusCode, 0, ''))
+                  .write(encodePublishDone(statusCode, 0, ''))
                   .then(() => writer.close())
                   .catch(() => {});
               },
@@ -667,7 +658,7 @@ export function createRelayHub(
           } else if (message.kind === 'fetch') {
             // The player never fetches (its joins are Location
             // Filters); anything asking for history is refused.
-            await writer.write(encodePlayerRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'no history'));
+            await writer.write(encodeRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'no history'));
             await writer.close();
             return;
           }
@@ -719,7 +710,7 @@ export function createRelayHub(
       try {
         const control = await server.createUnidirectionalStream();
 
-        await control.getWriter().write(encodePlayerSetup());
+        await control.getWriter().write(encodeSetup());
       } catch {
         // Closed before SETUP could land.
       }

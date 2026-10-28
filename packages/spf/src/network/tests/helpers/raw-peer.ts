@@ -5,15 +5,15 @@
  * `rawSubscribe` wrap it with the two messages moq-lite-rs sends (SUBSCRIBE_NAMESPACE right after SETUP, SUBSCRIBE per
  * pulled track).
  */
+import type { MoqtTransport, TrackNamespace } from '@caprid/moq-core';
+
 import {
   type ControlMessage,
   ControlMessageDeframer,
   decodeControlMessage,
   encodeSubscribe,
   encodeSubscribeNamespace,
-  type TrackNamespace,
-} from '../../control-messages';
-import type { MoqtTransport } from '../../session';
+} from './moqt-wire';
 
 export interface RawRequest {
   /** Control frames the publisher wrote back, in order. */
@@ -32,7 +32,7 @@ export interface RawRequest {
    * response-side write failure test needs.
    */
   abandonReads: () => Promise<void>;
-  /** FIN the peer's side — half-closure, NOT a withdrawal (§3.3.2). */
+  /** FIN the peer's side — half-closure, NOT a withdrawal (§6.4.2.2). */
   fin: () => Promise<void>;
   /** Reset the peer's side — the actual withdrawal signal. */
   reset: () => Promise<void>;
@@ -82,7 +82,7 @@ export function solicitNamespace(server: MoqtTransport, prefix: TrackNamespace, 
   return openRawRequest(server, encodeSubscribeNamespace({ requestId, trackNamespacePrefix: prefix }));
 }
 
-/** The relay's per-track pull, with the parameters moq-relay 0.14.14 sends on draft-20 (a `relative-group 1` join). */
+/** The relay's per-track pull, with the parameters moq-relay sends upstream (a `relative-group 1` join). */
 export function rawSubscribe(
   server: MoqtTransport,
   trackNamespace: TrackNamespace,

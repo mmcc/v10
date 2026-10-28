@@ -1,6 +1,6 @@
+import { PUBLISH_DONE_STATUS } from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import { PUBLISH_DONE_STATUS } from '../../../../network/moqt/control-messages';
 import { createRelayHub } from '../../../tests/helpers/relay-hub';
 import { createMoqPublishEngine } from '../engine';
 import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-harness';
@@ -8,7 +8,7 @@ import { createSubscriber, makeSyntheticStream } from './helpers/cross-engine-ha
 /**
  * Cross-engine regression suite: the real publish engine (DEFAULT encoder config — H.264 in `avc` (AVCC) bitstream
  * format, with the avcC published out-of-band as the catalog's `initDataList`; see `probe-encoder-support.ts` for the
- * carriage history) publishing through an in-memory draft-20 relay hub to the real playback engine rendering onto a
+ * carriage history) publishing through an in-memory moqt-22 relay hub to the real playback engine rendering onto a
  * canvas.
  *
  * Covers the real-world publisher bugs: - a LATE-joining subscriber (after ≥1 group boundary) must reach decoded video

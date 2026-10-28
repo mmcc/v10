@@ -29,19 +29,19 @@
  * message order. Async completions feed the reactive snapshot counters through internal messages, mirroring
  * `actors/dom/encoder-actor.ts`.
  */
+import { createSubgroupWriter, type SubgroupWriter } from '@caprid/moq-core';
+
 import type { ActorStateDefinition, MessageActor } from '../../core/actors/create-machine-actor';
 import { createMachineActor } from '../../core/actors/create-machine-actor';
 import { SerialRunner, Task } from '../../core/tasks/task';
 import type { PropertyPair } from '../../media/moq/loc';
-import type { SubgroupWriter } from '../../network/moqt/subgroup-writer';
-import { createSubgroupWriter } from '../../network/moqt/subgroup-writer';
 
 // =============================================================================
 // Types
 // =============================================================================
 
-/** Opens one unidirectional stream on the publish session's transport. */
-export type OpenUniStream = () => Promise<WritableStream<Uint8Array>>;
+/** Opens one unidirectional data stream for the live subscription bound as `trackAlias`. */
+export type OpenUniStream = (trackAlias: number) => Promise<WritableStream<Uint8Array>>;
 
 export type TrackPublisherUserState = 'publishing' | 'ended';
 export type TrackPublisherState = TrackPublisherUserState | 'destroyed';
@@ -68,7 +68,7 @@ export interface TrackPublisherCounters {
   /** Timestamp of the most recently written object; NaN before the first. */
   lastTimestampUs: number;
   /**
-   * Group ID of the Largest Object written to the wire (§5.1.2); -1 before the first object. Paired with
+   * Group ID of the Largest Object written to the wire (§3.1.4); -1 before the first object. Paired with
    * `largestObjectId`, this is what the session reports as LARGEST_OBJECT in SUBSCRIBE_OK.
    */
   largestGroupId: number;
@@ -111,12 +111,6 @@ export interface TrackPublisherActor extends MessageActor<
    * as it is written.)
    */
   flushed(): Promise<void>;
-  /**
-   * Data streams opened under the subscription bound as `trackAlias` — PUBLISH_DONE's Stream Count (§10.12). Counted at
-   * the commit to writing the subgroup header (the `openedGroups` boundary), so a stream reset before its header — one
-   * the peer cannot attribute to the subscription — is excluded.
-   */
-  streamCount(trackAlias: number): number;
 }
 
 export interface TrackPublisherOptions {
@@ -197,8 +191,6 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
   let currentGroupFrames: Extract<TrackPublisherMessage, { type: 'frame' }>[] = [];
   /** Detached FIN settlements (see `finishCell`) — `flushed()` waits on them past the runner. */
   const pendingFins = new Set<Promise<void>>();
-  /** Opened data streams per subscription alias (see `streamCount`); pruned to the current alias on each bind. */
-  const streamsByAlias = new Map<number, number>();
 
   // Assigned right after createMachineActor returns; the runner tasks only
   // complete asynchronously, well after construction.
@@ -287,7 +279,7 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
         new Task(async (signal) => {
           if (signal.aborted || cell.aborted) return;
 
-          const stream = await raceOpenAgainstAbort(openUniStream(), signal);
+          const stream = await raceOpenAgainstAbort(openUniStream(cell.trackAlias), signal);
           if (stream === undefined) return;
 
           // `signal.aborted` again, not just the cell: destroy() leaves the
@@ -304,7 +296,6 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
           // counting at queue time inflated the opened-stream count with
           // groups that were dropped before they ever opened one.
           inner?.send({ type: 'group-opened' });
-          streamsByAlias.set(cell.trackAlias, (streamsByAlias.get(cell.trackAlias) ?? 0) + 1);
           cell.writer = createSubgroupWriter(stream, {
             trackAlias: cell.trackAlias,
             groupId: cell.groupId,
@@ -530,14 +521,6 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
 
             boundAlias = msg.trackAlias;
 
-            // A new alias binds only after the session has ended every
-            // older subscription on the track, so their counts are dead
-            // weight. The current alias keeps its count across an unbind
-            // (a Forward State toggle rebinds the same alias).
-            for (const alias of streamsByAlias.keys()) {
-              if (alias !== msg.trackAlias) streamsByAlias.delete(alias);
-            }
-
             // Instant join: catalog-shaped tracks re-send their latest
             // change-driven frame (queued behind this message, boundAlias
             // already set); keyframe-grouped tracks replay the in-progress
@@ -606,9 +589,6 @@ export function createTrackPublisherActor(options: TrackPublisherOptions): Track
     async flushed(): Promise<void> {
       await runner.settled;
       await Promise.all(pendingFins);
-    },
-    streamCount(trackAlias: number): number {
-      return streamsByAlias.get(trackAlias) ?? 0;
     },
     destroy(): void {
       // Every opened stream must end deterministically: the open group

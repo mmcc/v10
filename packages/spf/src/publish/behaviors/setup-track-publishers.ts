@@ -31,6 +31,13 @@
  * subgroup streams on every unsubscribe, so a stream failure is ordinary lifecycle — the publishers count it
  * (`droppedGroups`) and genuine transport death surfaces through the session's own `closed`/`failed` path.
  */
+import {
+  CLOSE_FLUSH_TIMEOUT_MS,
+  type MoqtPublishSession,
+  type RegisteredTrack,
+  TRACK_PROPERTY,
+} from '@caprid/moq-core';
+
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
@@ -41,13 +48,7 @@ import { LOC_PROPERTY, MICROSECONDS_PER_SECOND } from '../../media/moq/loc';
 import { isMediaCatalogRole } from '../../media/moq/parse-catalog';
 import type { TrackPublisherActor } from '../actors/track-publisher';
 import { createTrackPublisherActor } from '../actors/track-publisher';
-import {
-  CLOSE_FLUSH_TIMEOUT_MS,
-  type MoqtPublishSession,
-  type PublishEndpoint,
-  type PublishSessionActor,
-  type RegisteredTrack,
-} from '../session/publish-session';
+import type { PublishEndpoint, PublishSessionActor } from '../session/publish-session';
 
 /**
  * Structural mirror of `behaviors/dom/probe-encoder-support.ts`'s `ActiveEncodingsFacts` (DOM-bound behavior, so not
@@ -249,7 +250,7 @@ const textEncoder = new TextEncoder();
 const TRACK_FLUSH_TIMEOUT_MS = CLOSE_FLUSH_TIMEOUT_MS / 2;
 
 /**
- * End one track in the order §10.12 requires — every data stream closed before PUBLISH_DONE: `end` FINs the open group,
+ * End one track in the order §9.9 requires — every data stream closed before PUBLISH_DONE: `end` FINs the open group,
  * the queued groups get a bounded window to flush, `destroy()` FINs or resets whatever is left, and only then does the
  * session send each subscription PUBLISH_DONE and its FIN.
  */
@@ -312,7 +313,7 @@ function addTrackPublisher(
     // WebTransport orders larger values first. Keep all media below the
     // default order (0) of control/request streams so congestion cannot
     // starve the signaling needed to stop or change a subscription.
-    openUniStream: () => cluster.session.openUniStream({ sendOrder: -1 - options.priority }),
+    openUniStream: (trackAlias) => cluster.session.openUniStream(trackAlias, { sendOrder: -1 - options.priority }),
     priority: options.priority,
     groupPerFrame: options.groupPerFrame,
     replayLastGroupOnBind: options.replayLastGroupOnBind === true,
@@ -321,16 +322,18 @@ function addTrackPublisher(
   const handle = cluster.session.registerTrack({
     trackNamespace: cluster.namespace,
     trackName,
+    // Declaring the timescale keeps object TIMESTAMP properties flowing
+    // through moq-lite-rs relays — undeclared, they discard them and
+    // re-stamp frames on arrival, so viewers would sync to relay arrival
+    // time instead of capture time. LOC packaging stamps microseconds.
+    trackProperties: [{ type: TRACK_PROPERTY.TIMESCALE, value: MICROSECONDS_PER_SECOND }],
     // The publisher owns the Largest Object it has written; the session
-    // reads it here to report LARGEST_OBJECT in SUBSCRIBE_OK (§10.2.17).
+    // reads it here to report LARGEST_OBJECT in SUBSCRIBE_OK (§9.20.17).
     getLargestObject: () => {
       const { largestGroupId, largestObjectId } = publisher.snapshot.get().context;
 
       return largestGroupId >= 0 ? { group: largestGroupId, object: largestObjectId } : undefined;
     },
-    // ...and the streams it opened per subscription, for the Stream Count
-    // a track end reports in PUBLISH_DONE (§10.12).
-    getStreamCount: (trackAlias) => publisher.streamCount(trackAlias),
   });
 
   cluster.created.push({ handle, publisher, boundAlias: undefined });
