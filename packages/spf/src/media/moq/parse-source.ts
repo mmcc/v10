@@ -26,7 +26,7 @@ export interface MoqNumericRange {
 export interface MoqSource {
   /**
    * WebTransport connect URL — the moqt URI with its scheme replaced by https and the fragment stripped (moq-transport
-   * §3.1.4).
+   * draft-22 §6.2.1).
    */
   connectUrl: string;
   /** The moqt URI without its fragment — the session identity. */
@@ -51,7 +51,7 @@ export interface MoqSource {
 }
 
 // ============================================================================
-// MSF namespace-name string decoding (moq-transport §1.5)
+// MSF namespace-name string decoding (moq-transport draft-22 §8.8)
 // ============================================================================
 
 const LITERAL_CHAR = /^[a-zA-Z0-9_]$/;
@@ -60,7 +60,7 @@ const LOWER_HEX = /^[0-9a-f]{2}$/;
 /**
  * Decode one MSF-encoded namespace field or track name: literal `[a-zA-Z0-9_]` bytes plus `.xx` lowercase-hex escapes
  * for every other UTF-8 byte (tuples are byte strings, §11.1.2). Rejects malformed and non-canonical encodings
- * (uppercase hex, redundant escapes of literal characters, invalid UTF-8) per moq-transport §1.5.1.
+ * (uppercase hex, redundant escapes of literal characters, invalid UTF-8) per moq-transport draft-22 §8.8.
  */
 function decodeNameComponent(encoded: string): string {
   const bytes: number[] = [];

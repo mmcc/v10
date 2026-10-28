@@ -36,6 +36,9 @@ const extensionPackages = new Set(
   Object.values(INSTALLATION_EXTENSION_DEFINITIONS).map(({ packageName }) => packageName)
 );
 
+/** Definitions the CDN build leaves out; mirrors `cdnMediaExclusions` in `packages/cdn/vite.config.ts`. */
+const CDN_EXCLUDED_MEDIA = new Set(['simple-moq-video']);
+
 describe('installation workspace contract', () => {
   it('keeps CDN media support aligned with the definitions its build republishes', () => {
     const definitions = globSync('packages/html/src/define/media/**/*.ts', { cwd: workspaceRoot })
@@ -45,6 +48,7 @@ describe('installation workspace contract', () => {
           .replace(/\/index\.ts$/, '')
           .replace(/\.ts$/, '')
       )
+      .filter((subpath) => !CDN_EXCLUDED_MEDIA.has(subpath))
       .sort();
 
     expect([...CDN_MEDIA_SUBPATHS].sort()).toEqual(definitions);

@@ -2,12 +2,12 @@
  * Loopback MoQ relay — a synthetic MSF publisher for the sandbox.
  *
  * There is no public relay that serves draft-ietf-moq-msf-01 catalogs yet (Phase 0 interop is still owed), so this
- * stands in for one: it speaks real draft-20 bytes over an in-memory `MoqtTransport` and publishes real
+ * stands in for one: it speaks real draft-22 bytes over an in-memory `MoqtTransport` and publishes real
  * WebCodecs-encoded media, which is enough to drive the whole engine — catalog → selection → subscribe → decode →
  * canvas + AudioContext.
  *
- * The wire encoding here is written from the specs rather than reusing `network/moqt`'s encoders (they aren't public
- * API, and a second independent implementation is worth more as a check on the decoder than a round-trip against
+ * The wire encoding here is written from the specs rather than reusing `@caprid/moq-core`'s encoders (they aren't
+ * public API, and a second independent implementation is worth more as a check on the decoder than a round-trip against
  * ourselves would be).
  *
  * Published tracks (subscribe lazily starts a producer per subscription):
@@ -19,10 +19,10 @@
 import type { CreateMoqTransport } from '@videojs/spf/moq';
 
 // ============================================================================
-// Wire primitives (draft-ietf-moq-transport-20)
+// Wire primitives (draft-ietf-moq-transport-22)
 // ============================================================================
 
-/** Control/request message types (§10, Table 5). */
+/** Control/request message types (§9, Table 5). */
 const MESSAGE_TYPE = {
   SETUP: 0x2f00,
   SUBSCRIBE: 0x3,
@@ -31,12 +31,12 @@ const MESSAGE_TYPE = {
   FETCH: 0x16,
 } as const;
 
-/** REQUEST_ERROR code for "nothing published in that range" (§10.6.1). */
+/** REQUEST_ERROR code for "nothing published in that range" (§12.3). */
 const ERROR_INVALID_RANGE = 0x11;
 
 /**
  * SUBGROUP_HEADER stream type: subgroup-id mode `zero`, default publisher priority, objects carry a Properties field,
- * not end-of-group. `0b0011_0001` — see §11.4.2 for the flag layout.
+ * not end-of-group. `0b0011_0001` — see §11.3.1 for the flag layout.
  */
 const SUBGROUP_HEADER_TYPE = 0x31;
 
@@ -44,10 +44,15 @@ const SUBGROUP_HEADER_TYPE = 0x31;
 const LOC_TIMESTAMP = 0x10;
 
 /**
- * The vi64 varint of draft-15+ (§1.4.1) — leading ones on the first byte give the encoded length minus one, so an
- * L-byte encoding carries 7L value bits. NOT the QUIC RFC 9000 varint.
+ * The vi64 varint of draft-15+ (§8.1) — leading ones on the first byte give the encoded length minus one, so an L-byte
+ * encoding of up to 8 bytes carries 7L value bits, and the 9-byte form (first byte 0xFF) a full 64. NOT the QUIC RFC
+ * 9000 varint. Encoding stops at 8 bytes: their 56 bits hold every safe integer (up to `Number.MAX_SAFE_INTEGER`), and
+ * anything else is rejected rather than mis-encoded — a double can hold some larger integers exactly, such as 2^56.
  */
 function varintByteLength(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new RangeError(`varint: ${value} is not a safe unsigned integer`);
+
   for (let length = 1; length < 8; length++) {
     if (value < 2 ** (7 * length)) return length;
   }
@@ -144,14 +149,14 @@ class Reader {
   }
 }
 
-/** Control message framing (§10.1): type varint + 16-bit length + body. */
+/** Control message framing (§9): type varint + 16-bit length + body. */
 function frame(type: number, body: Uint8Array): Uint8Array {
   return new Writer().varint(type).u16(body.length).bytes(body).toBytes();
 }
 
 function encodeSetup(): Uint8Array {
   // Options-only, and we send none. A Key-Value-Pair block is bounded by its
-  // enclosing length rather than counted (§10.2), so "no options" is an empty
+  // enclosing length rather than counted (§9.1), so "no options" is an empty
   // body — not a zero count.
   return frame(MESSAGE_TYPE.SETUP, new Uint8Array(0));
 }
@@ -574,7 +579,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
     const host: ProducerHost = { nowUs, publish: publishObject, log };
 
     /**
-     * The server's control stream. It stays open for the session's lifetime — closing it ends the session (§3.3) — so
+     * The server's control stream. It stays open for the session's lifetime — closing it ends the session (§6.3) — so
      * the writer is held until this transport closes.
      */
     const sendServerSetup = (): void => {
@@ -672,7 +677,7 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
             if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
               onSubscribe(message.body);
             } else if (message.type === MESSAGE_TYPE.FETCH) {
-              // The engine never fetches — a draft-20 join is a subscription
+              // The engine never fetches — a draft-22 join is a subscription
               // filter, and every subscription replays the newest group anyway.
               // Anything else asking for history is refused: none is retained.
               await writer.write(encodeRequestError(ERROR_INVALID_RANGE, 'nothing published'));
@@ -684,8 +689,11 @@ export function createLoopbackRelay({ onLog }: LoopbackRelayOptions = {}): Loopb
           }
 
           const { value, done } = await reader.read();
-          // Cancellation *is* the stream lifecycle (§3.3.3): the subscriber
-          // aborting its sending direction ends the subscription.
+          // A FIN only means the subscriber will send nothing more (§6.4.2.2),
+          // yet this loopback ends the subscription on it as well as on a
+          // cancellation (§6.4.2.3), which lands in the catch below. The player
+          // cancels with a reset and FINs only after the publisher has, so the
+          // shortcut never cuts a live subscription short.
           if (done) break;
 
           const merged = new Uint8Array(buffer.length + value.length);

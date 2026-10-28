@@ -1,8 +1,8 @@
+import type { MoqtTransport } from '@caprid/moq-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import type { MoqSource } from '../../../media/moq/parse-source';
-import { encodeSetup } from '../../../network/moqt/control-messages';
-import type { MoqtTransport } from '../../../network/moqt/session';
+import { encodeSetup } from '../../../network/tests/helpers/moqt-wire';
 import { type CreateMoqTransport, composePlaybackConnectUrl, createMoqSessionActor } from '../moq-session';
 
 // ============================================================================
@@ -81,14 +81,14 @@ makeCreateTransport.lastConnect = undefined as { connectUrl: string; protocols: 
 // ============================================================================
 
 describe('createMoqSessionActor', () => {
-  it('connects with the draft protocol id and reaches ready on the server SETUP', async () => {
+  it('offers moqt-22 then moqt-20 and reaches ready on the server SETUP', async () => {
     const fake = createFakeTransport();
     const actor = createMoqSessionActor({ source: makeSource(), createTransport: makeCreateTransport(fake) });
 
     expect(actor.snapshot.get().context.status).toBe('connecting');
     expect(makeCreateTransport.lastConnect).toMatchObject({
       connectUrl: 'https://relay.example.com/live',
-      protocols: ['moqt-20'],
+      protocols: ['moqt-22', 'moqt-20'],
     });
 
     fake.sendServerSetup();

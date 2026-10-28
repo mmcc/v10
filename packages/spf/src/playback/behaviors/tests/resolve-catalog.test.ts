@@ -1,15 +1,16 @@
+import {
+  type MessageParameters,
+  type MoqtSession,
+  PUBLISH_DONE_STATUS,
+  REQUEST_ERROR_CODE,
+  type SubscriptionHandlers,
+} from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { signal } from '../../../core/signals/primitives';
 import { isResolvedPresentation, type MaybeResolvedPresentation } from '../../../media/types';
 import { getTracksByType } from '../../../media/utils/tracks';
-import { utf8Encode } from '../../../network/moqt/bytes';
-import {
-  type MessageParameters,
-  PUBLISH_DONE_STATUS,
-  REQUEST_ERROR_CODE,
-} from '../../../network/moqt/control-messages';
-import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
+import { utf8Encode } from '../../../network/tests/helpers/moqt-wire';
 import type { MoqSessionActor, MoqSessionActorContext } from '../../actors/moq-session';
 import { resolveCatalog } from '../resolve-catalog';
 

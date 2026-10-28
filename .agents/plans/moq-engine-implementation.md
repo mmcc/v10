@@ -9,7 +9,7 @@ plan, and what Phase 0/5 still owes.
 | Plan item | Status | Where |
 |---|---|---|
 | §5 type-model change | ✅ | `media/types` — `TrackDeliveryMode` + `LiveOf<T>` (extends `PartiallyResolved<T>`, zero HLS ripple; audit confirmed selection reads only metadata) |
-| Phase 1 wire protocol | ✅ | `network/moqt/` — vi64 varint, control messages, request streams, object streams, session driver; 51 tests incl. spec Table 2 golden vectors |
+| Phase 1 wire protocol | ✅ | Was `network/moqt/` (vi64 varint, control messages, request streams, object streams, session driver; 51 tests incl. spec Table 2 golden vectors). Since 2026-10-27 the player uses `@caprid/moq-core`, the package extracted from it |
 | Phase 2 format layer | ✅ | `media/moq/` — parse-source (msf: fragment), parse-catalog (independent + delta), loc, codec-mapping, timeline; 46 tests |
 | Phase 3 actors/behaviors | ✅ | `playback/actors/{moq-session,track-subscriber}`, `playback/actors/dom/{video,audio}-renderer`, `playback/behaviors/{setup-moq-session,resolve-catalog,subscribe-selected-tracks,sync-latency,track-moq-bandwidth}`, `behaviors/dom/setup-moq-renderers` |
 | Phase 4 engine + adapter | ✅ | `playback/engines/moq/` — `createMoqEngine`, `MoqMediaMixin` (canvas facade, §6 prototype 1), `./moq` export, `--moq` size flag |
@@ -24,9 +24,10 @@ Size baseline (2026-07-17): MoQ entry 18.16 KB min+gzip (90.8% of the
 Implemented against the actual spec texts (fetched 2026-07-17):
 `draft-ietf-moq-transport-19`, `draft-ietf-moq-msf-01`,
 `draft-ietf-moq-loc-02` (LOC moved to loc-04 in PR #9). The spec texts are
-now vendored under `internal/specs/moq/` (transport-20, loc-04, msf-01 as of
-2026-09-02); the draft-20 migration plan is `moq-transport-20-migration.md`
-beside this file. Notable corrections to the plan's assumptions:
+now vendored under `internal/specs/moq/` (transport-22, loc-04, msf-01 as of
+2026-10-27); the draft-20 migration plan is `moq-transport-20-migration.md`
+beside this file, and the transport codec now comes from `@caprid/moq-core`
+(moqt-22, falling back to moqt-20). Notable corrections to the plan's assumptions:
 
 - **Varint is NOT the QUIC RFC 9000 varint.** Draft-15+ uses a
   leading-ones vi64 (1–9 bytes). Spec Table 2 vectors are test fixtures.
@@ -41,9 +42,6 @@ beside this file. Notable corrections to the plan's assumptions:
 - `syncPreload` / `trackLoadTriggers` are not composed into the engine:
   both are `HTMLMediaElement`-bound and there is no element; the adapter
   writes `state.preload` / `state.loadActivated` directly.
-- Audio renderer uses `AudioBufferSourceNode` scheduling, not the
-  AudioWorklet ring buffer, with the clock contract already shaped for
-  the swap (TODO(audio-worklet) in `audio-renderer.ts`).
 - No text-track subscription behavior yet (`switchTextTrack` composes
   and selects, but nothing renders text).
 - No WebCodecs `canPlayTrack` probe is injected into selection —
@@ -154,7 +152,7 @@ promotion). Zero page errors.
   draft-19 bytes (vi64, SETUP/SUBSCRIBE_OK/REQUEST_ERROR, subgroup +
   LOC framing) over an in-memory `MoqtTransport`, publishing real
   WebCodecs-encoded VP8 (two renditions) + Opus. Written from the specs
-  rather than reusing `network/moqt`'s encoders: it is a second
+  rather than reusing the transport codec: it is a second
   independent implementation, so it checks the decoder rather than
   round-tripping against ourselves. `?relay=moqt://…#msf:…` swaps in a
   real relay.

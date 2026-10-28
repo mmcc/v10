@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vite-plus/test';
 
-import { type MoqAudioContext, MoqMediaElement } from '../adapter';
+import { MoqMediaElement } from '../adapter';
 
 /**
  * Structural `MoqAudioContext` fake: tracks state transitions through resume/suspend spies so tests can assert the
@@ -21,12 +21,6 @@ function createFakeAudioContext(initialState: AudioContextState) {
     destination: {} as AudioNode,
     gain,
     createGain: vi.fn(() => gain),
-    createBuffer: (() => {
-      throw new Error('unused in adapter tests');
-    }) as MoqAudioContext['createBuffer'],
-    createBufferSource: (() => {
-      throw new Error('unused in adapter tests');
-    }) as MoqAudioContext['createBufferSource'],
     resume: vi.fn(async () => {
       fake.state = 'running';
     }),
@@ -142,8 +136,8 @@ describe('MoqMediaMixin', () => {
     media.attach(document.createElement('canvas'));
 
     media.destroy();
-    // Renderer ticks still call createBuffer/createBufferSource until the
-    // composition has stopped them; closing first throws InvalidStateError.
+    // The renderer's player core still drives nodes on the context until
+    // the composition has stopped it; closing first throws InvalidStateError.
     expect(audioContext.close).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(audioContext.close).toHaveBeenCalledTimes(1));
   });

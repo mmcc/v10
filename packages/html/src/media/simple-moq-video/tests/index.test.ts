@@ -13,12 +13,6 @@ function createFakeAudioContext(initialState: AudioContextState) {
         connect: () => {},
         gain: { value: 1 },
       }) as unknown as GainNode,
-    createBuffer: (() => {
-      throw new Error('unused in wrapper tests');
-    }) as MoqAudioContext['createBuffer'],
-    createBufferSource: (() => {
-      throw new Error('unused in wrapper tests');
-    }) as MoqAudioContext['createBufferSource'],
     resume: vi.fn(async () => {
       fake.state = 'running';
     }),

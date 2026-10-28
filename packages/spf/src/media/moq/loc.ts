@@ -5,12 +5,12 @@
  * WebCodecs `EncodedVideoChunk`/`EncodedAudioChunk`, and the object properties carry frame metadata (capture timestamp,
  * timescale, decoder config).
  *
- * DOM-free and wire-free: properties come in as generic key/value pairs (structurally identical to `network/moqt`'s
- * `KeyValuePair` — the layering keeps `media/` independent of `network/`, and structural typing lets the playback layer
- * pass them straight through).
+ * DOM-free and wire-free: properties come in as generic key/value pairs (structurally identical to `@caprid/moq-core`'s
+ * `KeyValuePair` — the layering keeps `media/` free of the transport package, and structural typing lets the playback
+ * layer pass them straight through).
  */
 
-/** Structural twin of `network/moqt`'s `KeyValuePair`. */
+/** Structural twin of `@caprid/moq-core`'s `KeyValuePair`. */
 export interface PropertyPair {
   type: number;
   value: number | Uint8Array;

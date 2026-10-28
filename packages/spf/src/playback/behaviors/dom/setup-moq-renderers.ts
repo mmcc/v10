@@ -43,10 +43,10 @@ import {
 import {
   type AudioContextLike,
   type AudioRendererActor,
+  type CreateAudioPlayer,
   createAudioRendererActor,
 } from '../../actors/dom/audio-renderer';
 import { createVideoRendererActor, type VideoRendererActor } from '../../actors/dom/video-renderer';
-import { type CreateAudioPlayer, createWorkletAudioRendererActor } from '../../actors/dom/worklet-audio-renderer';
 import type { TrackSubscriberActor } from '../../actors/track-subscriber';
 import { type LatencyControlConfig, type PlayoutClockOwner, resolveLatencyControlConfig } from '../sync-latency';
 
@@ -94,10 +94,7 @@ const CLOCK_PUBLISH_INTERVAL_MS = 100;
 export interface MoqRendererConfig {
   /** Shared with `syncLatency`: `joinAtEdge`, the target the clocks aim at, and the slew bounds. */
   latency?: Partial<LatencyControlConfig>;
-  /**
-   * Render audio through the shared AudioWorklet player core instead of scheduled `AudioBufferSourceNode`s (see
-   * `worklet-audio-renderer`). Opt-in until the core can apply `playoutRate` nudges (mmcc/v10#66).
-   */
+  /** Override the audio renderer's player core factory; see `CreateAudioPlayer`. */
   createAudioPlayer?: CreateAudioPlayer;
 }
 
@@ -254,31 +251,24 @@ function setupAudioRendererSetup({
             latencyConfig,
             context.videoRendererActor
           );
-          const renderer = config?.createAudioPlayer
-            ? createWorkletAudioRendererActor({
-                audioContext,
-                createAudioPlayer: config.createAudioPlayer,
-                getJoinAnchorUs,
-                // Caps the worklet's jitter target, so the core never holds
-                // more than the latency the controller is aiming at.
-                getTargetLatencyUs: () =>
-                  resolveTrackTargetSeconds(
-                    peek(context.audioSubscriberActor),
-                    state.targetLatency,
-                    state.adaptiveTargetLatency,
-                    latencyConfig
-                  ) * 1_000_000,
-              })
-            : createAudioRendererActor({
-                audioContext,
-                // No paused gating here: the adapter suspends the
-                // AudioContext on pause, which freezes the hardware clock and
-                // every scheduled source. Rate 0 would instead produce an
-                // infinite clock segment (duration ÷ 0) and sources whose
-                // `playbackRate` stays 0 after resume — a permanent stall.
-                getPlaybackRate: () => peek(state.playoutRate) ?? 1,
-                getJoinAnchorUs,
-              });
+          const renderer = createAudioRendererActor({
+            audioContext,
+            createAudioPlayer: config?.createAudioPlayer,
+            // No paused gating here: the adapter suspends the AudioContext on
+            // pause, which freezes the worklet and the clock with it. The core
+            // has no rate 0 to pause with anyway.
+            getPlaybackRate: () => peek(state.playoutRate) ?? 1,
+            getJoinAnchorUs,
+            // Caps the worklet's jitter target, so the core never holds
+            // more than the latency the controller is aiming at.
+            getTargetLatencyUs: () =>
+              resolveTrackTargetSeconds(
+                peek(context.audioSubscriberActor),
+                state.targetLatency,
+                state.adaptiveTargetLatency,
+                latencyConfig
+              ) * 1_000_000,
+          });
 
           context.audioRendererActor.set(renderer);
           return () => {

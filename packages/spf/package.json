@@ -361,6 +361,8 @@
     "clean": "rimraf --glob dist types '*.tsbuildinfo' 'src/**/*.tsbuildinfo'"
   },
   "dependencies": {
+    "@caprid/moq-core": "^0.1.1",
+    "@caprid/moq-media": "0.1.0",
     "@svta/cml-error-codes": "^0.1.1",
     "@svta/cml-utils": "^1.6.1",
     "@videojs/media": "workspace:*",
