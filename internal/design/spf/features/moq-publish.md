@@ -155,20 +155,16 @@ Actors and session:
 |---|---|---|
 | Encoder actor core + video/audio specializations | `publish/actors/dom/{encoder-actor,video-encoder,audio-encoder}.ts` | Own one WebCodecs encoder; delta-drop backpressure; LOC-package output to the `chunkSink`; counter snapshots |
 | `TrackPublisherActor` | `publish/actors/track-publisher.ts` | One MOQT track → subgroup streams (one uni stream per group), demand-gated by the subscription binding; group-per-keyframe or group-per-frame; replay-on-bind for the catalog; stale-group drop policy |
-| Publish session driver + actor | `publish/session/publish-session.ts` | Draft-19 publish-side protocol driver (callback-shaped, no signals) + the reactive session actor behaviors consume |
+| Publish session actor | `publish/session/publish-session.ts` | Connects and drives `@caprid/moq-core`'s publish session (callback-shaped, no signals); the reactive snapshot behaviors consume |
 | Media-host adapter | `publish/engines/moq/adapter.ts` | `MoqPublishMediaMixin` — expresses the `@videojs/media` publisher capabilities structurally; owns contract events |
 
 Shared modules (consumed, not owned — encode-direction complements of the
 playback stack's decode direction):
 
-- [`network/moqt/subgroup-writer.ts`](../../../../packages/spf/src/network/moqt/subgroup-writer.ts)
-  — subgroup data-stream writing; round-trips through `object-stream.ts`'s
-  reader. The only new `network/moqt` file: the parent-owned wire layer's
-  codec was already symmetric, so publish additions there stayed
-  additive. The announce-and-serve rework added exactly two encoders to
-  the existing codec module — `encodeNamespace` / `encodeNamespaceDone`
-  (their decoders predated them) — plus the `TRACK_PROPERTY.TIMESCALE`
-  constant.
+- `@caprid/moq-core` — the MOQT wire layer both directions share: the
+  publish session (announce-and-serve, LARGEST_OBJECT, fills, PUBLISH_DONE
+  with its own Stream Count) and `createSubgroupWriter`. Its codec and
+  driver tests live in the package.
 - [`media/moq/loc-packaging.ts`](../../../../packages/spf/src/media/moq/loc-packaging.ts)
   / [`media/moq/build-catalog.ts`](../../../../packages/spf/src/media/moq/build-catalog.ts)
   — encode complements of `loc.ts` / `parse-catalog.ts`; each round-trips
@@ -248,30 +244,20 @@ publisher initiates no requests, so there is no response to bound.
 ## Verification
 
 - **Unit** — one colocated test file per behavior, actor, and the session
-  driver (`publish/behaviors/dom/tests/`, `publish/behaviors/tests/`,
+  actor (`publish/behaviors/dom/tests/`, `publish/behaviors/tests/`,
   `publish/actors/dom/tests/`, `publish/actors/tests/`,
   `publish/session/tests/`), plus engine composition and adapter tests
   (`publish/engines/moq/tests/{engine,adapter}.test.ts`).
 - **Round-trips against the decode direction** —
-  `network/moqt/tests/publish-direction.test.ts` pins the publish-side
-  encode↔decode pairs against the existing decoders as golden reference,
-  plus byte-exact pins where moq-lite-rs's decoder is stricter than a
-  round-trip can prove (the parameterless NAMESPACE body, the bare
-  REQUEST_OK acceptance, a SUBSCRIBE laid out exactly as the relay
-  writes it — delta-typed parameters with raw-byte values);
-  `network/moqt/tests/subgroup-writer.test.ts` round-trips written
-  subgroups through the object-stream reader;
   `media/moq/tests/loc-packaging.test.ts` round-trips through
   `toLocFrame`; `media/moq/tests/build-catalog.test.ts` round-trips
   through `parseMoqCatalog` → presentation → decoder configs.
 - **The serve flow against a relay-shaped peer** —
-  `publish/session/tests/publish-session.test.ts` drives the announce
-  half (solicitation acceptance, suffix-relative NAMESPACE entries,
-  announce-loss → `onAnnounceEnded`, NAMESPACE_DONE + no-GOAWAY close)
-  and the serve half (alias = request ID, TIMESCALE declaration,
-  newest-subscription binding with bare-FIN ends for superseded
-  subscriptions, PUBLISH_DONE + FIN track end with exact Stream Counts)
-  through `network/moqt/tests/helpers/raw-peer.ts`, the relay's
+  `publish/session/tests/publish-session.test.ts` drives the session
+  actor's lifecycle (connecting → ready → live, announce loss, GOAWAY)
+  and a catalog + LOC round trip, and `publish/tests/relay-hub.test.ts`
+  pins the hub's announce-and-serve contract, both through
+  `network/tests/helpers/raw-peer.ts` and `moqt-wire.ts`, the relay's
   side of the flow the subscribe driver does not initiate.
 - **Full pipeline** —
   `publish/engines/moq/tests/publish-transport.test.ts`: real capture
@@ -314,7 +300,7 @@ publisher initiates no requests, so there is no response to bound.
 
 - **`[moq-playback]`** *(candidate — no feature doc yet)* — the subscribe
   direction this feature complements: `playback/engines/moq/`, the
-  `network/moqt` session/wire layer, and `media/moq`'s `loc.ts` /
+  `@caprid/moq-core` session/wire layer, and `media/moq`'s `loc.ts` /
   `parse-catalog.ts` that this feature's packaging/building round-trip
   against.
 - **[capability-probing](./capability-probing.md)** — pattern sibling,
@@ -339,6 +325,6 @@ publisher initiates no requests, so there is no response to bound.
 - [`publish/engines/moq/engine.ts`](../../../../packages/spf/src/publish/engines/moq/engine.ts)
   (composition) ·
   [`publish/session/publish-session.ts`](../../../../packages/spf/src/publish/session/publish-session.ts)
-  (protocol driver) ·
+  (session actor) ·
   [`publish/actors/track-publisher.ts`](../../../../packages/spf/src/publish/actors/track-publisher.ts)
   (group/backpressure mechanics)

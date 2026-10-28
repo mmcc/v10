@@ -17,19 +17,19 @@
  * group, so joining is instant) and live-forwarding from there. Multiple sequential player sessions re-serve the latest
  * catalog.
  *
- * The wire encoding is written from the specs rather than reusing `network/moqt`'s codecs (they are not public API);
- * the byte-level shapes mirror `spf-moq-player/loopback-relay.ts`, extended with the publisher-facing decoders
- * (draft-ietf-moq-transport-20 §10, §11.4.2). If this grows further, the pieces worth exporting properly from
+ * The wire encoding is written from the specs rather than reusing `@caprid/moq-core`'s codecs (it exports no relay
+ * side); the byte-level shapes mirror `spf-moq-player/loopback-relay.ts`, extended with the publisher-facing decoders
+ * (draft-ietf-moq-transport-22 §9, §11.3.1). If this grows further, the pieces worth exporting properly from
  * `@videojs/spf` are the control-message codec and a transport-pair helper.
  */
 import type { CreateMoqTransport } from '@videojs/spf/moq';
 import type { ConnectPublishTransport } from '@videojs/spf/moq-publish';
 
 // ============================================================================
-// Wire primitives (draft-ietf-moq-transport-20)
+// Wire primitives (draft-ietf-moq-transport-22)
 // ============================================================================
 
-/** Control/request message types (§10, Table 5). */
+/** Control/request message types (§9). */
 const MESSAGE_TYPE = {
   SETUP: 0x2f00,
   SUBSCRIBE: 0x3,
@@ -44,16 +44,16 @@ const MESSAGE_TYPE = {
   SUBSCRIBE_NAMESPACE: 0x50,
 } as const;
 
-/** PUBLISH_DONE status codes (§10.12) this relay sends its players. */
+/** PUBLISH_DONE status codes (§9.9) this relay sends its players. */
 const PUBLISH_DONE_INTERNAL_ERROR = 0x0;
 
-/** REQUEST_ERROR code for "nothing published in that range" (§10.6.1). */
+/** REQUEST_ERROR code for "nothing published in that range" (§12.3). */
 const ERROR_INVALID_RANGE = 0x11;
 
 /** REQUEST_ERROR code moq-relay 0.14.7 answers proactive PUBLISH with. */
 const ERROR_PUBLISH_NOT_SUPPORTED = 400;
 
-/** REQUEST_ERROR code for an unregistered track (§15.11.2). */
+/** REQUEST_ERROR code for an unregistered track (§12.3). */
 const ERROR_DOES_NOT_EXIST = 0x10;
 
 /**
@@ -63,7 +63,7 @@ const ERROR_DOES_NOT_EXIST = 0x10;
  */
 const UPSTREAM_RETRY_DELAY_MS = 50;
 
-/** Message parameter types the upstream SUBSCRIBE carries (§10.2). */
+/** Message parameter types the upstream SUBSCRIBE carries (§9.20). */
 const SUBSCRIBE_PARAMETER = {
   FORWARD: 0x10,
   SUBSCRIBER_PRIORITY: 0x20,
@@ -71,27 +71,29 @@ const SUBSCRIBE_PARAMETER = {
   GROUP_ORDER: 0x22,
 } as const;
 
-/**
- * A one-field Location Filter (§5.1.2) is relative to the next group: `1` starts at the current group's object 0 — the
- * join moq-relay 0.14.14 asks upstream publishers for, so an in-progress group is served whole rather than from the
- * live edge.
- */
-const LOCATION_FILTER_CURRENT_GROUP = 0x1;
+/** Location Filter Type 0x01, Relative Start (§9.20.9): one StartGroup field, counted back from the next group. */
+const LOCATION_FILTER_RELATIVE_START = 0x1;
 
-/** GROUP_ORDER wire value for descending delivery (§10.2). */
+/**
+ * StartGroup `1` starts at the current group's object 0 (§3.3.1) — the join moq-relay asks upstream publishers for, so
+ * an in-progress group is served whole rather than from the live edge.
+ */
+const START_GROUP_CURRENT = 0x1;
+
+/** GROUP_ORDER wire value for descending delivery (§9.20). */
 const GROUP_ORDER_DESCENDING = 0x2;
 
-/** Track Property carrying the track's timestamp units-per-second (§10.8). */
+/** Track Property carrying the track's timestamp units-per-second (§9.7). */
 const TRACK_PROPERTY_TIMESCALE = 0x08;
 
 /**
  * SUBGROUP_HEADER stream type used toward the _player_: subgroup-id mode `zero`, default publisher priority, objects
- * carry a Properties field — `0b0011_0001` (§11.4.2), the same shape `spf-moq-player`'s loopback publishes and the
+ * carry a Properties field — `0b0011_0001` (§11.3.1), the same shape `spf-moq-player`'s loopback publishes and the
  * engine demonstrably consumes.
  */
 const PLAYER_SUBGROUP_HEADER_TYPE = 0x31;
 
-/** SUBGROUP_HEADER type-flag bits (§11.4.2) for parsing the publisher side. */
+/** SUBGROUP_HEADER type-flag bits (§11.3.1) for parsing the publisher side. */
 const SUBGROUP_FLAG = {
   PROPERTIES: 0x01,
   SUBGROUP_ID_MODE_MASK: 0x06,
@@ -108,8 +110,8 @@ function isSubgroupHeaderType(type: number): boolean {
 }
 
 /**
- * The vi64 varint of draft-15+ (§1.4.1) — leading ones on the first byte give the encoded length minus one, so an
- * L-byte encoding carries 7L value bits. NOT the QUIC RFC 9000 varint.
+ * The vi64 varint of draft-15+ (§8.1) — leading ones on the first byte give the encoded length minus one, so an L-byte
+ * encoding carries 7L value bits. NOT the QUIC RFC 9000 varint.
  */
 function varintByteLength(value: number): number {
   for (let length = 1; length < 8; length++) {
@@ -210,7 +212,7 @@ class Reader {
 
 /**
  * Pull-based reader over a byte stream, for the publisher's long-lived subgroup streams (a group's objects trickle in
- * until FIN at the next keyframe). Minimal mirror of `network/moqt`'s `StreamReader`.
+ * until FIN at the next keyframe). Minimal mirror of `@caprid/moq-core`'s `StreamReader`.
  */
 class StreamByteReader {
   #reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -293,12 +295,12 @@ class StreamByteReader {
   }
 }
 
-/** Control message framing (§10.1): type varint + 16-bit length + body. */
+/** Control message framing (§9): type varint + 16-bit length + body. */
 function frame(type: number, body: Uint8Array): Uint8Array {
   return new Writer().varint(type).u16(body.length).bytes(body).toBytes();
 }
 
-/** Read one framed control message (§10.1) off a pull-based stream reader. */
+/** Read one framed control message (§9) off a pull-based stream reader. */
 async function readControlFrame(reader: StreamByteReader): Promise<{ type: number; body: Uint8Array }> {
   const type = await reader.readVarint();
   const high = await reader.readUint8();
@@ -307,7 +309,7 @@ async function readControlFrame(reader: StreamByteReader): Promise<{ type: numbe
   return { type, body: await reader.readBytes(high * 256 + low) };
 }
 
-/** Namespace tuple (§10.7): varint field count + length-prefixed UTF-8 fields. */
+/** Namespace tuple (§8.7): varint field count + length-prefixed UTF-8 fields. */
 function writeNamespaceTuple(writer: Writer, namespace: string[]): Writer {
   writer.varint(namespace.length);
 
@@ -327,7 +329,7 @@ function readNamespaceTuple(reader: Reader): string[] {
 
 function encodeSetup(): Uint8Array {
   // Options-only, and we send none. A Key-Value-Pair block is bounded by its
-  // enclosing length rather than counted (§10.2), so "no options" is an empty
+  // enclosing length rather than counted (§9.20), so "no options" is an empty
   // body — not a zero count.
   return frame(MESSAGE_TYPE.SETUP, new Uint8Array(0));
 }
@@ -344,7 +346,7 @@ function encodePublishDone(statusCode: number, streamCount: number): Uint8Array 
 }
 
 /**
- * SUBSCRIBE_NAMESPACE toward the publisher (§10.18): the empty prefix solicits every namespace the publisher will
+ * SUBSCRIBE_NAMESPACE toward the publisher (§9.15): the empty prefix solicits every namespace the publisher will
  * announce — the same solicitation moq-relay 0.14.7 opens right after SETUP.
  */
 function encodeSubscribeNamespace(requestId: number): Uint8Array {
@@ -353,11 +355,11 @@ function encodeSubscribeNamespace(requestId: number): Uint8Array {
 }
 
 /**
- * SUBSCRIBE toward the publisher (§10.7) — the exact request moq-relay 0.14.14 sends on draft-20 when pulling a track:
- * forward on, subscriber priority 0, join at the current group (`relative-group 1`), descending group order. Message
- * parameters are count-prefixed with delta-encoded types and per-type value encodings (§10.2), so the byte after each
- * delta is what that type says it is — a raw uint8 for FORWARD / SUBSCRIBER_PRIORITY / GROUP_ORDER, a length-prefixed
- * filter for LOCATION_FILTER.
+ * SUBSCRIBE toward the publisher (§9.6) — the request moq-relay sends when pulling a track: forward on, subscriber
+ * priority 0, join at the current group (`relative-group 1`), descending group order. Message parameters are
+ * count-prefixed with delta-encoded types and per-type value encodings (§9.20), so the byte after each delta is what
+ * that type says it is — a raw uint8 for FORWARD / SUBSCRIBER_PRIORITY / GROUP_ORDER, a Location Filter Type and its
+ * fields for LOCATION_FILTER.
  */
 function encodeSubscribe(requestId: number, namespace: string[], trackName: string): Uint8Array {
   const body = new Writer().varint(requestId);
@@ -369,8 +371,8 @@ function encodeSubscribe(requestId: number, namespace: string[], trackName: stri
   body.varint(SUBSCRIBE_PARAMETER.SUBSCRIBER_PRIORITY - SUBSCRIBE_PARAMETER.FORWARD).u8(0);
   body
     .varint(SUBSCRIBE_PARAMETER.LOCATION_FILTER - SUBSCRIBE_PARAMETER.SUBSCRIBER_PRIORITY)
-    .varint(1)
-    .varint(LOCATION_FILTER_CURRENT_GROUP);
+    .varint(LOCATION_FILTER_RELATIVE_START)
+    .varint(START_GROUP_CURRENT);
   body.varint(SUBSCRIBE_PARAMETER.GROUP_ORDER - SUBSCRIBE_PARAMETER.LOCATION_FILTER).u8(GROUP_ORDER_DESCENDING);
   return frame(MESSAGE_TYPE.SUBSCRIBE, body.toBytes());
 }
@@ -400,7 +402,7 @@ function encodeObjectStream(
     .lengthPrefixed(properties)
     .varint(payload.length);
 
-  // A zero-length payload carries an Object Status varint instead (§11.2.1.1).
+  // A zero-length payload carries an Object Status varint instead (§11.1.1).
   return (payload.length === 0 ? writer.varint(0) : writer.bytes(payload)).toBytes();
 }
 
@@ -423,7 +425,7 @@ interface PlayerSubscription {
   trackAlias: number;
   deliver(object: BufferedObject): void;
   /**
-   * End this subscription from the relay side: with a `statusCode`, PUBLISH_DONE (§10.12, counting the streams this
+   * End this subscription from the relay side: with a `statusCode`, PUBLISH_DONE (§9.9, counting the streams this
    * subscription was sent) and then FIN; without one, a bare FIN. Then cancel its request stream, so its teardown
    * removes the entry.
    */
@@ -642,7 +644,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
 
     /**
      * The relay's control stream toward the publisher. It stays open for the session's lifetime — closing it ends the
-     * session (§3.3).
+     * session (§6.3).
      */
     const sendServerSetup = (): void => {
       if (!sessionOpen || destroyed || !uniController) return;
@@ -732,11 +734,11 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           return;
         }
 
-        // SUBSCRIBE_OK (§10.8): track alias + message parameters
+        // SUBSCRIBE_OK (§9.7): track alias + message parameters
         // (count-prefixed) + track-property KVPs to the end of the body.
         // Both blocks are delta-typed with the same parity encoding — even
         // type → varint value, odd → length-prefixed bytes — so each skips
-        // cleanly. The publish engine sends LARGEST_OBJECT (§10.2.17, an
+        // cleanly. The publish engine sends LARGEST_OBJECT (§9.20.17, an
         // odd/length-prefixed parameter) in the parameter block once the
         // track has content; TIMESCALE (LOC's microsecond stamp) is the one
         // track property it declares.
@@ -953,7 +955,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
       }
     };
 
-    /** Parse one subgroup data stream (subgroup-writer's shape, §11.4.2). */
+    /** Parse one subgroup data stream (subgroup-writer's shape, §11.3.1). */
     const handleSubgroupStream = async (reader: StreamByteReader, type: number): Promise<void> => {
       const hasProperties = (type & SUBGROUP_FLAG.PROPERTIES) !== 0;
       const explicitSubgroupId = (type & SUBGROUP_FLAG.SUBGROUP_ID_MODE_MASK) >> 1 === 0b10;
@@ -972,7 +974,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
         return;
       }
 
-      // First object ID is absolute; the rest are `delta + 1` (§11.4.2).
+      // First object ID is absolute; the rest are `delta + 1` (§11.3.1).
       let previousObjectId: number | undefined;
 
       while (!(await reader.atEnd())) {
@@ -1303,7 +1305,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
             if (message.type === MESSAGE_TYPE.SUBSCRIBE) {
               onSubscribe(message.body);
             } else if (message.type === MESSAGE_TYPE.FETCH) {
-              // The engine never fetches — a draft-20 join is a subscription
+              // The engine never fetches — a draft-22 join is a subscription
               // filter, and every subscription replays the newest group anyway.
               // Anything else asking for history is refused: nothing beyond
               // the ring buffer is retained.
@@ -1316,7 +1318,7 @@ export function createPublisherLoopbackRelay({ onLog }: PublisherLoopbackRelayOp
           }
 
           const { value, done } = await reader.read();
-          // Cancellation *is* the stream lifecycle (§3.3.3): the subscriber
+          // Cancellation *is* the stream lifecycle (§6.4.2.3): the subscriber
           // aborting its sending direction ends the subscription.
           if (done) break;
 
