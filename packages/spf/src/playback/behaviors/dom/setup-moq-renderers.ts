@@ -43,6 +43,7 @@ import {
 import {
   type AudioContextLike,
   type AudioRendererActor,
+  type CreateAudioPlayer,
   createAudioRendererActor,
 } from '../../actors/dom/audio-renderer';
 import { createVideoRendererActor, type VideoRendererActor } from '../../actors/dom/video-renderer';
@@ -93,6 +94,22 @@ const CLOCK_PUBLISH_INTERVAL_MS = 100;
 export interface MoqRendererConfig {
   /** Shared with `syncLatency`: `joinAtEdge`, the target the clocks aim at, and the slew bounds. */
   latency?: Partial<LatencyControlConfig>;
+  /** Override the audio renderer's player core factory; see `CreateAudioPlayer`. */
+  createAudioPlayer?: CreateAudioPlayer;
+}
+
+/** The target latency `syncLatency` resolves for `subscriber`'s track, in seconds. */
+function resolveTrackTargetSeconds(
+  subscriber: TrackSubscriberActor | undefined,
+  targetLatencySignal: ReadonlySignal<number | undefined>,
+  adaptiveTargetLatencySignal: ReadonlySignal<number | undefined>,
+  latency: LatencyControlConfig
+): number {
+  return resolveTargetLatencySeconds(
+    preferredTargetLatencySeconds(peek(targetLatencySignal), peek(adaptiveTargetLatencySignal)),
+    subscriber?.track.moq.targetLatency,
+    latency.defaultTargetLatency
+  );
 }
 
 /**
@@ -116,10 +133,11 @@ function makeEdgeTargetUs(
     // slots — the clocks and the controller must aim at one number, and
     // the adaptive proposal has to reach both or the slew would chase an
     // edge the controller is not steering toward.
-    const targetSeconds = resolveTargetLatencySeconds(
-      preferredTargetLatencySeconds(peek(targetLatencySignal), peek(adaptiveTargetLatencySignal)),
-      subscriber?.track.moq.targetLatency,
-      latency.defaultTargetLatency
+    const targetSeconds = resolveTrackTargetSeconds(
+      subscriber,
+      targetLatencySignal,
+      adaptiveTargetLatencySignal,
+      latency
     );
 
     return joinAnchorUs(newestTimestampUs, targetSeconds);
@@ -174,10 +192,11 @@ function makeAudioJoinAnchor(
 
     // Same resolution `syncLatency` and `makeEdgeTargetUs` perform, from
     // the same input slots — the clocks and the controller aim at one number.
-    const targetSeconds = resolveTargetLatencySeconds(
-      preferredTargetLatencySeconds(peek(targetLatencySignal), peek(adaptiveTargetLatencySignal)),
-      subscriber?.track.moq.targetLatency,
-      latency.defaultTargetLatency
+    const targetSeconds = resolveTrackTargetSeconds(
+      subscriber,
+      targetLatencySignal,
+      adaptiveTargetLatencySignal,
+      latency
     );
     const anchorUs = joinAnchorUs(newestTimestampUs, targetSeconds);
 
@@ -224,21 +243,31 @@ function setupAudioRendererSetup({
       'preconditions-unmet': {},
       'renderer-active': {
         entry: () => {
+          const audioContext = context.audioContext.get()!;
+          const getJoinAnchorUs = makeAudioJoinAnchor(
+            context.audioSubscriberActor,
+            state.targetLatency,
+            state.adaptiveTargetLatency,
+            latencyConfig,
+            context.videoRendererActor
+          );
           const renderer = createAudioRendererActor({
-            audioContext: context.audioContext.get()!,
-            // No paused gating here: the adapter suspends the
-            // AudioContext on pause, which freezes the hardware clock and
-            // every scheduled source. Rate 0 would instead produce an
-            // infinite clock segment (duration ÷ 0) and sources whose
-            // `playbackRate` stays 0 after resume — a permanent stall.
+            audioContext,
+            createAudioPlayer: config?.createAudioPlayer,
+            // No paused gating here: the adapter suspends the AudioContext on
+            // pause, which freezes the worklet and the clock with it. The core
+            // has no rate 0 to pause with anyway.
             getPlaybackRate: () => peek(state.playoutRate) ?? 1,
-            getJoinAnchorUs: makeAudioJoinAnchor(
-              context.audioSubscriberActor,
-              state.targetLatency,
-              state.adaptiveTargetLatency,
-              latencyConfig,
-              context.videoRendererActor
-            ),
+            getJoinAnchorUs,
+            // Caps the worklet's jitter target, so the core never holds
+            // more than the latency the controller is aiming at.
+            getTargetLatencyUs: () =>
+              resolveTrackTargetSeconds(
+                peek(context.audioSubscriberActor),
+                state.targetLatency,
+                state.adaptiveTargetLatency,
+                latencyConfig
+              ) * 1_000_000,
           });
 
           context.audioRendererActor.set(renderer);

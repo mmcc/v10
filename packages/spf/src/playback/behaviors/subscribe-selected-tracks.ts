@@ -38,6 +38,8 @@
  * pending-snapshot changes, plus status _transitions_ of its own actors (equality-gated `computed`s over the slots) and
  * the rejoin timer's tick, not on its own slot writes.
  */
+import type { LocationFilter } from '@caprid/moq-core';
+
 import { defineBehavior } from '../../core/composition/create-composition';
 import type { Reactor } from '../../core/reactors/create-machine-reactor';
 import { createMachineReactor } from '../../core/reactors/create-machine-reactor';
@@ -45,7 +47,6 @@ import { computed, peek, type ReadonlySignal, type Signal, signal } from '../../
 import type { MoqTrack } from '../../media/moq/parse-catalog';
 import { isLiveTrack, type MaybeResolvedPresentation } from '../../media/types';
 import { findTrack } from '../../media/utils/tracks';
-import type { LocationFilter } from '../../network/moqt/control-messages';
 import {
   DEFAULT_SUBSCRIBE_RETRY_BACKOFF_CONFIG,
   MAX_SERVER_RETRY_INTERVAL_MS,

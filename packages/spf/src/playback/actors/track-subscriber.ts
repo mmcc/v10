@@ -17,19 +17,25 @@
  * stays silent past the deadline is treated as dead even though the wire never said so — the subscription is cancelled
  * and the status goes `'error'`, which is the terminal signal `subscribe-selected-tracks` recovers from.
  */
-import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
-import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
-import type { MoqTrack } from '../../media/moq/parse-catalog';
-import { TIMELINE_DISCONTINUITY_US } from '../../media/moq/timeline';
-import type { Location, LocationFilter, MessageParameters } from '../../network/moqt/control-messages';
 import {
   compareLocations,
   isRetryablePublishDoneStatus,
   isRetryableRequestErrorCode,
+  type Location,
+  type LocationFilter,
+  type MessageParameters,
+  type MoqtObject,
+  type MoqtSession,
+  type PublishDone,
   REQUEST_ERROR_CODE,
-} from '../../network/moqt/control-messages';
-import type { MoqtObject } from '../../network/moqt/object-stream';
-import type { MoqtSession, PublishDone, RequestError, Subscription } from '../../network/moqt/session';
+  type RequestError,
+  type Subscription,
+} from '@caprid/moq-core';
+
+import { createTransitionActor, type TransitionActor } from '../../core/actors/create-transition-actor';
+import { parseTrackTimescale, toLocFrame } from '../../media/moq/loc';
+import type { MoqTrack } from '../../media/moq/parse-catalog';
+import { TIMELINE_DISCONTINUITY_US } from '../../media/moq/timeline';
 
 // =============================================================================
 // Types
@@ -52,7 +58,7 @@ export interface TrackSubscriberContext {
   /** True once a keyframe-led group is buffered — safe to hand off to a decoder. */
   hasDecodableFrame: boolean;
   /**
-   * A valid media frame arrived beyond this subscription's SUBSCRIBE_OK LARGEST_OBJECT boundary (moqt-20 §10.2.17).
+   * A valid media frame arrived beyond this subscription's SUBSCRIBE_OK LARGEST_OBJECT boundary (moqt-22 §9.20.17).
    * Latched across buffer drains until auth refresh retires the attempt. Acceptance and cached replay alone leave this
    * false. An omitted boundary means the publisher had no objects yet, so its first media frame is fresh.
    */
@@ -103,9 +109,15 @@ export interface CreateTrackSubscriberOptions {
   track: MoqTrack;
   /** Where to join the track. Default: `{ type: 'next-object' }` (live edge). */
   locationFilter?: LocationFilter;
-  /** Extra request parameters (auth tokens, priority). */
+  /**
+   * Extra request parameters (auth tokens, priority). A `subscriberPriority` here replaces the track kind's
+   * {@link MEDIA_SUBSCRIBER_PRIORITY}.
+   */
   parameters?: MessageParameters;
-  /** Auth-expiry seam: return refreshed parameters to retry the subscribe with. */
+  /**
+   * Auth-expiry seam: return refreshed parameters to retry the subscribe with. Only auth rides it — the retry keeps the
+   * original `subscriberPriority` and `locationFilter` whatever this returns.
+   */
   refreshAuth?(): Promise<MessageParameters>;
   /**
    * Data-starvation watchdog: a live MSF media track delivers continuously, so a subscription this long without a
@@ -153,6 +165,18 @@ const DEFAULT_LOCATION_FILTER: LocationFilter = { type: 'next-object' };
 
 /** See `CreateTrackSubscriberOptions.stallTimeoutMs`. */
 export const DEFAULT_STALL_TIMEOUT_MS = 10_000;
+
+/**
+ * SUBSCRIBER_PRIORITY by catalog track kind, lower being more urgent: audio ahead of video on a congested downlink.
+ * moq-relay 0.17 orders what it sends a viewer by subscriber priority alone and ignores the publisher's, and the value
+ * cannot change later — any REQUEST_UPDATE ends the subscription there — so it rides every SUBSCRIBE. Same values as
+ * `@caprid/relay`'s `mediaSubscribeParameters` (muxinc/relay-sdks#337). Other kinds send none, leaving the peer's
+ * default.
+ */
+export const MEDIA_SUBSCRIBER_PRIORITY: Readonly<Partial<Record<MoqTrack['type'], number>>> = {
+  audio: 16,
+  video: 96,
+};
 
 /**
  * Time constant of the arrival-offset envelope's decay, in milliseconds. The bounds relax toward the current sample by
@@ -596,7 +620,12 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
                   if (destroyed) return;
 
                   resetArrivalBaseline();
-                  subscribe({ ...parameters, ...refreshed, locationFilter: parameters.locationFilter });
+                  subscribe({
+                    ...parameters,
+                    ...refreshed,
+                    subscriberPriority: parameters.subscriberPriority,
+                    locationFilter: parameters.locationFilter,
+                  });
                 })
                 .catch((refreshError) => {
                   if (destroyed) return;
@@ -628,6 +657,7 @@ export function createTrackSubscriberActor(options: CreateTrackSubscriberOptions
 
   subscribe({
     ...options.parameters,
+    subscriberPriority: options.parameters?.subscriberPriority ?? MEDIA_SUBSCRIBER_PRIORITY[track.type],
     locationFilter: options.locationFilter ?? DEFAULT_LOCATION_FILTER,
   });
 

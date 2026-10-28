@@ -1,6 +1,8 @@
 /**
  * In-memory MoQ relay hub for cross-engine tests: real publish engine on one side, real playback engine(s) on the
- * other, draft-20 bytes in the middle over `createTransportPair` transports.
+ * other, over `createTransportPair` transports. Each side speaks its engine's draft: the publisher's own draft-20 codec
+ * upstream, and `@caprid/moq-core`'s moqt-22 codec (through `moqt-wire`) toward the player, the way the real relay
+ * terminates each session in the version it negotiated.
  *
  * Publisher side (`connectPublisher`) mirrors moq-relay 0.14.17's announce-and-serve ingest. After the SETUP exchange
  * the hub opens a bidi stream and solicits announces (SUBSCRIBE_NAMESPACE, empty prefix, odd server-side request ids)
@@ -12,28 +14,28 @@
  * land in `trackEnds`, the churn signal the source-switch regression tests assert on.
  *
  * Subscriber side (`connectSubscriber`): answers SUBSCRIBE with SUBSCRIBE_OK (carrying LARGEST_OBJECT once the track
- * has content) and forwards objects one-per-subgroup-stream, resolving the request's Location Filter (draft-20 §5.1.2)
+ * has content) and forwards objects one-per-subgroup-stream, resolving the request's Location Filter (moqt-22 §3.3.1)
  * the way moq-relay 0.14.17 does — `relative-group 1` replays the current group from object 0 then follows live
  * (catalog joins), `relative-group 0` forwards only groups that start after the subscribe (video joins), and
  * `next-object` is strict: nothing already published is replayed (audio joins). FETCH is answered with REQUEST_ERROR;
- * the draft-20 player never sends one. A downstream subscribe registers standing upstream demand for its track; an
- * upstream end ends the track's downstream subscriptions with PUBLISH_DONE, the way a real relay ends the track for
- * every viewer — forwarding the publisher's status like moq-relay 0.17.0, which reports a bare FIN (no PUBLISH_DONE) as
+ * the player never sends one. A downstream subscribe registers standing upstream demand for its track; an upstream end
+ * ends the track's downstream subscriptions with PUBLISH_DONE, the way a real relay ends the track for every viewer —
+ * forwarding the publisher's status like moq-relay 0.17.0, which reports a bare FIN (no PUBLISH_DONE) as
  * INTERNAL_ERROR.
  *
  * Tracks and demand persist across publisher sessions (a reconnecting publisher is re-solicited and its demanded tracks
  * re-subscribed), so the hub can also observe teardown/reconnect churn instead of crashing on it.
  */
+import { createSubgroupWriter as createPlayerSubgroupWriter } from '@caprid/moq-core';
+
 import { StreamReader } from '../../../network/moqt/bytes';
 import {
   type ControlMessage,
   decodeControlMessage,
-  encodePublishDone,
   encodeRequestError,
   encodeSetup,
   encodeSubscribe,
   encodeSubscribeNamespace,
-  encodeSubscribeOk,
   type KeyValuePair,
   type Location,
   type LocationFilter,
@@ -50,8 +52,15 @@ import {
 } from '../../../network/moqt/object-stream';
 import type { BidirectionalStreamLike } from '../../../network/moqt/request-stream';
 import type { MoqtTransport } from '../../../network/moqt/session';
-import { createSubgroupWriter } from '../../../network/moqt/subgroup-writer';
 import { createTransportPair } from '../../../network/moqt/tests/helpers/transport-pair';
+import {
+  decodeControlMessage as decodePlayerControlMessage,
+  encodePublishDone as encodePlayerPublishDone,
+  encodeRequestError as encodePlayerRequestError,
+  encodeSetup as encodePlayerSetup,
+  encodeSubscribeOk as encodePlayerSubscribeOk,
+  StreamReader as PlayerStreamReader,
+} from '../../../network/tests/helpers/moqt-wire';
 import type { ConnectPublishTransport } from '../../session/publish-session';
 
 // =============================================================================
@@ -575,7 +584,7 @@ export function createRelayHub(
       void (async () => {
         try {
           const stream = await server.createUnidirectionalStream();
-          const writer = createSubgroupWriter(stream, {
+          const writer = createPlayerSubgroupWriter(stream, {
             trackAlias,
             groupId: object.groupId,
             hasProperties: true,
@@ -596,14 +605,16 @@ export function createRelayHub(
 
     const serveRequestStream = async (stream: BidirectionalStreamLike): Promise<void> => {
       const writer = stream.writable.getWriter();
-      const reader = new StreamReader(stream.readable);
+      const reader = new PlayerStreamReader(stream.readable);
       let subscription: Subscription | undefined;
       let subscribedTrack: TrackRecord | undefined;
 
       try {
         while (!(await reader.atEnd())) {
           const type = await reader.readVarint();
-          const message = await readControlFrame(reader, type);
+          const high = await reader.readUint8();
+          const low = await reader.readUint8();
+          const message = decodePlayerControlMessage({ type, body: await reader.readBytes(high * 256 + low) });
 
           if (message.kind === 'subscribe') {
             // Downstream demand is what makes the hub pull the track from
@@ -612,9 +623,11 @@ export function createRelayHub(
             const track = trackFor(message.trackName);
             const trackAlias = nextSubscriberAlias++;
 
-            // Like the relay on draft-20, SUBSCRIBE_OK reports the Largest
-            // Object once the track has content (bare Location, §10.2.17).
-            await writer.write(encodeSubscribeOk(trackAlias, track.largest ? { largestObject: track.largest } : {}));
+            // Like the relay, SUBSCRIBE_OK reports the Largest Object once
+            // the track has content.
+            await writer.write(
+              encodePlayerSubscribeOk(trackAlias, track.largest ? { largestObject: track.largest } : {})
+            );
             subscription = {
               trackAlias,
               start: resolveStart(message.parameters.locationFilter, track.largest),
@@ -635,7 +648,7 @@ export function createRelayHub(
               },
               end: (statusCode) => {
                 void writer
-                  .write(encodePublishDone(statusCode, 0, ''))
+                  .write(encodePlayerPublishDone(statusCode, 0, ''))
                   .then(() => writer.close())
                   .catch(() => {});
               },
@@ -652,9 +665,9 @@ export function createRelayHub(
             track.subscribers.add(subscription);
             subscribedTrack = track;
           } else if (message.kind === 'fetch') {
-            // The draft-20 player never fetches (its joins are Location
+            // The player never fetches (its joins are Location
             // Filters); anything asking for history is refused.
-            await writer.write(encodeRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'no history'));
+            await writer.write(encodePlayerRequestError(REQUEST_ERROR_CODE.INVALID_RANGE, 'no history'));
             await writer.close();
             return;
           }
@@ -706,7 +719,7 @@ export function createRelayHub(
       try {
         const control = await server.createUnidirectionalStream();
 
-        await control.getWriter().write(encodeSetup());
+        await control.getWriter().write(encodePlayerSetup());
       } catch {
         // Closed before SETUP could land.
       }

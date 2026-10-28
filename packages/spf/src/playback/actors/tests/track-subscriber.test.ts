@@ -1,10 +1,14 @@
+import {
+  type MoqtObject,
+  type MoqtSession,
+  PUBLISH_DONE_STATUS,
+  REQUEST_ERROR_CODE,
+  type SubscriptionHandlers,
+} from '@caprid/moq-core';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import type { MoqTrack } from '../../../media/moq/parse-catalog';
-import { PUBLISH_DONE_STATUS, REQUEST_ERROR_CODE } from '../../../network/moqt/control-messages';
-import type { MoqtObject } from '../../../network/moqt/object-stream';
-import type { MoqtSession, SubscriptionHandlers } from '../../../network/moqt/session';
-import { createTrackSubscriberActor, DEFAULT_STALL_TIMEOUT_MS } from '../track-subscriber';
+import { createTrackSubscriberActor, DEFAULT_STALL_TIMEOUT_MS, MEDIA_SUBSCRIBER_PRIORITY } from '../track-subscriber';
 
 // ============================================================================
 // Fakes
@@ -91,6 +95,58 @@ describe('createTrackSubscriberActor', () => {
 
     subscriber.destroy();
     expect(subscriptions[0]!.cancelled).toBe(true);
+  });
+
+  it.each([
+    { type: 'audio', priority: MEDIA_SUBSCRIBER_PRIORITY.audio },
+    { type: 'video', priority: MEDIA_SUBSCRIBER_PRIORITY.video },
+  ] as const)('sends the $type SUBSCRIBER_PRIORITY chosen by the catalog kind', ({ type, priority }) => {
+    const { session, subscriptions } = createFakeSession();
+    // Named against its kind: the priority must follow the catalog type, not the track name.
+    const track = { ...TRACK, type, moq: { ...TRACK.moq, name: type === 'audio' ? 'video' : 'audio' } } as MoqTrack;
+    const subscriber = createTrackSubscriberActor({ session, track });
+
+    expect(subscriptions[0]!.options.parameters).toMatchObject({ subscriberPriority: priority });
+    subscriber.destroy();
+  });
+
+  it('puts audio ahead of video', () => {
+    expect(MEDIA_SUBSCRIBER_PRIORITY).toEqual({ audio: 16, video: 96 });
+  });
+
+  it('sends no SUBSCRIBER_PRIORITY for a kind without a default', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: { ...TRACK, type: 'text' } as MoqTrack });
+
+    expect(subscriptions[0]!.options.parameters).toMatchObject({ subscriberPriority: undefined });
+    subscriber.destroy();
+  });
+
+  it('lets a caller-supplied subscriberPriority replace the kind default', () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({ session, track: TRACK, parameters: { subscriberPriority: 3 } });
+
+    expect(subscriptions[0]!.options.parameters).toMatchObject({ subscriberPriority: 3 });
+    subscriber.destroy();
+  });
+
+  it('keeps the SUBSCRIBER_PRIORITY on the auth-refresh resubscribe', async () => {
+    const { session, subscriptions } = createFakeSession();
+    const subscriber = createTrackSubscriberActor({
+      session,
+      track: { ...TRACK, type: 'audio' } as MoqTrack,
+      refreshAuth: async () => ({ subscriberPriority: undefined }),
+    });
+
+    subscriptions[0]!.handlers.onError?.({
+      errorCode: REQUEST_ERROR_CODE.EXPIRED_AUTH_TOKEN,
+      retryInterval: 0,
+      reason: 'expired',
+    });
+    await Promise.resolve();
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1]!.options.parameters).toMatchObject({ subscriberPriority: MEDIA_SUBSCRIBER_PRIORITY.audio });
+    subscriber.destroy();
   });
 
   it.each([

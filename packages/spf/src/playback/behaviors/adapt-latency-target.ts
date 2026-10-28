@@ -10,9 +10,10 @@
  *
  * ## What it can observe, and what it cannot
  *
- * There is no transport RTT here. spf speaks its own draft-20 stack (no PROBE — that is a moq-lite extension) and
- * browsers do not populate `WebTransport.getStats().smoothedRtt`, so the absolute one-way delay is simply not
- * available. The no-RTT path is therefore the only path, and the estimate is built from what _is_ observable:
+ * There is no transport RTT here. spf speaks IETF MOQT through `@caprid/moq-core` (no PROBE — that is a moq-lite
+ * extension) and browsers do not populate `WebTransport.getStats().smoothedRtt`, so the absolute one-way delay is
+ * simply not available. The no-RTT path is therefore the only path, and the estimate is built from what _is_
+ * observable:
  *
  * - **Arrival jitter** (`TrackSubscriberContext.arrivalJitter`): the decaying spread between the earliest and latest
  *   recent arrival offsets. Offsets mix two unrelated clock epochs so their absolute value means nothing; their

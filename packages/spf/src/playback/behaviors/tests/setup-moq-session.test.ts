@@ -1,9 +1,9 @@
+import type { MoqtTransport } from '@caprid/moq-core';
 import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { signal } from '../../../core/signals/primitives';
 import type { MaybeResolvedPresentation } from '../../../media/types';
-import { encodeSetup } from '../../../network/moqt/control-messages';
-import type { MoqtTransport } from '../../../network/moqt/session';
+import { encodeSetup } from '../../../network/tests/helpers/moqt-wire';
 import type { MoqSessionActor } from '../../actors/moq-session';
 import { setupMoqSession } from '../setup-moq-session';
 

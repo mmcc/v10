@@ -83,10 +83,32 @@ describe('setupAudioRenderer', () => {
     const { getPlaybackRate } = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
 
     expect(getPlaybackRate!()).toBe(1);
-    // Rate must stay positive even through a pause: a rate of 0 would
-    // schedule an infinite clock segment (duration ÷ 0) and dead sources.
+    // Rate must stay positive even through a pause: the core accepts no
+    // rate below 0.5, and suspending the context already holds the clock.
     state.playoutRate.set(1.05);
     expect(getPlaybackRate!()).toBe(1.05);
+
+    reactor.destroy();
+  });
+
+  it('passes the configured createAudioPlayer and caps the core at the target latency', async () => {
+    vi.mocked(createAudioRendererActor).mockImplementation(() => makeFakeAudioRenderer());
+    const createAudioPlayer = vi.fn();
+    const { state, context, reactor } = setupSetupAudioRenderer({ createAudioPlayer });
+
+    await vi.waitFor(() => expect(createAudioRendererActor).toHaveBeenCalledTimes(1));
+
+    const options = vi.mocked(createAudioRendererActor).mock.calls[0]![0];
+
+    expect(options.createAudioPlayer).toBe(createAudioPlayer);
+    expect(options.audioContext).toBe(context.audioContext.get());
+
+    // The core's jitter ceiling follows the same target the controller holds.
+    context.audioSubscriberActor.set(makeFakeSubscriber(10_000_000));
+    expect(options.getTargetLatencyUs!()).toBe(500_000);
+    state.targetLatency.set(2);
+    expect(options.getTargetLatencyUs!()).toBe(2_000_000);
+    expect(options.getJoinAnchorUs!()).toBe(8_000_000);
 
     reactor.destroy();
   });
