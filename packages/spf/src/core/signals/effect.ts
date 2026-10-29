@@ -1,21 +1,22 @@
 import { Signal } from 'signal-polyfill';
 
-// Computeds waiting to re-run after their dependencies changed.
-const pending = new Set<Signal.Computed<void>>();
+// Keep registration order independently of Watcher: unwatch() swaps the last
+// watched computed into the removed slot, which can move a reactor's binding
+// effect ahead of its entry effect when another composition is destroyed.
+const effects = new Set<Signal.Computed<void>>();
 
 const watcher = new Signal.subtle.Watcher(() => {
   queueMicrotask(runPending);
 });
 
 function runPending() {
-  for (const c of watcher.getPending()) {
-    pending.add(c as Signal.Computed<void>);
-  }
+  const pending = new Set(watcher.getPending());
 
   watcher.watch(); // re-arm before running effects, in case they write signals
 
-  for (const c of pending) {
-    pending.delete(c);
+  for (const c of effects) {
+    if (!pending.has(c)) continue;
+
     c.get(); // re-run the effect body
     revalidateSources(c);
   }
@@ -60,10 +61,13 @@ export function effect(fn: () => (() => void) | void): () => void {
     cleanup = fn();
   });
 
+  effects.add(c);
   watcher.watch(c);
   c.get(); // initial run
   revalidateSources(c); // an initial run may self-write too — see the note
   return () => {
+    if (!effects.delete(c)) return;
+
     watcher.unwatch(c);
 
     if (typeof cleanup === 'function') cleanup();

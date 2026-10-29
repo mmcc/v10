@@ -7,6 +7,49 @@ import { computed, signal } from '../primitives';
 const flush = () => Promise.resolve().then(() => Promise.resolve());
 
 describe('effect', () => {
+  it('preserves registration order after an older effect is disposed', async () => {
+    const trigger = signal(false);
+    const stopOld = effect(() => {});
+    const runs: string[] = [];
+    const stopEntry = effect(() => {
+      if (trigger.get()) runs.push('entry');
+    });
+    const stopBinding = effect(() => {
+      if (trigger.get()) runs.push('binding');
+    });
+
+    stopOld();
+    trigger.set(true);
+    await flush();
+    expect(runs).toEqual(['entry', 'binding']);
+    stopEntry();
+    stopBinding();
+  });
+
+  it('does not run an effect disposed by an earlier effect in the same flush', async () => {
+    const trigger = signal(false);
+    let stopLater = () => {};
+    const stopFirst = effect(() => {
+      if (trigger.get()) stopLater();
+    });
+    let runs = 0;
+    let cleanups = 0;
+
+    stopLater = effect(() => {
+      trigger.get();
+      runs++;
+      return () => {
+        cleanups++;
+      };
+    });
+
+    trigger.set(true);
+    await flush();
+    expect(runs).toBe(1);
+    expect(cleanups).toBe(1);
+    stopFirst();
+  });
+
   describe('self-write through an intermediate computed (lost-wakeup regression)', () => {
     // An effect body may write a signal that an intermediate computed in its
     // own dependency graph reads (the concrete SPF shape: a track-selection
